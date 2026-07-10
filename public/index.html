@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小麦拼豆 Beta</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
+    <script src="palettes/mard221.js" defer></script>
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="panel control-panel simplified-sidebar" aria-label="拼豆生成设置">
+        <div class="brand">
+          <div class="brand-mark">拼</div>
+          <div>
+            <h1>小麦拼豆 Beta</h1>
+            <p>专业拼豆图纸设计器</p>
+          </div>
+        </div>
+
+        <section class="control-group sidebar-card project-card">
+          <div class="group-title">
+            <span>项目</span>
+            <small id="projectSaveStatus">未保存</small>
+          </div>
+          <div class="project-file-toolbar" id="projectFileToolbar" aria-label="项目文件">
+            <button id="openProjectButton" type="button">打开项目</button>
+            <button id="saveProjectButton" type="button">保存项目</button>
+            <input id="projectFileInput" type="file" accept=".xiaomai,.xmbd,application/json" hidden />
+          </div>
+        </section>
+
+        <section class="control-group sidebar-card">
+          <div class="group-title">
+            <span>上传图片</span>
+            <small>上传后先裁剪</small>
+          </div>
+          <label class="upload-zone" for="imageInput">
+            <input id="imageInput" type="file" accept="image/*" />
+            <i data-lucide="image-plus" aria-hidden="true"></i>
+            <span>上传图片</span>
+            <small>支持 PNG / JPG，先裁剪再生成</small>
+          </label>
+          <button id="recropButton" class="wide-tool-button" type="button">裁剪图片 / 重新裁剪</button>
+        </section>
+
+        <section class="control-group sidebar-card">
+          <div class="group-title">
+            <span>图纸尺寸</span>
+            <output id="sizeLabel">48 x 48</output>
+          </div>
+          <div class="segmented hidden-presets" role="group" aria-label="拼豆尺寸" hidden>
+            <button class="seg-option pixel-size" data-size="30" type="button">30</button>
+            <button class="seg-option" data-size="24" type="button">24</button>
+            <button class="seg-option" data-size="32" type="button">32</button>
+            <button class="seg-option pixel-size" data-size="34" type="button">34</button>
+            <button class="seg-option pixel-size" data-size="40" type="button">40</button>
+            <button class="seg-option is-active" data-size="48" type="button">48</button>
+            <button class="seg-option" data-size="64" type="button">64</button>
+            <button class="seg-option" data-size="100" type="button">100</button>
+            <button class="seg-option" data-size="120" type="button">120</button>
+          </div>
+          <div class="size-input-grid">
+            <label>
+              <span>宽度</span>
+              <input id="customSizeInput" type="number" min="16" max="160" step="1" value="48" />
+            </label>
+            <label>
+              <span>高度</span>
+              <input id="customHeightInput" type="number" min="16" max="160" step="1" value="48" />
+            </label>
+          </div>
+          <button id="applyCustomSizeButton" class="wide-tool-button" type="button">确认尺寸</button>
+        </section>
+
+        <section class="control-group sidebar-card">
+          <div class="group-title">
+            <span>色板设置</span>
+            <output id="colorLabel">16 / 221 色</output>
+          </div>
+          <div class="palette-name-row">
+            <span>色板</span>
+            <strong>MARD 221</strong>
+          </div>
+          <input id="colorLimit" class="hidden-control" type="range" min="1" max="221" value="16" step="1" />
+          <div class="custom-size-row">
+            <label for="customColorLimitInput">最大颜色</label>
+            <input id="customColorLimitInput" type="number" min="1" max="221" step="1" value="16" />
+            <button id="applyCustomColorLimitButton" type="button">确认</button>
+          </div>
+          <div class="mini-presets color-clean-presets" role="group" aria-label="颜色丰富度">
+            <button class="color-preset" data-colors="12" type="button"><strong>简洁</strong><span>12 色</span></button>
+            <button class="color-preset is-active" data-colors="16" type="button"><strong>平衡</strong><span>16 色</span></button>
+            <button class="color-preset" data-colors="24" type="button"><strong>细节</strong><span>24 色</span></button>
+          </div>
+          <small class="setting-hint">MARD 221 全色板仍可搜索；这里控制一张图最多使用多少种颜色。</small>
+        </section>
+
+        <section class="control-group sidebar-card background-card">
+          <div class="group-title">
+            <span>背景</span>
+            <output id="pixelBackgroundLabel">空背景</output>
+          </div>
+          <div class="segmented pixel-bg-options" role="group" aria-label="背景处理">
+            <button class="pixel-bg-option" data-bg="white" type="button">F1 背景</button>
+            <button class="pixel-bg-option is-active" data-bg="empty" type="button">空背景</button>
+            <button class="pixel-bg-option" data-bg="transparent" type="button">透明背景</button>
+          </div>
+          <small id="backgroundHint" class="setting-hint background-hint" hidden></small>
+        </section>
+
+        <section class="control-group sidebar-card image-process-card">
+          <div class="group-title">
+            <span>图像处理</span>
+            <output id="fitModeLabel">主体</output>
+          </div>
+          <div class="fit-summary-row">
+            <span>图片适配</span>
+            <strong>主体</strong>
+          </div>
+          <div class="segmented hidden-presets" role="group" aria-label="图片适配" hidden>
+            <button class="fit-option is-active" data-fit="subject" type="button">主体</button>
+            <button class="fit-option" data-fit="center" type="button">居中</button>
+          </div>
+          <button id="cutoutButton" class="wide-tool-button" type="button">一键抠图</button>
+          <div class="local-preprocess-toolbar sidebar-local-preprocess" id="localPreprocessToolbar">
+            <label class="local-preprocess-toggle">
+              <input id="localPreprocessEnabledToggle" type="checkbox" checked />
+              <span>本地底图优化</span>
+            </label>
+            <button id="localPreprocessMenuButton" class="local-preprocess-menu-button" type="button" aria-expanded="false" aria-controls="localPreprocessPanel">
+              细项
+            </button>
+            <div id="localPreprocessPanel" class="local-preprocess-panel" hidden>
+              <label class="toggle">
+                <input id="flatColorSimplificationToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>平涂化</span>
+              </label>
+              <label class="toggle">
+                <input id="antiAliasCleanupToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>清理柔边</span>
+              </label>
+              <label class="toggle">
+                <input id="outlinePreservePreprocessToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>线稿保护</span>
+              </label>
+              <label class="toggle">
+                <input id="noiseReductionToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>去噪</span>
+              </label>
+              <label class="toggle">
+                <input id="materialTextureCleanupToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>材质去纹理</span>
+              </label>
+              <label class="toggle">
+                <input id="backgroundCleanupToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>背景整理</span>
+              </label>
+              <label class="toggle">
+                <input id="regionColorStabilizationToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>色块整理</span>
+              </label>
+              <label class="toggle">
+                <input id="regionToneCompressionToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>区域色阶</span>
+              </label>
+              <label class="toggle">
+                <input id="outlineColorConvergenceToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>轮廓收色</span>
+              </label>
+              <div class="local-preprocess-actions">
+                <button id="localPreprocessPreviewButton" type="button">生成预览</button>
+                <button id="localPreprocessApplyButton" type="button">确认应用</button>
+                <button id="localPreprocessRestoreButton" type="button">还原原图</button>
+              </div>
+              <small id="localPreprocessStatus">默认开启，只影响预览，确认后才应用</small>
+            </div>
+          </div>
+          <label class="outline-mode-control sidebar-outline-mode">
+            <span>轮廓设置</span>
+            <select id="outlineModeSelect" aria-label="轮廓保护模式">
+              <option value="off">关闭</option>
+              <option value="light" selected>轻度</option>
+              <option value="medium">标准</option>
+              <option value="strong">强</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="control-group sidebar-card generation-card">
+          <div class="group-title">
+            <span>生成</span>
+            <small>先预览，再应用</small>
+          </div>
+          <button id="generateButton" class="primary" type="button">
+            <i data-lucide="sparkles" aria-hidden="true"></i>
+            生成图纸
+          </button>
+          <button id="applyPreviewButton" type="button" disabled>
+            <i data-lucide="check" aria-hidden="true"></i>
+            确认应用
+          </button>
+          <button id="cancelPreviewButton" type="button" disabled>
+            <i data-lucide="x" aria-hidden="true"></i>
+            取消预览
+          </button>
+          <button id="smartOptimizeButton" type="button">
+            <i data-lucide="wand-sparkles" aria-hidden="true"></i>
+            重新生成 / 智能优化
+          </button>
+        </section>
+
+        <details class="control-group sidebar-card advanced-settings">
+          <summary>高级设置</summary>
+          <section class="advanced-section app-mode-panel">
+            <div class="group-title">
+              <span>工作模式</span>
+              <output id="appModeLabel">自动转图</output>
+            </div>
+            <div class="segmented app-mode-options" role="group" aria-label="工作模式">
+              <button class="app-mode-option is-active" data-app-mode="auto" type="button">自动转图</button>
+              <button class="app-mode-option" data-app-mode="draw" type="button">画图模式</button>
+            </div>
+            <div class="draw-mode-actions">
+              <button id="newBlankCanvasButton" type="button">新建空白画布</button>
+              <small>参考图和画布参考图层仍然可用。</small>
+            </div>
+          </section>
+
+          <section class="advanced-section preview-mode-panel">
+            <div class="group-title">
+              <span>图纸模式</span>
+              <output id="patternModeLabel">普通图纸</output>
+            </div>
+            <div class="segmented pattern-mode-options" role="group" aria-label="图纸模式">
+              <button class="pattern-mode-option is-active" data-pattern-mode="illustration" type="button">普通图纸</button>
+              <button class="pattern-mode-option" data-pattern-mode="pixelPattern" type="button">像素图纸</button>
+            </div>
+          </section>
+
+          <section class="advanced-section processing-profile-panel">
+            <div class="group-title">
+              <span>转换策略</span>
+              <output id="processingProfileLabel">48 精简版</output>
+            </div>
+            <div class="segmented processing-profile-options" role="group" aria-label="转换策略">
+              <button class="processing-profile-option is-active" data-processing-profile="compact48" type="button">48 精简</button>
+              <button class="processing-profile-option" data-processing-profile="detail64" type="button">64+ 细节</button>
+            </div>
+            <small id="processingProfileHint" class="processing-profile-hint">强收敛杂色，突出轮廓与远看识别度。</small>
+          </section>
+
+          <section class="advanced-section">
+            <div class="group-title">
+              <span>显示设置</span>
+            </div>
+            <label class="toggle">
+              <input id="ditherToggle" type="checkbox" />
+              <span class="switch" aria-hidden="true"></span>
+              <span>抖动混色</span>
+            </label>
+            <label class="toggle">
+              <input id="gridToggle" type="checkbox" checked />
+              <span class="switch" aria-hidden="true"></span>
+              <span>坐标网格</span>
+            </label>
+            <label class="toggle">
+              <input id="showCodesToggle" type="checkbox" checked />
+              <span class="switch" aria-hidden="true"></span>
+              <span>显示色号</span>
+            </label>
+            <label class="toggle">
+              <input id="showCoordsToggle" type="checkbox" checked />
+              <span class="switch" aria-hidden="true"></span>
+              <span>显示坐标</span>
+            </label>
+            <label class="toggle">
+              <input id="guideEvery5Toggle" type="checkbox" checked />
+              <span class="switch" aria-hidden="true"></span>
+              <span>每 5 格辅助线</span>
+            </label>
+          </section>
+
+          <section class="advanced-section">
+            <div class="group-title">
+              <span>预览模式</span>
+            </div>
+            <div class="segmented" role="group" aria-label="预览方式">
+              <button class="view-option is-active" data-view="pixel" type="button">
+                <i data-lucide="grid-3x3" aria-hidden="true"></i>
+                图纸
+              </button>
+              <button class="view-option" data-view="clean" type="button">
+                <i data-lucide="image" aria-hidden="true"></i>
+                纯像素
+              </button>
+              <button class="view-option" data-view="bead" type="button">
+                <i data-lucide="circle" aria-hidden="true"></i>
+                圆豆
+              </button>
+            </div>
+          </section>
+
+          <section class="advanced-section">
+            <div class="group-title">
+              <span>生成细项</span>
+            </div>
+            <div class="advanced-parameter-toggles">
+              <label class="toggle">
+                <input id="transparentToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>去透明边</span>
+              </label>
+              <label class="toggle">
+                <input id="lineBoostToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>保留轮廓</span>
+              </label>
+              <label class="toggle">
+                <input id="dominantSamplingToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>主导色采样</span>
+              </label>
+              <label class="toggle">
+                <input id="mergeSimilarToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>合并相近颜色</span>
+              </label>
+              <label class="toggle">
+                <input id="cleanSmallRegionsToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>清理孤立像素</span>
+              </label>
+              <label class="toggle">
+                <input id="animeModeToggle" type="checkbox" checked />
+                <span class="switch" aria-hidden="true"></span>
+                <span>动漫模式</span>
+              </label>
+            </div>
+            <div class="group-title">
+              <span>最小区域</span>
+              <output id="minRegionLabel">6 颗</output>
+            </div>
+            <input id="minRegionSize" type="range" min="1" max="12" value="6" step="1" />
+          </section>
+        </details>
+
+        <section id="editToolPanel" class="control-group edit-tool-panel">
+          <div class="group-title">
+            <span>工作区工具</span>
+            <output id="selectionLabel">未选区</output>
+            <button id="toolboxLockButton" class="mini-lock-button" type="button" title="锁住工具栏位置">
+              <i data-lucide="unlock" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="tool-grid" role="group" aria-label="编辑工具">
+            <button class="canvas-tool is-active" data-tool="brush" type="button" title="画笔快捷键 B">画笔 (B)</button>
+            <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U">擦除 (U)</button>
+            <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I">吸管 (I)</button>
+            <button class="canvas-tool" data-tool="rect" type="button">框选</button>
+            <button class="canvas-tool" data-tool="vline" type="button">竖线</button>
+            <button class="canvas-tool" data-tool="sameColor" type="button">同色</button>
+          </div>
+          <div class="brush-options">
+            <label>
+              画笔大小
+              <input id="brushSizeInput" type="number" min="1" max="9" value="1" step="1" />
+            </label>
+            <label>
+              笔刷形状
+              <select id="brushShapeSelect">
+                <option value="square" selected>方形</option>
+                <option value="circle">圆形</option>
+              </select>
+            </label>
+            <div class="mini-presets brush-size-presets" role="group" aria-label="画笔大小">
+              <button class="brush-size-preset is-active" data-brush-size="1" type="button">1</button>
+              <button class="brush-size-preset" data-brush-size="2" type="button">2</button>
+              <button class="brush-size-preset" data-brush-size="3" type="button">3</button>
+              <button class="brush-size-preset" data-brush-size="5" type="button">5</button>
+            </div>
+            <label class="mini-check">
+              <input id="allowLockedEditToggle" type="checkbox" />
+              <span>允许改锁定色</span>
+            </label>
+            <small class="pan-hint">按住空格拖动画布，Ctrl + +/- 缩放，Ctrl + 0 还原</small>
+          </div>
+          <div class="symmetry-options">
+            <label>
+              对称绘制
+              <select id="symmetryModeSelect">
+                <option value="none" selected>关闭</option>
+                <option value="horizontal">左右对称</option>
+                <option value="vertical">上下对称</option>
+                <option value="both">四向对称</option>
+              </select>
+            </label>
+            <div class="mirror-actions" role="group" aria-label="整图镜像">
+              <button id="mirrorHorizontalButton" type="button">左右镜像</button>
+              <button id="mirrorVerticalButton" type="button">上下镜像</button>
+            </div>
+          </div>
+          <div class="tool-actions">
+            <button id="undoButton" type="button">撤回</button>
+            <button id="redoButton" type="button">重做</button>
+            <button id="fillSelectionButton" type="button">选区上色</button>
+            <button id="finishPenButton" type="button" hidden>完成钢笔</button>
+            <button id="clearSelectionButton" type="button">清空选区</button>
+          </div>
+        </section>
+
+        <section class="control-group reference-panel reference-controls-host" aria-hidden="true">
+          <div class="group-title">
+            <span>参考图层</span>
+            <output id="referenceStatus">未导入</output>
+          </div>
+          <input id="referenceInput" class="reference-file-input" type="file" accept="image/*" />
+          <label class="toggle">
+            <input id="referenceVisibleToggle" type="checkbox" checked />
+            <span class="switch" aria-hidden="true"></span>
+            <span>显示参考</span>
+          </label>
+          <label class="toggle">
+            <input id="referenceAboveToggle" type="checkbox" />
+            <span class="switch" aria-hidden="true"></span>
+            <span>参考在上</span>
+          </label>
+          <div class="group-title">
+            <span>参考透明度</span>
+            <output id="referenceOpacityLabel">35%</output>
+          </div>
+          <input id="referenceOpacity" type="range" min="0" max="100" value="35" step="5" />
+        </section>
+
+        <div class="actions export-actions">
+          <label class="export-format">
+            <span>导出格式</span>
+            <select id="exportFormat">
+              <option value="pdf" selected>PDF 清晰图纸</option>
+              <option value="png">PNG 高清图片</option>
+            </select>
+          </label>
+          <button id="exportButton" type="button">
+            <i data-lucide="download" aria-hidden="true"></i>
+            导出图纸
+          </button>
+          <button id="variantButton" class="hidden-control" type="button" hidden>
+            <i data-lucide="layout-grid" aria-hidden="true"></i>
+            多方案
+          </button>
+          <button id="coverButton" class="hidden-control" type="button" hidden>
+            <i data-lucide="layout-template" aria-hidden="true"></i>
+            封面
+          </button>
+        </div>
+      </aside>
+
+      <section class="workspace" aria-label="拼豆图纸编辑区">
+        <div class="sheet-chrome">
+          <div class="sheet-title">
+            <div>
+              <strong id="projectName">小麦拼豆</strong>
+              <span id="projectMeta">上传图片后生成像素风拼豆图纸</span>
+            </div>
+            <button id="resetButton" class="icon-button" type="button" title="重置">
+              <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+            </button>
+          </div>
+
+          <div class="editor-toolbar" aria-label="图纸编辑工具">
+            <div class="zoom-tools">
+              <button id="zoomOutButton" class="icon-button" type="button" title="缩小">
+                <i data-lucide="minus" aria-hidden="true"></i>
+              </button>
+              <output id="zoomLabel">100%</output>
+              <button id="zoomInButton" class="icon-button" type="button" title="放大">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+              <button id="zoomResetButton" type="button">100%</button>
+              <button id="fitButton" type="button">适配</button>
+            </div>
+            <div class="view-tools" role="group" aria-label="编辑视图">
+              <button class="editor-view-option is-active" data-editor-view="grid" type="button">格子编辑</button>
+              <button class="editor-view-option" data-editor-view="sheet" type="button">整张图纸</button>
+            </div>
+            <button id="editToggle" class="tool-toggle is-active" type="button">
+              <i data-lucide="pencil" aria-hidden="true"></i>
+              编辑
+            </button>
+            <button id="lockGridButton" class="tool-toggle" type="button">
+              <i data-lucide="lock-open" aria-hidden="true"></i>
+              解锁
+            </button>
+            <div class="current-color">
+              <span id="currentColorSwatch"></span>
+              <strong id="currentColorName">H7 黑色</strong>
+            </div>
+            <span id="cellInfo">点选右侧颜色，再点图纸格子改色</span>
+            <div class="reference-toolbar" id="referenceToolbar">
+              <button id="referenceMenuButton" class="reference-menu-button" type="button" aria-expanded="false" aria-controls="referenceMenu">
+                <i data-lucide="image" aria-hidden="true"></i>
+                <span>参考图</span>
+                <small id="referenceMenuStatus">未上传</small>
+              </button>
+              <div id="referenceMenu" class="reference-menu" hidden>
+                <label class="reference-menu-item" for="referenceInput">
+                  <i data-lucide="upload" aria-hidden="true"></i>
+                  <span id="referenceUploadMenuText">上传参考图</span>
+                </label>
+                <button id="referenceToggleVisibleButton" class="reference-menu-item" type="button">
+                  <i data-lucide="eye" aria-hidden="true"></i>
+                  <span>显示 / 隐藏参考窗</span>
+                </button>
+                <button id="referenceLockButton" class="reference-menu-item" type="button">
+                  <i data-lucide="lock-open" aria-hidden="true"></i>
+                  <span>锁定 / 解锁参考窗</span>
+                </button>
+                <button id="referenceFitButton" class="reference-menu-item" type="button">
+                  <i data-lucide="maximize" aria-hidden="true"></i>
+                  <span>适配参考图</span>
+                </button>
+                <button id="referenceClearButton" class="reference-menu-item danger" type="button">
+                  <i data-lucide="trash-2" aria-hidden="true"></i>
+                  <span>清除参考图</span>
+                </button>
+                <label class="reference-opacity-row">
+                  <span>透明度</span>
+                  <input id="referenceOpacityProxy" type="range" min="0" max="100" value="35" step="5" />
+                  <output id="referenceOpacityProxyLabel">35%</output>
+                </label>
+              </div>
+            </div>
+            <div class="trace-reference-toolbar" id="traceReferenceToolbar" aria-label="画布描图参考">
+              <label class="trace-reference-toggle">
+                <input id="traceReferenceToggle" type="checkbox" checked />
+                <span>画布描图</span>
+              </label>
+              <button id="traceReferenceAdjustButton" class="trace-adjust-button" type="button">调整参考图</button>
+              <button id="traceReferenceLockButton" class="icon-button" type="button" title="锁定 / 解锁画布参考图">
+                <i data-lucide="lock" aria-hidden="true"></i>
+              </button>
+              <select id="traceReferenceZMode" aria-label="画布参考图层级">
+                <option value="belowGrid" selected>格子下面</option>
+                <option value="aboveGrid">格子上面</option>
+              </select>
+              <label class="trace-opacity-control">
+                <span>透明度</span>
+                <input id="traceReferenceOpacity" type="range" min="0" max="100" value="35" step="5" />
+                <output id="traceReferenceOpacityLabel">35%</output>
+              </label>
+              <button id="traceReferenceZoomOutButton" class="icon-button" type="button" title="缩小描图参考">
+                <i data-lucide="minus" aria-hidden="true"></i>
+              </button>
+              <button id="traceReferenceZoomInButton" class="icon-button" type="button" title="放大描图参考">
+                <i data-lucide="plus" aria-hidden="true"></i>
+              </button>
+              <button id="traceReferenceFitButton" type="button">适配</button>
+              <button id="traceReferenceCenterButton" type="button">居中</button>
+              <label class="trace-snap-toggle">
+                <input id="traceReferenceSnapToggle" type="checkbox" />
+                <span>吸附格子</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="patternCanvas" width="1080" height="1440" tabindex="0" aria-label="拼豆图纸画布"></canvas>
+            <section id="referenceFloatPanel" class="reference-float-panel" hidden aria-label="上传图片参考">
+              <div id="referenceFloatHeader" class="reference-float-header">
+                <strong>上传图片参考</strong>
+                <div class="reference-float-actions">
+                  <button id="referenceFloatLockButton" class="icon-button" type="button" title="锁定 / 解锁">
+                    <i data-lucide="lock-open" aria-hidden="true"></i>
+                  </button>
+                  <button id="referenceFloatZoomOutButton" class="icon-button" type="button" title="缩小">
+                    <i data-lucide="minus" aria-hidden="true"></i>
+                  </button>
+                  <button id="referenceFloatZoomInButton" class="icon-button" type="button" title="放大">
+                    <i data-lucide="plus" aria-hidden="true"></i>
+                  </button>
+                  <button id="referenceFloatFitButton" class="icon-button" type="button" title="适配">
+                    <i data-lucide="maximize" aria-hidden="true"></i>
+                  </button>
+                  <button id="referenceFloatHideButton" class="icon-button" type="button" title="隐藏">
+                    <i data-lucide="eye-off" aria-hidden="true"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="reference-float-body">
+                <img id="referenceFloatImage" alt="上传图片参考" />
+              </div>
+            </section>
+            <div id="emptyState" class="empty-state">
+              <i data-lucide="scan-line" aria-hidden="true"></i>
+              <strong>上传图片开始生成</strong>
+              <span>会生成带坐标、色号和底部色卡的像素图纸</span>
+            </div>
+          </div>
+
+          <div id="legendStrip" class="sheet-legend" aria-label="色卡预览">
+            <span>色卡会显示在这里</span>
+          </div>
+          <p class="privacy-note">
+            小麦拼豆 Beta 版默认在浏览器本地处理图片。上传的图片不会主动上传到服务器。生成图纸、编辑和导出在本地完成。
+          </p>
+
+          <section id="optimizePanel" class="optimize-panel" hidden>
+            <div class="optimize-header">
+              <strong>智能建议</strong>
+              <button id="closeOptimizeButton" class="icon-button" type="button" title="关闭">
+                <i data-lucide="x" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div id="optimizeBody" class="optimize-body"></div>
+          </section>
+        </div>
+      </section>
+
+      <aside class="panel stats-panel" aria-label="用豆统计">
+        <div class="stats-header">
+          <div>
+            <h2>用豆清单</h2>
+            <p id="totalBeads">共 0 颗</p>
+          </div>
+          <button id="copyListButton" class="icon-button" type="button" title="复制清单">
+            <i data-lucide="copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <section class="control-group color-constraint-panel stats-color-panel">
+          <div class="group-title">
+            <span>固定颜色</span>
+            <output id="colorModeLabel">最大颜色</output>
+          </div>
+          <div class="segmented color-mode-options" role="group" aria-label="颜色约束模式">
+            <button class="color-mode-option" data-color-mode="auto" type="button">自动</button>
+            <button class="color-mode-option is-active" data-color-mode="max" type="button">最大</button>
+            <button class="color-mode-option" data-color-mode="fixedCount" type="button">固定数</button>
+            <button class="color-mode-option" data-color-mode="fixedPalette" type="button">固定色板</button>
+          </div>
+          <div class="constraint-tools">
+            <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
+            <button id="showSelectedColorsButton" type="button">只看已选</button>
+          </div>
+          <div id="constraintPalette" class="constraint-palette" aria-label="固定色板"></div>
+        </section>
+        <div class="color-diagnostic-tools" aria-label="颜色识别验证">
+          <label class="mini-check">
+            <input id="accurateMatchToggle" type="checkbox" checked />
+            <span>准确匹配</span>
+          </label>
+          <label class="mini-check">
+            <input id="colorDebugToggle" type="checkbox" />
+            <span>颜色诊断</span>
+          </label>
+          <div class="segmented mini-segmented" role="group" aria-label="Raw Final 对比">
+            <button id="showFinalGridButton" class="is-active" type="button">最终</button>
+            <button id="showRawGridButton" type="button">原始匹配</button>
+          </div>
+          <small id="colorDebugInfo">开启后按住 Alt 点击格子，查看采样 RGB、LAB、候选 MARD 色号和后处理变化。</small>
+        </div>
+        <div id="paletteList" class="palette-list">
+          <div class="empty-list">生成后会显示每种颜色需要多少颗</div>
+        </div>
+      </aside>
+    </main>
+    <div id="cropModal" class="crop-modal" hidden>
+      <div class="crop-dialog">
+        <div class="crop-header">
+          <strong>裁剪图片</strong>
+          <span>拖动方框裁剪，拖动画布移动图片，滚轮或滑杆缩放</span>
+        </div>
+        <canvas id="cropCanvas" width="720" height="520" aria-label="图片裁剪画布"></canvas>
+        <div class="crop-controls">
+          <label>
+            缩放
+            <input id="cropZoom" type="range" min="0.6" max="3" value="1" step="0.02" />
+          </label>
+          <button id="confirmCropButton" class="primary" type="button">确认裁剪</button>
+          <button id="skipCropButton" type="button">跳过裁剪</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
