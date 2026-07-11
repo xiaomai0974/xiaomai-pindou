@@ -236,6 +236,7 @@ const state = {
   lineStartCell: null,
   brushHoverCell: null,
   selection: new Set(),
+  selectionClipboard: null,
   dragStartCell: null,
   dragPreview: null,
   isBrushPainting: false,
@@ -331,7 +332,6 @@ const elements = {
   traceReferenceFitButton: document.querySelector("#traceReferenceFitButton"),
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
   traceReferenceSnapToggle: document.querySelector("#traceReferenceSnapToggle"),
-  cutoutButton: document.querySelector("#cutoutButton"),
   generateButton: document.querySelector("#generateButton"),
   applyPreviewButton: document.querySelector("#applyPreviewButton"),
   cancelPreviewButton: document.querySelector("#cancelPreviewButton"),
@@ -360,6 +360,8 @@ const elements = {
   allowLockedEditToggle: document.querySelector("#allowLockedEditToggle"),
   fillSelectionButton: document.querySelector("#fillSelectionButton"),
   finishPenButton: document.querySelector("#finishPenButton"),
+  copySelectionButton: document.querySelector("#copySelectionButton"),
+  pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   currentColorSwatch: document.querySelector("#currentColorSwatch"),
   currentColorName: document.querySelector("#currentColorName"),
@@ -885,7 +887,7 @@ function setupEvents() {
       state.pixelBackground = button.dataset.bg;
       updatePixelBackgroundLabel();
       updateBackgroundHint();
-      requestPreviewUpdate("背景模式已生成预览。点击“应用预览”后才会改变正式图纸。", { backgroundOnly: true });
+      requestPreviewUpdate("背景预览已更新；调整完成后点击“生成并应用”。", { backgroundOnly: true });
     });
   });
   elements.showCodesToggle.addEventListener("change", () => {
@@ -923,7 +925,7 @@ function setupEvents() {
     requestPreviewUpdate(
       state.accurateMatch
         ? `准确匹配已生成预览：先做 ${PALETTE_NAME} LAB/DeltaE 精确匹配，再遵守最大颜色、空背景和制作优化。`
-        : "已退出准确匹配，生成正常流程预览。点击“应用预览”后才会覆盖当前图纸。",
+        : "已退出准确匹配并更新预览；调整完成后点击“生成并应用”。",
     );
   });
   elements.colorDebugToggle.addEventListener("change", () => {
@@ -948,7 +950,7 @@ function setupEvents() {
     state.outlineMode = elements.outlineModeSelect.value;
     state.lineBoost = state.outlineMode !== "off";
     elements.lineBoostToggle.checked = state.lineBoost;
-    requestPreviewUpdate("轮廓保护模式已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+    requestPreviewUpdate("轮廓预览已更新；调整完成后点击“生成并应用”。");
   });
   elements.localPreprocessEnabledToggle.addEventListener("change", () => {
     state.localPreprocessSettings.enabled = elements.localPreprocessEnabledToggle.checked;
@@ -956,8 +958,8 @@ function setupEvents() {
     syncLocalPreprocessControls();
     requestPreviewUpdate(
       state.localPreprocessSettings.enabled
-        ? "本地底图优化已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。"
-        : "已关闭本地底图优化，并按原图流程生成预览。点击“应用预览”后才会覆盖当前编辑图纸。",
+        ? "本地底图优化预览已更新；调整完成后点击“生成并应用”。"
+        : "已关闭本地底图优化并恢复原图预览；调整完成后点击“生成并应用”。",
     );
   });
   elements.localPreprocessMenuButton.addEventListener("click", (event) => {
@@ -980,7 +982,7 @@ function setupEvents() {
       invalidateOptimizedBaseImage();
       syncLocalPreprocessControls();
       if (state.localPreprocessSettings.enabled) {
-        requestPreviewUpdate("本地底图优化参数已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+        requestPreviewUpdate("本地底图优化预览已更新；调整完成后点击“生成并应用”。");
       }
     });
   });
@@ -991,7 +993,7 @@ function setupEvents() {
     }
     invalidateOptimizedBaseImage();
     syncLocalPreprocessControls();
-    requestPreviewUpdate("已生成本地底图优化预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+    requestPreviewUpdate("本地底图优化预览已更新；调整完成后点击“生成并应用”。");
   });
   elements.localPreprocessApplyButton.addEventListener("click", applyPreviewToEditGrid);
   elements.localPreprocessRestoreButton.addEventListener("click", () => {
@@ -1014,14 +1016,21 @@ function setupEvents() {
   });
   elements.animeModeToggle.addEventListener("change", () => {
     state.animeMode = elements.animeModeToggle.checked;
-    if (state.animeMode && Number(elements.minRegionSize.value) < 6) {
+    if (state.processingProfile === "photoColor") {
+      if (Number(elements.minRegionSize.value) > 3) {
+        elements.minRegionSize.value = 2;
+        state.minRegionSize = 2;
+        elements.minRegionLabel.textContent = "2 颗";
+      }
+    } else if (state.animeMode && Number(elements.minRegionSize.value) < 6) {
       elements.minRegionSize.value = 6;
       state.minRegionSize = 6;
       elements.minRegionLabel.textContent = "6 颗";
     } else if (!state.animeMode && Number(elements.minRegionSize.value) === 6) {
-      elements.minRegionSize.value = 4;
-      state.minRegionSize = 4;
-      elements.minRegionLabel.textContent = "4 颗";
+      const restoredSize = state.processingProfile === "photoColor" ? 1 : state.processingProfile === "detail64" ? 2 : 3;
+      elements.minRegionSize.value = restoredSize;
+      state.minRegionSize = restoredSize;
+      elements.minRegionLabel.textContent = `${restoredSize} 颗`;
     }
     requestPreviewUpdate();
   });
@@ -1172,10 +1181,9 @@ function setupEvents() {
     if (event.target.closest("#localPreprocessToolbar")) return;
     closeLocalPreprocessPanel();
   });
-  elements.generateButton.addEventListener("click", () => requestPreviewUpdate("已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。"));
+  elements.generateButton.addEventListener("click", generateAndApplyPattern);
   elements.applyPreviewButton.addEventListener("click", applyPreviewToEditGrid);
   elements.cancelPreviewButton.addEventListener("click", cancelPreview);
-  elements.cutoutButton.addEventListener("click", applyOneClickCutout);
   elements.smartOptimizeButton.addEventListener("click", showSmartOptimize);
   elements.variantButton.addEventListener("click", showImageVariants);
   elements.closeOptimizeButton.addEventListener("click", () => {
@@ -1189,7 +1197,7 @@ function setupEvents() {
   elements.showSelectedColorsButton.addEventListener("click", () => {
     state.showSelectedColorsOnly = !state.showSelectedColorsOnly;
     elements.showSelectedColorsButton.classList.toggle("is-active", state.showSelectedColorsOnly);
-    elements.showSelectedColorsButton.textContent = state.showSelectedColorsOnly ? "显示全部" : "只看已选";
+    elements.showSelectedColorsButton.textContent = state.showSelectedColorsOnly ? "显示全部" : "只看使用";
     renderConstraintPalette();
   });
   elements.exportButton.addEventListener("click", exportPattern);
@@ -1208,6 +1216,8 @@ function setupEvents() {
   elements.redoButton.addEventListener("click", redoEdit);
   elements.fillSelectionButton.addEventListener("click", fillSelectionWithCurrentColor);
   elements.finishPenButton.addEventListener("click", finishPenSelection);
+  elements.copySelectionButton.addEventListener("click", copySelectionPixels);
+  elements.pasteSelectionButton.addEventListener("click", pasteSelectionPixels);
   elements.clearSelectionButton.addEventListener("click", clearSelection);
   document.querySelectorAll(".canvas-tool").forEach((button) => {
     button.addEventListener("click", () => setActiveTool(button.dataset.tool));
@@ -1415,8 +1425,8 @@ function applyCustomSize() {
     createBlankCanvas({ confirmReplace: false });
   } else {
     const message = width !== height
-      ? `当前版本使用方形图纸，已按 ${state.gridSize} x ${state.gridSize} 生成预览。点击“应用预览”后才会覆盖当前编辑图纸。`
-      : "尺寸已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。";
+      ? `已按 ${state.gridSize} x ${state.gridSize} 更新预览；调整完成后点击“生成并应用”。`
+      : "尺寸预览已更新；调整完成后点击“生成并应用”。";
     requestPreviewUpdate(message);
   }
 }
@@ -1440,7 +1450,7 @@ function setColorLimit(value, regenerate = true) {
     updateSelectedColorUi();
   }
   renderConstraintPalette();
-  if (regenerate) requestPreviewUpdate("颜色数量已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+  if (regenerate) requestPreviewUpdate("颜色数量预览已更新；调整完成后点击“生成并应用”。");
 }
 
 function syncColorLimitControls() {
@@ -1480,7 +1490,7 @@ function setPatternMode(mode) {
   }
 
   syncControlsFromState();
-  if (state.image) requestPreviewUpdate("图纸模式已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+  if (state.image) requestPreviewUpdate("图纸模式预览已更新；调整完成后点击“生成并应用”。");
   else renderPattern();
 }
 
@@ -1568,29 +1578,52 @@ function recommendedProcessingProfile(size = state.gridSize) {
 
 function setProcessingProfile(profile, options = {}) {
   const { updateDefaults = false, regenerate = true } = options;
-  state.processingProfile = profile === "detail64" ? "detail64" : "compact48";
+  state.processingProfile = ["compact48", "detail64", "photoColor"].includes(profile) ? profile : "compact48";
   if (updateDefaults) {
     if (state.processingProfile === "compact48") {
+      state.dominantSampling = true;
+      state.mergeSimilarColors = true;
+      state.cleanSmallRegions = true;
+      state.animeMode = false;
+      state.localPreprocessSettings.enabled = true;
       state.minRegionSize = state.gridSize <= 34 ? 1 : 3;
       setColorLimit(state.gridSize <= 34 ? 12 : 16, false);
-    } else {
+    } else if (state.processingProfile === "detail64") {
+      state.dominantSampling = true;
+      state.mergeSimilarColors = true;
+      state.cleanSmallRegions = true;
+      state.animeMode = false;
+      state.localPreprocessSettings.enabled = true;
       state.minRegionSize = state.gridSize <= 64 ? 2 : 3;
       setColorLimit(state.gridSize <= 64 ? 24 : state.gridSize <= 100 ? 28 : 32, false);
+    } else {
+      state.dominantSampling = true;
+      state.mergeSimilarColors = true;
+      state.cleanSmallRegions = true;
+      state.animeMode = false;
+      state.localPreprocessSettings.enabled = false;
+      state.minRegionSize = 2;
+      state.accurateMatch = true;
+      if (elements.accurateMatchToggle) elements.accurateMatchToggle.checked = true;
+      setColorLimit(palette.length, false);
     }
   }
   syncProcessingProfileControls();
   syncControlsFromState();
   if (regenerate && state.image) {
-    const label = state.processingProfile === "compact48" ? "48 精简版" : "64+ 细节版";
-    requestPreviewUpdate(`已切换到${label}并生成预览。点击“应用预览”后才会覆盖正式图纸。`);
+    const label = state.processingProfile === "compact48" ? "48 精简版" : state.processingProfile === "detail64" ? "64+ 细节版" : "照片原色";
+    requestPreviewUpdate(`已切换到${label}并更新预览；调整完成后点击“生成并应用”。`);
   }
 }
 
 function syncProcessingProfileControls() {
   const detail = state.processingProfile === "detail64";
-  if (elements.processingProfileLabel) elements.processingProfileLabel.textContent = detail ? "64+ 细节版" : "48 精简版";
+  const photo = state.processingProfile === "photoColor";
+  if (elements.processingProfileLabel) elements.processingProfileLabel.textContent = photo ? "照片原色" : detail ? "64+ 细节版" : "48 精简版";
   if (elements.processingProfileHint) {
-    elements.processingProfileHint.textContent = detail
+    elements.processingProfileHint.textContent = photo
+      ? "高保真映射并轻度整理近色与孤点；不限制总颜色，不做全局色系压缩。"
+      : detail
       ? "轻度清理，保留更多明暗层次、小装饰和结构细节。"
       : "强收敛杂色，突出轮廓与远看识别度。";
   }
@@ -1600,7 +1633,12 @@ function syncProcessingProfileControls() {
 }
 
 function applyPixelSizeDefaults(updateColor = true) {
-  state.processingProfile = recommendedProcessingProfile();
+  if (state.processingProfile !== "photoColor") state.processingProfile = recommendedProcessingProfile();
+  if (state.processingProfile === "photoColor") {
+    state.minRegionSize = 2;
+    if (updateColor) setColorLimit(palette.length, false);
+    return;
+  }
   state.minRegionSize = state.gridSize <= 34 ? 1 : state.gridSize <= 48 ? 3 : 2;
   if (updateColor) {
     setColorLimit(state.gridSize <= 34 ? 12 : state.gridSize <= 48 ? 16 : state.gridSize <= 64 ? 24 : 28, false);
@@ -1608,7 +1646,12 @@ function applyPixelSizeDefaults(updateColor = true) {
 }
 
 function applySizePresetDefaults(updateColor = true) {
-  state.processingProfile = recommendedProcessingProfile();
+  if (state.processingProfile !== "photoColor") state.processingProfile = recommendedProcessingProfile();
+  if (state.processingProfile === "photoColor") {
+    state.minRegionSize = 2;
+    if (updateColor) setColorLimit(palette.length, false);
+    return;
+  }
   if (state.gridSize <= 48) {
     state.dominantSampling = true;
     state.lineBoost = true;
@@ -1746,10 +1789,20 @@ function moveQuickTogglesToToolbar() {
 }
 
 function moveAdvancedSettingsBeforeGeneration() {
+  const panel = document.querySelector(".control-panel");
+  const project = document.querySelector(".project-card");
+  const upload = document.querySelector(".upload-card");
+  const imageProcess = document.querySelector(".image-process-card");
   const advanced = document.querySelector(".advanced-settings");
+  const size = document.querySelector(".size-card");
+  const paletteSettings = document.querySelector(".palette-settings-card");
+  const background = document.querySelector(".background-card");
   const generation = document.querySelector(".generation-card");
-  if (advanced && generation && advanced.nextElementSibling !== generation) {
-    generation.before(advanced);
+  const exportActions = document.querySelector(".export-actions");
+  if (!panel) return;
+  if (advanced && background && background.parentElement !== advanced) advanced.appendChild(background);
+  for (const section of [upload, size, paletteSettings, imageProcess, advanced, generation, project, exportActions]) {
+    if (section) panel.appendChild(section);
   }
 }
 
@@ -1800,7 +1853,7 @@ function syncLocalPreprocessControls() {
   elements.localPreprocessStatus.textContent = settings.enabled
     ? state.optimizedBaseImage
       ? "已使用本地优化底图生成预览"
-      : "开启后只影响预览，确认后才应用"
+      : "开启后自动更新预览，最后点击生成并应用"
     : "默认关闭，当前使用原图转换流程";
 }
 
@@ -2075,7 +2128,7 @@ async function restoreProjectData(projectData, options = {}) {
     state.manualEditedCells = new Set(Array.isArray(gridState.manualEditedCells) ? gridState.manualEditedCells : []);
 
     state.colorLimit = clampColorLimit(paletteState.maxColors || state.colorLimit);
-    state.colorMode = paletteState.colorConstraintMode || "max";
+    state.colorMode = "max";
     state.allowedColorCodes = new Set(paletteState.allowedPalette || []);
     state.lockedColorCodes = new Set(paletteState.lockedColors || []);
     state.disabledColorCodes = new Set(paletteState.disabledColors || []);
@@ -2109,6 +2162,7 @@ async function restoreProjectData(projectData, options = {}) {
     state.patternMode = settings.patternMode || state.patternMode || "illustration";
     state.processingProfile = settings.processingProfile || recommendedProcessingProfile(state.gridSize);
     state.minRegionSize = Number(settings.minRegionSize || state.minRegionSize || 4);
+    if (state.processingProfile === "photoColor" && state.minRegionSize > 3) state.minRegionSize = 2;
     state.accurateMatch = Boolean(settings.accurateMatch);
     state.optimizedBaseImage = null;
     state.optimizedBaseImageSignature = "";
@@ -2889,33 +2943,6 @@ function handleReferencePanelPointerUp(event) {
   panel.pointerId = null;
 }
 
-function applyOneClickCutout() {
-  state.pixelBackground = "empty";
-  updatePixelBackgroundLabel();
-  document.querySelectorAll(".pixel-bg-option").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.bg === "empty");
-  });
-  if (!state.pattern.length) {
-    if (state.image) generatePattern();
-    return;
-  }
-  const beforeEmpty = state.pattern.filter((item) => item.empty).length;
-  const mask = state.backgroundMask || computeBackgroundMask(state.pattern, state.pattern, state.gridSize, true);
-  state.previewPattern = validateColorConstraints(applyBackgroundModeToGrid(state.pattern, mask, "empty"));
-  const afterEmpty = state.previewPattern.filter((item) => item.empty).length;
-  state.previewCounts = buildCounts(state.previewPattern);
-  state.previewQualityMetrics = calculateQualityMetrics(state.previewPattern, state.gridSize);
-  state.previewBackgroundMask = mask;
-  state.previewPreservesManualEdits = true;
-  state.isPreviewDirty = true;
-  state.previewGridVersion += 1;
-  updatePreviewButtons();
-  renderPattern();
-  renderStats();
-  showQualityHint();
-  elements.cellInfo.textContent = afterEmpty > beforeEmpty ? `一键抠图已生成预览，可清理 ${afterEmpty - beforeEmpty} 个背景格。点击“应用预览”后生效。` : "没有检测到可清理的连通背景；可以用擦除工具手动清边。";
-}
-
 function generatePattern() {
   try {
     state.previewPattern = [];
@@ -2937,8 +2964,29 @@ function generatePattern() {
     const size = state.gridSize;
     const sourceImage = conversionSourceImage();
     const pixels = buildPixelSamples(sourceImage, size);
-    const limitedPalette = state.accurateMatch ? palette : adaptivePaletteForPixels(pixels);
-    const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !state.accurateMatch);
+    const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
+    const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
+    const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !(state.accurateMatch || state.processingProfile === "photoColor"));
+
+    if (state.processingProfile === "photoColor") {
+      const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
+      state.pattern = photoResult.pattern;
+      recordColorDiagnostics(pixels, pattern, state.pattern, "photoColorMatch");
+      state.patternSize = size;
+      state.counts = buildCounts(state.pattern);
+      state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => paletteColorByCode(item.code) || item);
+      state.qualityMetrics = calculateQualityMetrics(state.pattern, size);
+      state.usedBounds = calculateUsedBounds(state.pattern, size);
+      state.backgroundMask = photoResult.backgroundMask;
+      state.hasConfirmedGrid = true;
+      state.editGridVersion += 1;
+      state.suspendHistory = false;
+      elements.projectMeta.textContent = `${size} x ${size} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 照片原色映射`;
+      renderPattern();
+      renderStats();
+      markProjectDirty();
+      return;
+    }
 
     if (state.accurateMatch) {
       const accurateResult = finalizeAccurateMatch(pattern, pixels, size);
@@ -2996,8 +3044,19 @@ function buildPatternResultFromImage() {
   const size = state.gridSize;
   const sourceImage = conversionSourceImage();
   const pixels = buildPixelSamples(sourceImage, size);
-  const limitedPalette = state.accurateMatch ? palette : adaptivePaletteForPixels(pixels);
-  const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !state.accurateMatch);
+  const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
+  const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
+  const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !(state.accurateMatch || state.processingProfile === "photoColor"));
+
+  if (state.processingProfile === "photoColor") {
+    const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
+    recordColorDiagnostics(pixels, pattern, photoResult.pattern, "photoColorMatch");
+    return {
+      pattern: photoResult.pattern,
+      backgroundMask: photoResult.backgroundMask,
+      size,
+    };
+  }
 
   if (state.accurateMatch) {
     const accurateResult = finalizeAccurateMatch(pattern, pixels, size);
@@ -3037,6 +3096,59 @@ function finalizeAccurateMatch(pattern, pixels, size) {
     pattern: validateColorConstraints(processed),
     backgroundMask,
   };
+}
+
+function finalizePhotoColorMatch(pattern, pixels, size) {
+  const backgroundMask = computeBackgroundMask(pattern, pixels, size, true);
+  const maskedPattern = applyBackgroundModeToGrid(pattern, backgroundMask, state.pixelBackground);
+  let processed = totalBeadCount(maskedPattern) === 0 && totalBeadCount(pattern) > 0 ? pattern : maskedPattern;
+  processed = mergeSimilarUsedColors(processed, size, state.mergeSimilarColors ? 4.2 : 2.4);
+  processed = cleanPhotoLowContrastIsolated(processed, size);
+  if (state.mergeSimilarColors) {
+    processed = mergeSimilarUsedColors(processed, size, Math.min(5.2, 4.2 + (state.mergeBoost || 0)));
+  }
+  if (state.cleanSmallRegions) {
+    processed = cleanPhotoLowContrastIsolated(processed, size);
+    const photoRegionSize = Math.max(1, Math.min(3, state.minRegionSize));
+    if (photoRegionSize > 1) processed = cleanPatternRegions(processed, size, photoRegionSize);
+  }
+  if (state.animeMode) {
+    processed = capRegionPalettes(processed, size, "light");
+    processed = reduceNeighborhoodNoise(processed, size, "detail");
+  }
+  if (state.localPreprocessSettings.enabled && state.localPreprocessSettings.regionToneCompression) {
+    processed = compressConnectedRegionTones(processed, size);
+  }
+  if (state.localPreprocessSettings.enabled && state.localPreprocessSettings.regionColorStabilization) {
+    processed = reduceNeighborhoodNoise(processed, size, "detail");
+  }
+  if (state.localPreprocessSettings.enabled && state.localPreprocessSettings.outlineColorConvergence) {
+    processed = convergeOutlineColors(processed, size);
+  }
+  processed = repairOutlines(processed, size, outlineStrengthForSize());
+  return {
+    pattern: validateColorConstraints(processed),
+    backgroundMask,
+  };
+}
+
+function cleanPhotoLowContrastIsolated(pattern, size) {
+  const output = [...pattern];
+  const protectedIndexes = buildProtectedIndexSet(pattern, size);
+  for (let index = 0; index < pattern.length; index += 1) {
+    const color = pattern[index];
+    if (color.empty || protectedIndexes.has(index) || state.manualEditedCells.has(index) || isColorLocked(color)) continue;
+    const x = index % size;
+    const y = Math.floor(index / size);
+    const neighbors = getFourNeighbors(x, y, size).map((next) => pattern[next]).filter((item) => !item.empty);
+    if (neighbors.length < 2 || neighbors.some((item) => item.code === color.code)) continue;
+    const winner = countNeighborColors(neighbors)
+      .sort((a, b) => b.count - a.count || colorDistance(color, a.color) - colorDistance(color, b.color))[0];
+    if (!winner || winner.count < 2) continue;
+    if (colorDistance(color, winner.color) > 10) continue;
+    output[index] = winner.color;
+  }
+  return output;
 }
 
 function conversionSourceImage() {
@@ -3222,7 +3334,7 @@ function cleanupMaterialTexture(imageData, outlineMask) {
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
   const out = output.data;
   const bins = new Uint32Array(width * height);
-  const radius = state.gridSize <= 64 ? 2 : 1;
+  const radius = state.processingProfile === "photoColor" ? 1 : state.gridSize <= 64 ? 2 : 1;
 
   for (let index = 0; index < width * height; index += 1) {
     const offset = index * 4;
@@ -3328,7 +3440,7 @@ function simplifyBaseImageFlatColors(imageData, outlineMask) {
   const { data, width, height } = imageData;
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
   const out = output.data;
-  const step = state.gridSize <= 48 ? 22 : state.gridSize <= 64 ? 18 : 14;
+  const step = state.processingProfile === "photoColor" ? 10 : state.gridSize <= 48 ? 22 : state.gridSize <= 64 ? 18 : 14;
   for (let index = 0; index < width * height; index += 1) {
     if (outlineMask[index]) continue;
     const offset = index * 4;
@@ -3359,10 +3471,13 @@ function stabilizeBaseImageRegions(imageData, outlineMask) {
         }
       }
       const avg = averagePreprocessPixels(data, neighbors);
-      if (colorDistanceRgb(data[offset], data[offset + 1], data[offset + 2], avg.r, avg.g, avg.b) < 32) {
-        out[offset] = Math.round(data[offset] * 0.55 + avg.r * 0.45);
-        out[offset + 1] = Math.round(data[offset + 1] * 0.55 + avg.g * 0.45);
-        out[offset + 2] = Math.round(data[offset + 2] * 0.55 + avg.b * 0.45);
+      const photoProfile = state.processingProfile === "photoColor";
+      const stabilizationDistance = photoProfile ? 18 : 32;
+      const sourceWeight = photoProfile ? 0.75 : 0.55;
+      if (colorDistanceRgb(data[offset], data[offset + 1], data[offset + 2], avg.r, avg.g, avg.b) < stabilizationDistance) {
+        out[offset] = Math.round(data[offset] * sourceWeight + avg.r * (1 - sourceWeight));
+        out[offset + 1] = Math.round(data[offset + 1] * sourceWeight + avg.g * (1 - sourceWeight));
+        out[offset + 2] = Math.round(data[offset + 2] * sourceWeight + avg.b * (1 - sourceWeight));
       }
     }
   }
@@ -3462,7 +3577,7 @@ function isPreprocessNearBackground(r, g, b, alpha) {
   return (r > 232 && g > 232 && b > 224 && saturation < 36) || (Math.max(r, g, b) > 238 && saturation < 22);
 }
 
-function requestPreviewUpdate(message = "已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。", options = {}) {
+function requestPreviewUpdate(message = "参数预览已更新。调整完成后点击“生成并应用”。", options = {}) {
   try {
     let result = null;
     if (options.backgroundOnly && state.pattern.length) {
@@ -3496,11 +3611,25 @@ function requestPreviewUpdate(message = "已生成预览。点击“应用预览
     renderStats();
     showQualityHint();
     elements.projectMeta.textContent = `预览 / ${result.size} x ${result.size} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
-    elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑，参数变化只生成预览。点击“应用预览”后才会覆盖当前编辑图纸。" : message;
+    elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑；参数只更新预览，最后点击“生成并应用”才会覆盖。" : message;
     markProjectDirty();
   } catch (error) {
     console.error("生成预览失败", error);
     elements.cellInfo.textContent = `生成预览失败：${error.message || error}`;
+  }
+}
+
+function generateAndApplyPattern() {
+  if (!state.image && !state.previewPattern.length) {
+    elements.cellInfo.textContent = "请先上传图片。";
+    return;
+  }
+  if (!state.isPreviewDirty || !state.previewPattern.length) {
+    requestPreviewUpdate("图纸已生成，正在应用到编辑画布。");
+  }
+  if (state.isPreviewDirty && state.previewPattern.length) {
+    applyPreviewToEditGrid();
+    elements.cellInfo.textContent = "图纸已生成并应用，可以直接编辑。";
   }
 }
 
@@ -3693,7 +3822,7 @@ function isLikelyBackgroundSample(sample) {
 }
 
 function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
-  if (!state.dominantSampling && state.patternMode !== "pixelPattern") {
+  if (!state.dominantSampling && (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
     return averageSampleCell(data, sampleSize, cellX, cellY, sampleScale);
   }
 
@@ -5299,7 +5428,7 @@ function showQualityHint() {
   } else if (!metrics.backgroundModeConsistency) {
     elements.cellInfo.textContent = "背景显示与当前背景模式不一致：请重新生成预览或应用背景模式。";
   } else if (metrics.backgroundNoiseCount > state.gridSize) {
-    elements.cellInfo.textContent = "背景参与图纸：建议使用空背景或点击一键抠图。";
+    elements.cellInfo.textContent = "背景参与图纸：建议使用空背景，或用擦除工具手动清理边缘。";
   } else if (metrics.colorFamilyOveruseCount > 0) {
     elements.cellInfo.textContent = "同一色系颜色过多：建议开启合并相近颜色或降低最大颜色数。";
   } else if (metrics.regionColorChaosScore > 24) {
@@ -6376,7 +6505,7 @@ function renderConstraintPaletteLegacy() {
     .map((item) => {
       const locked = state.lockedColorCodes.has(item.code);
       const allowed = state.allowedColorCodes.has(item.code) || locked;
-      const disabled = state.disabledColorCodes.has(item.code);
+      const disabled = state.colorMode === "fixedPalette" && state.disabledColorCodes.has(item.code);
       const title = `${item.code} ${item.name} ${item.hex}${locked ? " / 已锁定" : ""}${disabled ? " / 已禁用" : ""}`;
       return `
         <button
@@ -6530,19 +6659,14 @@ function bindPaletteButtonsLegacy() {
 }
 
 function renderConstraintPalette() {
-  const labels = {
-    auto: "自动颜色",
-    max: "最大颜色",
-    fixedCount: "固定数量",
-    fixedPalette: "固定色板",
-  };
-  elements.colorModeLabel.textContent = labels[state.colorMode] || "最大颜色";
+  elements.colorModeLabel.textContent = "MARD 221";
 
   const query = state.paletteSearch;
   const filteredPalette = palette.filter((item) => {
     const locked = state.lockedColorCodes.has(item.code);
-    const allowed = state.allowedColorCodes.has(item.code) || locked;
-    if (state.showSelectedColorsOnly && !allowed) return false;
+    const used = state.counts.has(item.code) || state.previewCounts.has(item.code);
+    const active = state.selectedColor?.code === item.code;
+    if (state.showSelectedColorsOnly && !used && !locked && !active) return false;
     if (!query) return true;
     return `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query);
   });
@@ -6550,16 +6674,16 @@ function renderConstraintPalette() {
   elements.constraintPalette.innerHTML = filteredPalette
     .map((item) => {
       const locked = state.lockedColorCodes.has(item.code);
-      const allowed = state.allowedColorCodes.has(item.code) || locked;
-      const disabled = state.disabledColorCodes.has(item.code);
+      const allowed = state.colorMode !== "fixedPalette" || state.allowedColorCodes.has(item.code) || locked;
+      const disabled = state.colorMode === "fixedPalette" && state.disabledColorCodes.has(item.code);
       const active = state.selectedColor?.code === item.code;
-      const title = `${item.code} ${item.name} ${item.hex}${locked ? " / 已锁定" : ""}${active ? " / 当前画笔色" : ""}${disabled ? " / 旧版禁用状态，点击或锁定可恢复" : ""}`;
+      const title = `${item.code} ${item.name} ${item.hex}${locked ? " / 已锁定" : ""}${active ? " / 当前画笔色" : ""}`;
       return `
         <button
           class="constraint-chip${allowed ? "" : " is-off"}${locked ? " is-locked" : ""}${active ? " is-active" : ""}${disabled ? " is-disabled" : ""}"
           data-constraint-code="${item.code}"
           style="background:${item.hex}"
-          title="${title}。单击设为画笔色；Ctrl+单击加入固定色板并激活；Shift+单击移出固定色板；右键/双击锁定或解锁。"
+          title="${title}。单击设为画笔色；右键或双击锁定/解锁。"
           type="button"
         >${item.code}</button>
       `;
@@ -6571,6 +6695,11 @@ function renderConstraintPalette() {
       const code = button.dataset.constraintCode;
       const color = paletteColorByCode(code);
       if (!color) return;
+
+      if (state.colorMode !== "fixedPalette") {
+        activatePaintColor(color, { addToAllowed: false });
+        return;
+      }
 
       if (event.ctrlKey || event.metaKey) {
         activatePaintColor(color, { addToAllowed: true });
@@ -6620,8 +6749,13 @@ function renderConstraintPalette() {
       if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
       else state.lockedColorCodes.add(code);
       activatePaintColor(color, { addToAllowed: true, announce: false });
-      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定。` : `${code} 已解锁，仍保留在固定色板。`;
-      applyConstraintChange();
+      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定。` : `${code} 已解锁。`;
+      if (state.colorMode === "fixedPalette") applyConstraintChange();
+      else {
+        renderConstraintPalette();
+        renderStats();
+        markProjectDirty();
+      }
     });
 
     button.addEventListener("contextmenu", (event) => {
@@ -6633,8 +6767,13 @@ function renderConstraintPalette() {
       state.allowedColorCodes.add(code);
       if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
       else state.lockedColorCodes.add(code);
-      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定，不会被自动优化修改。` : `${code} 已解锁，仍保留在固定色板。`;
-      applyConstraintChange();
+      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定，不会被自动优化修改。` : `${code} 已解锁。`;
+      if (state.colorMode === "fixedPalette") applyConstraintChange();
+      else {
+        renderConstraintPalette();
+        renderStats();
+        markProjectDirty();
+      }
     });
   });
 }
@@ -6715,7 +6854,7 @@ function updateSelectedColorUi() {
 
 function handleCanvasMove(event) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前显示的是预览。请先应用预览或取消预览，再编辑正式图纸。";
+    elements.cellInfo.textContent = "当前显示的是参数预览。点击左侧“生成并应用”后即可编辑。";
     return;
   }
   if (state.gridLocked) {
@@ -6753,11 +6892,11 @@ function handleCanvasClick(event) {
     elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。颜色诊断请按住 Alt 点击格子。";
   }
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能直接编辑。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可编辑。";
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
-  if (["rect", "hline", "vline", "brush", "line"].includes(state.activeTool)) return;
+  if (["rect", "hline", "brush", "line"].includes(state.activeTool)) return;
   if (state.activeTool === "eraser" && !state.selection.size) return;
   const cell = getCellFromPointer(event);
   if (state.activeTool === "eyedropper" && pickColorFromTraceReference(event)) return;
@@ -6844,7 +6983,7 @@ function handleCanvasPointerDown(event) {
   }
   if (tryStartTraceReferenceDrag(event)) return;
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能直接编辑。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可编辑。";
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
@@ -6884,7 +7023,7 @@ function handleCanvasPointerDown(event) {
     eraseBrushCell(cell);
     return;
   }
-  if (!["rect", "hline", "vline"].includes(state.activeTool)) return;
+  if (!["rect", "hline"].includes(state.activeTool)) return;
   state.dragStartCell = cell;
   state.dragPreview = cell;
   elements.patternCanvas.setPointerCapture?.(event.pointerId);
@@ -7334,7 +7473,7 @@ function handleCanvasDrop(event) {
   event.preventDefault();
   document.querySelector("#canvasWrap")?.classList.remove("is-drag-target");
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能拖拽填色。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可拖拽填色。";
     return;
   }
   if (state.gridLocked) return;
@@ -7496,17 +7635,21 @@ function pickColorFromTraceReference(event) {
 }
 
 function visibleCanvasTool(tool) {
-  return ["brush", "eraser", "eyedropper", "rect", "vline", "sameColor"].includes(tool);
+  return ["brush", "eraser", "eyedropper", "rect", "pen", "sameColor"].includes(tool);
 }
 
 function setActiveTool(tool) {
   if (!visibleCanvasTool(tool)) tool = "brush";
+  if (tool === "pen" && state.activeTool !== "pen") {
+    state.selection.clear();
+  }
   state.activeTool = tool;
   state.dragStartCell = null;
   state.dragPreview = null;
   state.lineStartCell = null;
   state.traceReference.adjustMode = false;
   if (tool !== "pen") state.penPoints = [];
+  elements.finishPenButton.hidden = tool !== "pen";
   document.querySelectorAll(".canvas-tool").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.tool === tool);
   });
@@ -7544,7 +7687,6 @@ function toolHint(tool) {
     eyedropper: "吸管：点击图纸格子吸色；画图模式下也可以点击画布参考图或参考图浮窗吸取并匹配 MARD 色。",
     rect: "框选：拖出矩形选区。",
     hline: "横线：拖动选择一段横向格子。",
-    vline: "竖线：拖动选择一段竖向格子。",
     pen: "钢笔：连续点击围出区域，双击或点完成钢笔。",
     eraser: "擦除：点击或按住拖动，空背景模式下会擦成空白格。",
     sameColor: "同色：点击图纸或右侧色块，选择全部同色格。",
@@ -7562,8 +7704,6 @@ function buildSelectionFromDrag(start, end, tool) {
 
   if (tool === "hline") {
     minY = maxY = start.y;
-  } else if (tool === "vline") {
-    minX = maxX = start.x;
   }
 
   for (let y = minY; y <= maxY; y += 1) {
@@ -7576,7 +7716,10 @@ function buildSelectionFromDrag(start, end, tool) {
 }
 
 function finishPenSelection() {
-  if (state.penPoints.length < 3) return;
+  if (state.penPoints.length < 3) {
+    elements.cellInfo.textContent = "钢笔选区至少需要 3 个点。";
+    return;
+  }
   const selected = new Set();
   for (let y = 0; y < state.gridSize; y += 1) {
     for (let x = 0; x < state.gridSize; x += 1) {
@@ -7589,6 +7732,7 @@ function finishPenSelection() {
   state.penPoints = [];
   updateSelectionLabel();
   renderPattern();
+  elements.cellInfo.textContent = `钢笔选区已闭合，共选中 ${selected.size} 个像素，可直接填色或复制。`;
 }
 
 function pointInPolygon(x, y, polygon) {
@@ -7613,6 +7757,96 @@ function clearSelection() {
 
 function updateSelectionLabel() {
   elements.selectionLabel.textContent = state.selection.size ? `${state.selection.size} 格` : state.penPoints.length ? `${state.penPoints.length} 点` : "未选区";
+  elements.copySelectionButton.disabled = !state.selection.size;
+  elements.pasteSelectionButton.disabled = !state.selectionClipboard;
+}
+
+function copySelectionPixels() {
+  if (!state.pattern.length || !state.selection.size) {
+    elements.cellInfo.textContent = "请先用框选或钢笔选择要复制的像素。";
+    return;
+  }
+  const points = [...state.selection]
+    .filter((index) => index >= 0 && index < state.pattern.length)
+    .map((index) => ({ index, x: index % state.gridSize, y: Math.floor(index / state.gridSize) }));
+  if (!points.length) return;
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
+  state.selectionClipboard = {
+    width: maxX - minX + 1,
+    height: maxY - minY + 1,
+    sourceX: minX,
+    sourceY: minY,
+    pasteCount: 0,
+    cells: points.map((point) => {
+      const color = state.pattern[point.index];
+      return {
+        dx: point.x - minX,
+        dy: point.y - minY,
+        code: color?.empty ? "__EMPTY__" : color?.code || "__EMPTY__",
+      };
+    }),
+  };
+  updateSelectionLabel();
+  elements.cellInfo.textContent = `已复制 ${points.length} 个像素，可点击“粘贴选区”或按 Ctrl + V。`;
+}
+
+function pasteSelectionPixels() {
+  const clipboard = state.selectionClipboard;
+  if (!clipboard) {
+    elements.cellInfo.textContent = "还没有复制选区。";
+    return;
+  }
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "当前是参数预览，请先生成并应用，再粘贴选区。";
+    return;
+  }
+  if (!state.editing || state.gridLocked || !state.pattern.length) return;
+
+  const offset = clipboard.pasteCount + 1;
+  const preferredX = state.brushHoverCell?.x ?? clipboard.sourceX + offset;
+  const preferredY = state.brushHoverCell?.y ?? clipboard.sourceY + offset;
+  const anchorX = Math.max(0, Math.min(state.gridSize - clipboard.width, preferredX));
+  const anchorY = Math.max(0, Math.min(state.gridSize - clipboard.height, preferredY));
+  const changes = clipboard.cells
+    .map((cell) => {
+      const x = anchorX + cell.dx;
+      const y = anchorY + cell.dy;
+      const index = y * state.gridSize + x;
+      return { ...cell, index };
+    })
+    .filter((cell) => cell.index >= 0 && cell.index < state.pattern.length && canEditCell(cell.index));
+  if (!changes.length) {
+    elements.cellInfo.textContent = "粘贴位置没有可编辑的格子，请解锁相关颜色后再试。";
+    return;
+  }
+
+  pushHistory();
+  const pastedSelection = new Set();
+  for (const change of changes) {
+    const color = change.code === "__EMPTY__" ? EMPTY_CELL : paletteColorByCode(change.code);
+    if (!color) continue;
+    state.pattern[change.index] = color;
+    state.manualEditedCells.add(change.index);
+    rememberPaletteColor(color);
+    pastedSelection.add(change.index);
+  }
+  clipboard.pasteCount += 1;
+  state.selection = pastedSelection;
+  state.penPoints = [];
+  state.counts = buildCounts(state.pattern);
+  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
+  state.hasConfirmedGrid = true;
+  state.manualEditCount += 1;
+  state.editGridVersion += 1;
+  updateSelectionLabel();
+  renderPattern();
+  renderStats();
+  markProjectDirty();
+  elements.cellInfo.textContent = `已粘贴 ${pastedSelection.size} 个像素，粘贴结果已自动选中。`;
 }
 
 function snapshotPattern() {
@@ -7838,6 +8072,7 @@ function handleKeyboardShortcuts(event) {
   const shortcuts = {
     b: "brush",
     i: "eyedropper",
+    p: "pen",
     u: "eraser",
   };
   if (!event.ctrlKey && !event.metaKey && !event.altKey && shortcuts[key]) {
@@ -7847,7 +8082,13 @@ function handleKeyboardShortcuts(event) {
   }
 
   if (!event.ctrlKey && !event.metaKey) return;
-  if (key === "z" && event.shiftKey) {
+  if (key === "c" && state.selection.size) {
+    event.preventDefault();
+    copySelectionPixels();
+  } else if (key === "v" && state.selectionClipboard) {
+    event.preventDefault();
+    pasteSelectionPixels();
+  } else if (key === "z" && event.shiftKey) {
     event.preventDefault();
     redoEdit();
   } else if (key === "z") {
@@ -7889,7 +8130,7 @@ function fillSelectionWithCurrentColor() {
 
 function fillSelectionWithColor(color) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能填充选区。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可填充选区。";
     return;
   }
   if (state.gridLocked) return;
@@ -7900,7 +8141,7 @@ function fillSelectionWithColor(color) {
 
 function selectAllMatchingColor(color) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能选择正式图纸里的同色格。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可选择同色格。";
     return;
   }
   state.selection = new Set();
@@ -7914,7 +8155,7 @@ function selectAllMatchingColor(color) {
 
 function applyColorToIndicesLegacy(indices, color, recordHistory = true) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能直接修改。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可修改。";
     return;
   }
   if (state.gridLocked && recordHistory) return;
@@ -7949,7 +8190,7 @@ function rememberPaletteColor(color) {
 
 function applyColorToIndices(indices, color, recordHistory = true) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是预览，不能直接修改。请先应用预览或取消预览。";
+    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可修改。";
     return;
   }
   if (state.gridLocked && recordHistory) return;

@@ -237,7 +237,9 @@ h2 {
 
 .size-input-grid label {
   display: grid;
-  gap: 4px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 900;
@@ -1938,6 +1940,374 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
   border: 2px dashed var(--line);
   padding: 16px;
   text-align: center;
+}
+
+/* Compact workbench layout: surface the controls used during conversion. */
+.app-shell {
+  grid-template-columns: 258px minmax(620px, 1fr) 276px;
+  gap: 8px;
+  padding: 8px;
+}
+
+.panel {
+  gap: 8px;
+  padding: 10px;
+}
+
+.control-panel,
+.stats-panel {
+  top: 8px;
+  height: calc(100vh - 16px);
+}
+
+.brand {
+  gap: 9px;
+  padding-bottom: 8px;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
+  box-shadow: 3px 3px 0 var(--ink);
+}
+
+.brand h1 {
+  font-size: 18px;
+}
+
+.brand p {
+  font-size: 11px;
+}
+
+.simplified-sidebar .sidebar-card {
+  gap: 6px;
+  border: 1px solid #aeb5bb;
+  background: #fff !important;
+  padding: 8px;
+}
+
+.simplified-sidebar .group-title {
+  min-height: 18px;
+  font-size: 12px;
+}
+
+.workflow-step {
+  display: inline-grid;
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  place-items: center;
+  background: var(--ink);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.simplified-sidebar .project-file-toolbar {
+  gap: 6px;
+}
+
+.simplified-sidebar .project-file-toolbar button,
+.simplified-sidebar .wide-tool-button,
+.simplified-sidebar .custom-size-row button {
+  min-height: 32px;
+  border-width: 1px;
+  font-size: 12px;
+}
+
+.upload-card .upload-zone {
+  grid-template-columns: 26px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  min-height: 58px;
+  place-items: initial;
+  align-items: center;
+  gap: 0 8px;
+  border-width: 1px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.upload-card .upload-zone svg {
+  grid-row: 1 / 3;
+  width: 20px;
+  height: 20px;
+}
+
+.upload-card .upload-zone span {
+  align-self: end;
+  font-size: 13px;
+}
+
+.upload-card .upload-zone small {
+  align-self: start;
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.size-input-grid {
+  gap: 6px;
+}
+
+.size-input-grid input {
+  height: 32px;
+  border-width: 1px;
+  padding: 4px 7px;
+}
+
+.palette-name-row,
+.fit-summary-row {
+  min-height: 30px;
+  border-width: 1px;
+  font-size: 12px;
+}
+
+.custom-size-row input {
+  height: 32px;
+  border-width: 1px;
+  padding: 4px 7px;
+}
+
+.color-clean-presets {
+  gap: 4px;
+}
+
+.color-clean-presets button {
+  min-height: 38px;
+  border-width: 1px;
+}
+
+.palette-settings-card .setting-hint {
+  display: none;
+}
+
+.palette-settings-card .palette-name-row {
+  display: none;
+}
+
+.background-card .segmented button,
+.processing-profile-options button,
+.app-mode-options button,
+.pattern-mode-options button {
+  min-height: 32px;
+  border-width: 1px;
+  margin-left: -1px;
+  padding: 3px 4px;
+  font-size: 11px;
+}
+
+.image-process-card .fit-summary-row {
+  display: none;
+}
+
+.sidebar-local-preprocess {
+  grid-template-columns: minmax(0, 1fr) 58px;
+  gap: 6px;
+}
+
+.sidebar-local-preprocess .local-preprocess-toggle,
+.sidebar-local-preprocess .local-preprocess-menu-button,
+.sidebar-outline-mode {
+  min-height: 32px;
+  border-width: 1px;
+  font-size: 11px;
+}
+
+.sidebar-local-preprocess .local-preprocess-menu-button {
+  width: auto;
+}
+
+.sidebar-local-preprocess .local-preprocess-panel {
+  grid-column: 1 / -1;
+}
+
+.sidebar-outline-mode {
+  grid-template-columns: 62px 1fr;
+}
+
+.advanced-settings {
+  padding-bottom: 8px !important;
+}
+
+.advanced-settings > .background-card {
+  margin-top: 7px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: transparent !important;
+  padding: 7px 0 0;
+}
+
+.advanced-settings summary {
+  font-size: 13px;
+}
+
+.advanced-section {
+  gap: 6px;
+  margin-top: 7px;
+  border-top-width: 1px;
+  padding-top: 7px;
+}
+
+.advanced-section .group-title {
+  font-size: 11px;
+}
+
+.processing-profile-hint,
+.draw-mode-actions small {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.generation-card {
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.generation-card {
+  border-color: var(--ink) !important;
+  background: #fffdf8 !important;
+}
+
+.generation-card #generateButton {
+  min-height: 40px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+}
+
+.generation-card .group-title,
+.generation-card #generateButton,
+.generation-card #smartOptimizeButton {
+  grid-column: 1 / -1;
+}
+
+.generation-card button {
+  min-height: 34px;
+  border-width: 1px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.segmented svg,
+.actions svg,
+.icon-button svg,
+.generation-card svg {
+  width: 14px;
+  height: 14px;
+}
+
+.workspace {
+  height: calc(100vh - 16px);
+  padding: 10px;
+}
+
+.sheet-chrome {
+  gap: 7px;
+}
+
+.sheet-title {
+  padding-bottom: 7px;
+}
+
+.sheet-title strong {
+  font-size: 18px;
+}
+
+.editor-toolbar {
+  gap: 6px;
+  padding: 6px;
+}
+
+.editor-toolbar #zoomResetButton,
+.editor-toolbar #fitButton {
+  display: none;
+}
+
+.trace-reference-toolbar.is-unavailable {
+  display: none;
+}
+
+.reference-menu-button {
+  min-height: 32px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+#cellInfo {
+  flex-basis: 120px;
+  min-width: 80px;
+  font-size: 11px;
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.zoom-tools button:not(.icon-button),
+.tool-toggle,
+.current-color,
+.trace-reference-toggle,
+.trace-snap-toggle,
+.trace-opacity-control,
+.trace-reference-toolbar button:not(.icon-button),
+.trace-adjust-button {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.top-parameter-toggles .toggle {
+  min-height: 28px;
+  padding: 3px 5px;
+  font-size: 11px;
+}
+
+.edit-tool-panel {
+  width: 204px;
+  padding: 8px;
+}
+
+.tool-grid {
+  gap: 4px;
+}
+
+.tool-grid button,
+.tool-actions button {
+  min-height: 31px;
+  font-size: 11px;
+}
+
+.stats-header {
+  padding-bottom: 8px;
+}
+
+.stats-color-panel {
+  gap: 6px;
+  border-width: 1px;
+  padding: 8px;
+}
+
+.stats-color-panel .constraint-palette {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.constraint-chip {
+  min-height: 29px;
+  border-width: 1px;
+}
+
+.palette-list {
+  gap: 6px;
+}
+
+.palette-row {
+  gap: 7px;
+  min-height: 38px;
+  border-width: 1px;
+  padding: 5px;
 }
 
 @media (max-width: 1100px) {

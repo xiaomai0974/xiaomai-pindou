@@ -32,9 +32,9 @@
           </div>
         </section>
 
-        <section class="control-group sidebar-card">
+        <section class="control-group sidebar-card upload-card">
           <div class="group-title">
-            <span>上传图片</span>
+            <span><b class="workflow-step">1</b>上传图片</span>
             <small>上传后先裁剪</small>
           </div>
           <label class="upload-zone" for="imageInput">
@@ -46,9 +46,9 @@
           <button id="recropButton" class="wide-tool-button" type="button">裁剪图片 / 重新裁剪</button>
         </section>
 
-        <section class="control-group sidebar-card">
+        <section class="control-group sidebar-card size-card">
           <div class="group-title">
-            <span>图纸尺寸</span>
+            <span><b class="workflow-step">2</b>图纸尺寸</span>
             <output id="sizeLabel">48 x 48</output>
           </div>
           <div class="segmented hidden-presets" role="group" aria-label="拼豆尺寸" hidden>
@@ -75,9 +75,9 @@
           <button id="applyCustomSizeButton" class="wide-tool-button" type="button">确认尺寸</button>
         </section>
 
-        <section class="control-group sidebar-card">
+        <section class="control-group sidebar-card palette-settings-card">
           <div class="group-title">
-            <span>色板设置</span>
+            <span><b class="workflow-step">3</b>颜色数量</span>
             <output id="colorLabel">16 / 221 色</output>
           </div>
           <div class="palette-name-row">
@@ -113,7 +113,7 @@
 
         <section class="control-group sidebar-card image-process-card">
           <div class="group-title">
-            <span>图像处理</span>
+            <span><b class="workflow-step">4</b>图像处理</span>
             <output id="fitModeLabel">主体</output>
           </div>
           <div class="fit-summary-row">
@@ -124,7 +124,6 @@
             <button class="fit-option is-active" data-fit="subject" type="button">主体</button>
             <button class="fit-option" data-fit="center" type="button">居中</button>
           </div>
-          <button id="cutoutButton" class="wide-tool-button" type="button">一键抠图</button>
           <div class="local-preprocess-toolbar sidebar-local-preprocess" id="localPreprocessToolbar">
             <label class="local-preprocess-toggle">
               <input id="localPreprocessEnabledToggle" type="checkbox" checked />
@@ -180,8 +179,8 @@
                 <span>轮廓收色</span>
               </label>
               <div class="local-preprocess-actions">
-                <button id="localPreprocessPreviewButton" type="button">生成预览</button>
-                <button id="localPreprocessApplyButton" type="button">确认应用</button>
+                <button id="localPreprocessPreviewButton" type="button">更新预览</button>
+                <button id="localPreprocessApplyButton" type="button" hidden>确认应用</button>
                 <button id="localPreprocessRestoreButton" type="button">还原原图</button>
               </div>
               <small id="localPreprocessStatus">默认开启，只影响预览，确认后才应用</small>
@@ -200,18 +199,18 @@
 
         <section class="control-group sidebar-card generation-card">
           <div class="group-title">
-            <span>生成</span>
-            <small>先预览，再应用</small>
+            <span><b class="workflow-step">6</b>生成</span>
+            <small>一次完成</small>
           </div>
           <button id="generateButton" class="primary" type="button">
             <i data-lucide="sparkles" aria-hidden="true"></i>
-            生成图纸
+            生成并应用
           </button>
-          <button id="applyPreviewButton" type="button" disabled>
+          <button id="applyPreviewButton" type="button" disabled hidden>
             <i data-lucide="check" aria-hidden="true"></i>
             确认应用
           </button>
-          <button id="cancelPreviewButton" type="button" disabled>
+          <button id="cancelPreviewButton" type="button" disabled hidden>
             <i data-lucide="x" aria-hidden="true"></i>
             取消预览
           </button>
@@ -222,7 +221,7 @@
         </section>
 
         <details class="control-group sidebar-card advanced-settings">
-          <summary>高级设置</summary>
+          <summary><b class="workflow-step">5</b>高级设置</summary>
           <section class="advanced-section app-mode-panel">
             <div class="group-title">
               <span>工作模式</span>
@@ -257,11 +256,12 @@
             <div class="segmented processing-profile-options" role="group" aria-label="转换策略">
               <button class="processing-profile-option is-active" data-processing-profile="compact48" type="button">48 精简</button>
               <button class="processing-profile-option" data-processing-profile="detail64" type="button">64+ 细节</button>
+              <button class="processing-profile-option" data-processing-profile="photoColor" type="button">照片原色</button>
             </div>
             <small id="processingProfileHint" class="processing-profile-hint">强收敛杂色，突出轮廓与远看识别度。</small>
           </section>
 
-          <section class="advanced-section">
+          <section class="advanced-section" hidden>
             <div class="group-title">
               <span>显示设置</span>
             </div>
@@ -292,7 +292,7 @@
             </label>
           </section>
 
-          <section class="advanced-section">
+          <section class="advanced-section" hidden>
             <div class="group-title">
               <span>预览模式</span>
             </div>
@@ -369,7 +369,7 @@
             <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U">擦除 (U)</button>
             <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I">吸管 (I)</button>
             <button class="canvas-tool" data-tool="rect" type="button">框选</button>
-            <button class="canvas-tool" data-tool="vline" type="button">竖线</button>
+            <button class="canvas-tool" data-tool="pen" type="button" title="钢笔快捷键 P；逐点勾选，双击闭合">钢笔 (P)</button>
             <button class="canvas-tool" data-tool="sameColor" type="button">同色</button>
           </div>
           <div class="brush-options">
@@ -416,6 +416,8 @@
             <button id="redoButton" type="button">重做</button>
             <button id="fillSelectionButton" type="button">选区上色</button>
             <button id="finishPenButton" type="button" hidden>完成钢笔</button>
+            <button id="copySelectionButton" type="button" disabled>复制选区</button>
+            <button id="pasteSelectionButton" type="button" disabled>粘贴选区</button>
             <button id="clearSelectionButton" type="button">清空选区</button>
           </div>
         </section>
@@ -639,20 +641,14 @@
         </div>
         <section class="control-group color-constraint-panel stats-color-panel">
           <div class="group-title">
-            <span>固定颜色</span>
-            <output id="colorModeLabel">最大颜色</output>
-          </div>
-          <div class="segmented color-mode-options" role="group" aria-label="颜色约束模式">
-            <button class="color-mode-option" data-color-mode="auto" type="button">自动</button>
-            <button class="color-mode-option is-active" data-color-mode="max" type="button">最大</button>
-            <button class="color-mode-option" data-color-mode="fixedCount" type="button">固定数</button>
-            <button class="color-mode-option" data-color-mode="fixedPalette" type="button">固定色板</button>
+            <span>颜色面板</span>
+            <output id="colorModeLabel">MARD 221</output>
           </div>
           <div class="constraint-tools">
             <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
-            <button id="showSelectedColorsButton" type="button">只看已选</button>
+            <button id="showSelectedColorsButton" type="button">只看使用</button>
           </div>
-          <div id="constraintPalette" class="constraint-palette" aria-label="固定色板"></div>
+          <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
         </section>
         <div class="color-diagnostic-tools" aria-label="颜色识别验证">
           <label class="mini-check">
