@@ -246,6 +246,12 @@ const state = {
   lastEraseIndex: null,
   lastEraseCell: null,
   penPoints: [],
+  renderFrameId: null,
+  referenceSampler: {
+    image: null,
+    canvas: null,
+    context: null,
+  },
   undoStack: [],
   redoStack: [],
   projectDirty: false,
@@ -5918,6 +5924,14 @@ function renderPattern() {
   }
 }
 
+function requestPatternRender() {
+  if (state.renderFrameId !== null) return;
+  state.renderFrameId = window.requestAnimationFrame(() => {
+    state.renderFrameId = null;
+    renderPattern();
+  });
+}
+
 function configureCanvasForView() {
   const view = state.editorView === "sheet" ? sheet : gridEditor;
   if (elements.patternCanvas.width !== view.width) {
@@ -5977,7 +5991,7 @@ function drawEditorBase() {
   ctx.textAlign = "right";
   const pattern = displayPattern();
   const total = pattern.length ? totalBeadCount(pattern) : state.gridSize * state.gridSize;
-  const colorCount = buildCounts(pattern).size;
+  const colorCount = pattern === state.pattern ? state.counts.size : buildCounts(pattern).size;
   ctx.fillText(`${state.isPreviewDirty ? "预览 / " : ""}${state.gridSize} x ${state.gridSize} / ${total}颗 / ${colorCount}色`, gridEditor.width - 120, 70);
   ctx.textAlign = "left";
 }
@@ -6865,14 +6879,14 @@ function handleCanvasMove(event) {
   if (!cell || !state.pattern.length) {
     if (state.brushHoverCell) {
       state.brushHoverCell = null;
-      renderPattern();
+      requestPatternRender();
     }
     elements.cellInfo.textContent = state.editing ? "点选右侧颜色，再点图纸格子改色" : "编辑已关闭";
     return;
   }
   if (!state.brushHoverCell || state.brushHoverCell.x !== cell.x || state.brushHoverCell.y !== cell.y) {
     state.brushHoverCell = cell;
-    if (["brush", "eraser", "line"].includes(state.activeTool)) renderPattern();
+    if (["brush", "eraser", "line"].includes(state.activeTool)) requestPatternRender();
   }
   const item = state.pattern[cell.y * state.gridSize + cell.x];
   elements.cellInfo.textContent = `${cell.x + 1}, ${cell.y + 1} / 当前 ${item.code}，点击改成 ${state.selectedColor.code}`;
@@ -7050,7 +7064,7 @@ function handleCanvasPointerMove(event) {
   state.dragPreview = cell;
   state.selection = buildSelectionFromDrag(state.dragStartCell, cell, state.activeTool);
   updateSelectionLabel();
-  renderPattern();
+  requestPatternRender();
 }
 
 function handleCanvasPointerUp(event) {
@@ -7117,8 +7131,7 @@ function paintBrushCell(cell, snapLine = false) {
   }
   state.lastBrushCell = targetCell;
   state.selectedCell = targetCell;
-  state.counts = buildCounts(state.pattern);
-  renderPattern();
+  requestPatternRender();
 }
 
 function eraseBrushCell(cell) {
@@ -7138,8 +7151,7 @@ function eraseBrushCell(cell) {
   }
   state.lastEraseCell = cell;
   state.selectedCell = cell;
-  state.counts = buildCounts(state.pattern);
-  renderPattern();
+  requestPatternRender();
 }
 
 function eraseCurrentSelection() {
@@ -7347,12 +7359,7 @@ function handleReferenceImageClick(event) {
   const y = clampRange((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
   const sampleX = Math.min(state.referenceImage.width - 1, Math.max(0, Math.floor(x * state.referenceImage.width)));
   const sampleY = Math.min(state.referenceImage.height - 1, Math.max(0, Math.floor(y * state.referenceImage.height)));
-  const canvas = document.createElement("canvas");
-  canvas.width = state.referenceImage.width;
-  canvas.height = state.referenceImage.height;
-  const sampleCtx = canvas.getContext("2d", { willReadFrequently: true });
-  sampleCtx.drawImage(state.referenceImage, 0, 0);
-  const [r, g, b, a] = sampleCtx.getImageData(sampleX, sampleY, 1, 1).data;
+  const [r, g, b, a] = sampleReferenceImagePixel(sampleX, sampleY);
   if (a < 8) {
     elements.cellInfo.textContent = "参考图点击位置透明，未吸取颜色。";
     return;
@@ -7364,6 +7371,18 @@ function handleReferenceImageClick(event) {
   activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette" });
   elements.cellInfo.textContent = `已从参考图吸取：${color.code} ${color.name} / ${color.hex} / DeltaE ${color.deltaE.toFixed(1)}；候选 ${candidates.map((item) => item.code).join("、")}`;
   renderStats();
+}
+
+function sampleReferenceImagePixel(x, y) {
+  if (state.referenceSampler.image !== state.referenceImage || !state.referenceSampler.context) {
+    const canvas = document.createElement("canvas");
+    canvas.width = state.referenceImage.width;
+    canvas.height = state.referenceImage.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(state.referenceImage, 0, 0);
+    state.referenceSampler = { image: state.referenceImage, canvas, context };
+  }
+  return state.referenceSampler.context.getImageData(x, y, 1, 1).data;
 }
 
 function interpolateCells(start, end) {
@@ -7583,7 +7602,7 @@ function moveTraceReferenceDrag(event) {
     trace.x = Math.round(trace.x);
     trace.y = Math.round(trace.y);
   }
-  renderPattern();
+  requestPatternRender();
 }
 
 function finishTraceReferenceDrag(event) {
@@ -7615,12 +7634,7 @@ function pickColorFromTraceReference(event) {
   const ratioY = clampRange((point.y - geometry.top) / Math.max(1, geometry.height), 0, 1);
   const sampleX = Math.min(state.referenceImage.width - 1, Math.max(0, Math.floor(ratioX * state.referenceImage.width)));
   const sampleY = Math.min(state.referenceImage.height - 1, Math.max(0, Math.floor(ratioY * state.referenceImage.height)));
-  const canvas = document.createElement("canvas");
-  canvas.width = state.referenceImage.width;
-  canvas.height = state.referenceImage.height;
-  const sampleCtx = canvas.getContext("2d", { willReadFrequently: true });
-  sampleCtx.drawImage(state.referenceImage, 0, 0);
-  const [r, g, b, a] = sampleCtx.getImageData(sampleX, sampleY, 1, 1).data;
+  const [r, g, b, a] = sampleReferenceImagePixel(sampleX, sampleY);
   if (a < 8) {
     elements.cellInfo.textContent = "画布参考图该位置透明，未吸取颜色。";
     return true;
