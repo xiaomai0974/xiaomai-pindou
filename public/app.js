@@ -7439,7 +7439,7 @@ function isTypingTarget(target) {
 }
 
 function beginCanvasPan(event) {
-  if (event.button !== 1 || isTypingTarget(event.target)) return false;
+  if (!state.isSpacePressed || event.button !== 0 || isTypingTarget(event.target)) return false;
   if (!elements.canvasWrap.contains(event.target)) return false;
   if (state.isPanningCanvas) return true;
   event.preventDefault();
@@ -8076,12 +8076,20 @@ function handleKeyboardShortcuts(event) {
   const key = event.key.toLowerCase();
   if (event.code === "Space") {
     event.preventDefault();
+    if (!state.isSpacePressed) {
+      state.isSpacePressed = true;
+      updateCanvasCursor();
+    }
+    return;
+  }
+  if (event.key === "Tab") {
+    event.preventDefault();
     if (event.repeat) return;
     const previousTool = state.previousActiveTool;
     if (visibleCanvasTool(previousTool) && previousTool !== state.activeTool) {
       setActiveTool(previousTool);
     } else {
-      elements.cellInfo.textContent = "请先切换一次工具，之后按空格可切回上一个工具。";
+      elements.cellInfo.textContent = "请先切换一次工具，之后按 Tab 可切回上一个工具。";
     }
     return;
   }
