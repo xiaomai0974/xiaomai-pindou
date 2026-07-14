@@ -7439,7 +7439,7 @@ function isTypingTarget(target) {
 }
 
 function beginCanvasPan(event) {
-  if (!state.isSpacePressed || isTypingTarget(event.target)) return false;
+  if (event.button !== 1 || isTypingTarget(event.target)) return false;
   if (!elements.canvasWrap.contains(event.target)) return false;
   if (state.isPanningCanvas) return true;
   event.preventDefault();
@@ -7654,6 +7654,9 @@ function visibleCanvasTool(tool) {
 
 function setActiveTool(tool) {
   if (!visibleCanvasTool(tool)) tool = "brush";
+  if (tool !== state.activeTool) {
+    state.previousActiveTool = state.activeTool;
+  }
   if (tool === "pen" && state.activeTool !== "pen") {
     state.selection.clear();
   }
@@ -8072,12 +8075,14 @@ function handleKeyboardShortcuts(event) {
   if (isTypingTarget(event.target)) return;
   const key = event.key.toLowerCase();
   if (event.code === "Space") {
-    if (!state.isSpacePressed) {
-      state.previousActiveTool = state.activeTool;
-      state.isSpacePressed = true;
-      updateCanvasCursor();
-    }
     event.preventDefault();
+    if (event.repeat) return;
+    const previousTool = state.previousActiveTool;
+    if (visibleCanvasTool(previousTool) && previousTool !== state.activeTool) {
+      setActiveTool(previousTool);
+    } else {
+      elements.cellInfo.textContent = "请先切换一次工具，之后按空格可切回上一个工具。";
+    }
     return;
   }
 
