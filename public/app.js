@@ -105,6 +105,8 @@ const state = {
   patternMode: "illustration",
   processingProfile: "compact48",
   gridSize: 48,
+  gridWidth: 48,
+  gridHeight: 48,
   colorLimit: DEFAULT_COLOR_LIMIT,
   pixelBackground: "empty",
   showCellCodes: true,
@@ -118,7 +120,7 @@ const state = {
   showSelectedColorsOnly: false,
   dither: false,
   showGrid: true,
-  fitMode: "subject",
+  fitMode: "contain",
   removeTransparent: true,
   lineBoost: true,
   outlineMode: "light",
@@ -268,6 +270,35 @@ const state = {
   toolboxLocked: false,
   pendingOptimizePlans: [],
 };
+
+function activeGridWidth() {
+  return clampRange(Math.round(Number(state.gridWidth) || state.gridSize || 48), 16, 160);
+}
+
+function activeGridHeight() {
+  return clampRange(Math.round(Number(state.gridHeight) || state.gridSize || 48), 16, 160);
+}
+
+function gridDimensionsLabel() {
+  return `${activeGridWidth()} x ${activeGridHeight()}`;
+}
+
+function isActiveGridCell(x, y) {
+  return x >= 0 && y >= 0 && x < activeGridWidth() && y < activeGridHeight();
+}
+
+function constrainPatternToCanvas(pattern) {
+  if (!Array.isArray(pattern)) return pattern;
+  const stride = state.gridSize;
+  const width = activeGridWidth();
+  const height = activeGridHeight();
+  if (width === stride && height === stride) return [...pattern];
+  return pattern.map((item, index) => {
+    const x = index % stride;
+    const y = Math.floor(index / stride);
+    return x < width && y < height ? item : EMPTY_CELL;
+  });
+}
 
 const elements = {
   uploadZone: document.querySelector(".upload-zone"),
@@ -641,7 +672,7 @@ function validateColorConstraints(pattern, options = {}) {
   const lockedCodes = options.lockedColorCodes || state.lockedColorCodes;
   let violationCount = 0;
 
-  const remapped = pattern.map((color) => {
+  const remapped = constrainPatternToCanvas(pattern).map((color) => {
     if (color.empty) return color;
     const isAllowed = allowedCodes.has(color.code) && !state.disabledColorCodes.has(color.code);
     if (isAllowed || lockedCodes.has(color.code)) return color;
@@ -1048,7 +1079,10 @@ function setupEvents() {
   elements.referenceInput.addEventListener("change", handleReferenceUpload);
   elements.referenceVisibleToggle.addEventListener("change", () => {
     state.referenceVisible = elements.referenceVisibleToggle.checked;
+    state.traceReference.visible = state.referenceVisible;
+    state.traceReference.enabled = state.referenceVisible && Boolean(state.referenceImage);
     updateReferenceMenuState();
+    syncTraceReferenceControls();
     renderReferenceFloatPanel();
     renderPattern();
   });
@@ -1071,20 +1105,24 @@ function setupEvents() {
     toggleReferenceMenu();
   });
   elements.referenceToggleVisibleButton.addEventListener("click", () => {
-    state.referenceVisible = !state.referenceVisible;
+    state.traceReference.visible = !state.traceReference.visible;
+    state.traceReference.enabled = state.traceReference.visible && Boolean(state.referenceImage);
+    state.referenceVisible = state.traceReference.visible;
     elements.referenceVisibleToggle.checked = state.referenceVisible;
     updateReferenceMenuState();
+    syncTraceReferenceControls();
     renderReferenceFloatPanel();
     renderPattern();
   });
   elements.referenceLockButton.addEventListener("click", () => {
-    state.referenceLocked = !state.referenceLocked;
+    state.traceReference.locked = !state.traceReference.locked;
+    state.referenceLocked = state.traceReference.locked;
     updateReferenceMenuState();
+    syncTraceReferenceControls();
     renderReferenceFloatPanel();
   });
   elements.referenceFitButton.addEventListener("click", () => {
     fitReferencePanel();
-    if (state.appMode === "draw") fitTraceReferenceToCanvas();
     renderPattern();
     elements.cellInfo.textContent = state.referenceImage ? "参考图已适配到当前图纸视图。" : "请先上传参考图。";
   });
@@ -1264,7 +1302,9 @@ function setupEvents() {
       document.querySelectorAll(".seg-option").forEach((option) => option.classList.remove("is-active"));
       button.classList.add("is-active");
       state.gridSize = nextSize;
-      elements.sizeLabel.textContent = `${state.gridSize} x ${state.gridSize}`;
+      state.gridWidth = nextSize;
+      state.gridHeight = nextSize;
+      elements.sizeLabel.textContent = gridDimensionsLabel();
       if (state.patternMode === "pixelPattern") {
         applyPixelSizeDefaults(true);
       } else {
@@ -1398,8 +1438,147 @@ function handleBeforeUnload(event) {
 }
 
 function elevateToolboxLayer() {
-  if (!elements.editToolPanel || elements.editToolPanel.parentElement === document.body) return;
-  document.body.appendChild(elements.editToolPanel);
+  const workspace = document.querySelector(".workspace");
+  if (!elements.editToolPanel || !workspace) return;
+  if (elements.editToolPanel.parentElement !== workspace) {
+    workspace.prepend(elements.editToolPanel);
+  }
+  elements.editToolPanel.classList.add("is-docked");
+  elements.editToolPanel.style.left = "";
+  elements.editToolPanel.style.top = "";
+}
+
+function setupWorkbenchLayout() {
+  const controlPanel = document.querySelector(".control-panel");
+  const railButtons = Array.from(document.querySelectorAll(".sidebar-rail-button[data-sidebar-target]"));
+  const panelSelectors = {
+    upload: ".upload-card",
+    size: ".size-card",
+    colors: ".palette-settings-card",
+    process: ".image-process-card",
+    generate: ".generation-card",
+    project: ".project-card",
+    export: ".export-actions",
+  };
+  const drawerPanels = new Map();
+
+  Object.entries(panelSelectors).forEach(([key, selector]) => {
+    const panel = controlPanel?.querySelector(selector);
+    if (!panel) return;
+    panel.classList.add("workbench-drawer-panel");
+    panel.dataset.sidebarPanel = key;
+    drawerPanels.set(key, panel);
+  });
+
+  const closeSidebarDrawer = () => {
+    controlPanel?.classList.remove("has-open-drawer");
+    drawerPanels.forEach((panel) => panel.classList.remove("is-sidebar-open"));
+    railButtons.forEach((button) => {
+      button.classList.remove("is-active");
+      button.setAttribute("aria-expanded", "false");
+    });
+  };
+
+  const openSidebarDrawer = (key) => {
+    const panel = drawerPanels.get(key);
+    if (!panel) return;
+    const wasOpen = panel.classList.contains("is-sidebar-open");
+    closeSidebarDrawer();
+    if (wasOpen) return;
+    controlPanel?.classList.add("has-open-drawer");
+    panel.classList.add("is-sidebar-open");
+    if (panel instanceof HTMLDetailsElement) panel.open = true;
+    const button = railButtons.find((item) => item.dataset.sidebarTarget === key);
+    button?.classList.add("is-active");
+    button?.setAttribute("aria-expanded", "true");
+  };
+
+  railButtons.forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => openSidebarDrawer(button.dataset.sidebarTarget));
+  });
+
+  if (window.innerWidth > 760 && drawerPanels.has("size")) {
+    openSidebarDrawer("size");
+  }
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".sidebar-rail-nav, .workbench-drawer-panel")) return;
+    closeSidebarDrawer();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSidebarDrawer();
+  });
+
+  elements.generateButton?.addEventListener("click", () => {
+    window.setTimeout(closeSidebarDrawer, 0);
+  });
+
+  const statsTabs = Array.from(document.querySelectorAll(".stats-tab[data-stats-tab]"));
+  const statsContents = Array.from(document.querySelectorAll("[data-stats-content]"));
+  const statsPanel = document.querySelector(".stats-panel");
+  const statsSearchTools = statsPanel?.querySelector(".constraint-tools");
+  const statsDiagnosticTools = statsPanel?.querySelector(".color-diagnostic-tools");
+  if (statsSearchTools) {
+    statsSearchTools.classList.add("stats-search-tools");
+    statsTabs[0]?.closest(".stats-tabs")?.insertAdjacentElement("afterend", statsSearchTools);
+  }
+  if (statsDiagnosticTools) {
+    statsDiagnosticTools.classList.add("stats-footer-tools");
+    statsPanel.appendChild(statsDiagnosticTools);
+  }
+  statsTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const target = tab.dataset.statsTab;
+      statsTabs.forEach((item) => {
+        const active = item === tab;
+        item.classList.toggle("is-active", active);
+        item.setAttribute("aria-selected", String(active));
+      });
+      statsContents.forEach((content) => {
+        const active = content.dataset.statsContent === target;
+        content.hidden = !active;
+        content.classList.toggle("is-active", active);
+      });
+    });
+  });
+
+  const statsCollapseButton = document.querySelector("#statsCollapseButton");
+  if (window.innerWidth <= 760 && statsPanel && statsCollapseButton) {
+    document.body.classList.add("stats-panel-collapsed");
+    statsPanel.classList.add("is-collapsed");
+    statsCollapseButton.title = "展开右侧面板";
+    statsCollapseButton.innerHTML = '<i data-lucide="panel-right-open" aria-hidden="true"></i>';
+  }
+  statsCollapseButton?.addEventListener("click", () => {
+    const collapsed = !document.body.classList.contains("stats-panel-collapsed");
+    document.body.classList.toggle("stats-panel-collapsed", collapsed);
+    statsPanel?.classList.toggle("is-collapsed", collapsed);
+    statsCollapseButton.title = collapsed ? "展开右侧面板" : "收起右侧面板";
+    statsCollapseButton.innerHTML = collapsed
+      ? '<i data-lucide="panel-right-open" aria-hidden="true"></i>'
+      : '<i data-lucide="panel-right-close" aria-hidden="true"></i>';
+    window.lucide?.createIcons();
+    window.setTimeout(() => {
+      if (state.pattern.length) fitCanvasToScreen();
+    }, 180);
+  });
+
+  const propertiesButton = document.querySelector("#toolPropertiesButton");
+  const closeToolProperties = () => {
+    elements.editToolPanel?.classList.remove("is-properties-open");
+    propertiesButton?.setAttribute("aria-expanded", "false");
+  };
+  propertiesButton?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const open = !elements.editToolPanel.classList.contains("is-properties-open");
+    elements.editToolPanel.classList.toggle("is-properties-open", open);
+    propertiesButton.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("#editToolPanel")) return;
+    closeToolProperties();
+  });
 }
 
 function handleColorLimitChange() {
@@ -1414,13 +1593,18 @@ function applyCustomSize() {
   const width = Math.round(Number(elements.customSizeInput.value));
   const height = Math.round(Number(elements.customHeightInput.value));
   const value = Math.max(width, height);
-  if (!Number.isFinite(value)) return;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || !Number.isFinite(value)) return;
   if (state.appMode === "draw" && state.pattern.length && !window.confirm("修改尺寸会新建空白画布并覆盖当前图纸，确定继续吗？")) {
-    elements.customSizeInput.value = state.gridSize;
-    elements.customHeightInput.value = state.gridSize;
+    elements.customSizeInput.value = activeGridWidth();
+    elements.customHeightInput.value = activeGridHeight();
     return;
   }
-  state.gridSize = clampRange(value, 16, 160);
+  state.gridWidth = clampRange(width, 16, 160);
+  state.gridHeight = clampRange(height, 16, 160);
+  state.gridSize = Math.max(state.gridWidth, state.gridHeight);
+  state.traceReference.x = null;
+  state.traceReference.y = null;
+  state.traceReference.scale = 1;
   if (state.patternMode === "pixelPattern") {
     applyPixelSizeDefaults(false);
   } else {
@@ -1430,10 +1614,12 @@ function applyCustomSize() {
   if (state.appMode === "draw") {
     createBlankCanvas({ confirmReplace: false });
   } else {
-    const message = width !== height
-      ? `已按 ${state.gridSize} x ${state.gridSize} 更新预览；调整完成后点击“生成并应用”。`
-      : "尺寸预览已更新；调整完成后点击“生成并应用”。";
-    requestPreviewUpdate(message);
+    if (state.image) {
+      requestPreviewUpdate(`已按 ${gridDimensionsLabel()} 完整适配图片；调整完成后点击“生成并应用”。`);
+    } else {
+      renderPattern();
+      elements.cellInfo.textContent = `画布已设为 ${gridDimensionsLabel()}，现在可以上传图片。`;
+    }
   }
 }
 
@@ -1480,7 +1666,11 @@ function setPatternMode(mode) {
   elements.patternModeLabel.textContent = mode === "pixelPattern" ? "像素图纸" : "普通图纸";
 
   if (mode === "pixelPattern") {
-    state.gridSize = [30, 32, 34, 40, 48, 64].includes(state.gridSize) ? state.gridSize : 32;
+    if (![30, 32, 34, 40, 48, 64].includes(state.gridSize)) {
+      state.gridSize = 32;
+      state.gridWidth = 32;
+      state.gridHeight = 32;
+    }
     state.dither = false;
     state.dominantSampling = true;
     state.lineBoost = true;
@@ -1491,7 +1681,11 @@ function setPatternMode(mode) {
     state.viewMode = "pixel";
     applyPixelSizeDefaults(true);
   } else {
-    state.gridSize = state.gridSize < 48 ? 48 : state.gridSize;
+    if (state.gridSize < 48) {
+      state.gridSize = 48;
+      state.gridWidth = Math.max(48, activeGridWidth());
+      state.gridHeight = Math.max(48, activeGridHeight());
+    }
     state.minRegionSize = Math.max(state.minRegionSize, 4);
   }
 
@@ -1541,7 +1735,11 @@ function createBlankCanvas(options = {}) {
   }
   if (state.pattern.length && !state.suspendHistory) pushHistory();
   const fill = state.pixelBackground === "white" ? whiteBeadColor() : EMPTY_CELL;
-  state.pattern = Array.from({ length: state.gridSize * state.gridSize }, () => fill);
+  state.pattern = Array.from({ length: state.gridSize * state.gridSize }, (_, index) => {
+    const x = index % state.gridSize;
+    const y = Math.floor(index / state.gridSize);
+    return isActiveGridCell(x, y) ? fill : EMPTY_CELL;
+  });
   state.patternSize = state.gridSize;
   state.counts = buildCounts(state.pattern);
   state.projectPalette = fill.empty ? [] : [fill];
@@ -1564,8 +1762,8 @@ function createBlankCanvas(options = {}) {
   renderPattern();
   renderStats();
   elements.projectName.textContent = state.fileName;
-  elements.projectMeta.textContent = `${state.gridSize} x ${state.gridSize} / ${totalBeadCount()} 颗 / 空白画布`;
-  elements.cellInfo.textContent = `已新建 ${state.gridSize} x ${state.gridSize} 空白画布，背景为 ${fill.empty ? "空背景" : fill.code}。`;
+  elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / 空白画布`;
+  elements.cellInfo.textContent = `已新建 ${gridDimensionsLabel()} 空白画布，背景为 ${fill.empty ? "空背景" : fill.code}。`;
   markProjectDirty();
 }
 
@@ -1682,9 +1880,9 @@ function applySizePresetDefaults(updateColor = true) {
 }
 
 function syncControlsFromState() {
-  elements.sizeLabel.textContent = `${state.gridSize} x ${state.gridSize}`;
-  elements.customSizeInput.value = state.gridSize;
-  elements.customHeightInput.value = state.gridSize;
+  elements.sizeLabel.textContent = gridDimensionsLabel();
+  elements.customSizeInput.value = activeGridWidth();
+  elements.customHeightInput.value = activeGridHeight();
   elements.appModeLabel.textContent = state.appMode === "draw" ? "画图模式" : "自动转图";
   elements.appModeOptions.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.appMode === state.appMode);
@@ -1700,7 +1898,7 @@ function syncControlsFromState() {
   });
   syncColorLimitControls();
   document.querySelectorAll(".seg-option").forEach((button) => {
-    button.classList.toggle("is-active", Number(button.dataset.size) === state.gridSize);
+    button.classList.toggle("is-active", activeGridWidth() === activeGridHeight() && Number(button.dataset.size) === state.gridSize);
   });
   document.querySelectorAll(".view-option").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === state.viewMode);
@@ -1807,7 +2005,8 @@ function moveAdvancedSettingsBeforeGeneration() {
   const exportActions = document.querySelector(".export-actions");
   if (!panel) return;
   if (advanced && background && background.parentElement !== advanced) advanced.appendChild(background);
-  for (const section of [upload, size, paletteSettings, imageProcess, advanced, generation, project, exportActions]) {
+  if (imageProcess && advanced && advanced.parentElement !== imageProcess) imageProcess.appendChild(advanced);
+  for (const section of [upload, size, paletteSettings, imageProcess, generation, project, exportActions]) {
     if (section) panel.appendChild(section);
   }
 }
@@ -1942,8 +2141,8 @@ function buildProjectData() {
     updatedAt: now,
     fileName: state.fileName,
     canvas: {
-      width: state.gridSize,
-      height: state.gridSize,
+      width: activeGridWidth(),
+      height: activeGridHeight(),
       backgroundMode: state.pixelBackground,
       backgroundColorId: state.pixelBackground === "white" ? "F1" : "",
     },
@@ -2110,7 +2309,9 @@ async function restoreProjectData(projectData, options = {}) {
     const sourceData = source.croppedImageData || source.originalImageData || "";
     const referenceData = reference.imageData || trace.imageData || "";
 
-    state.gridSize = clampRange(Number(canvas.width || canvas.height || projectData.gridSize || 48), 16, 160);
+    state.gridWidth = clampRange(Number(canvas.width || projectData.gridSize || 48), 16, 160);
+    state.gridHeight = clampRange(Number(canvas.height || projectData.gridSize || state.gridWidth), 16, 160);
+    state.gridSize = Math.max(state.gridWidth, state.gridHeight);
     state.patternSize = state.gridSize;
     state.fileName = (options.fileName || projectData.fileName || source.fileName || "小麦拼豆项目").replace(/\.(xiaomai|xmbd)$/i, "");
     state.projectCreatedAt = projectData.createdAt || new Date().toISOString();
@@ -2246,7 +2447,7 @@ async function restoreProjectData(projectData, options = {}) {
     renderPattern();
     renderStats();
     elements.projectName.textContent = "小麦拼豆";
-    elements.projectMeta.textContent = `${state.gridSize} x ${state.gridSize} / ${totalBeadCount()} 颗 / 已恢复项目`;
+    elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / 已恢复项目`;
   } finally {
     state.projectRestoring = false;
   }
@@ -2392,10 +2593,14 @@ function loadImageFile(file) {
 
   const image = new Image();
   image.onload = () => {
-    elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，请先裁剪或跳过裁剪`;
-    elements.cellInfo.textContent = "拖动裁剪框调整主体范围，确认后再生成图纸。";
+    elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，正在适配 ${gridDimensionsLabel()} 画布`;
+    elements.cellInfo.textContent = "图片会完整适配当前画布，不会强制裁成正方形。";
     URL.revokeObjectURL(image.src);
-    openCropper(image, file);
+    acceptSourceImage(image, file, {
+      skipped: true,
+      originalWidth: image.width,
+      originalHeight: image.height,
+    });
   };
   image.onerror = () => {
     elements.projectMeta.textContent = "图片读取失败，请换 JPG、PNG 或 WebP";
@@ -2440,7 +2645,7 @@ function acceptSourceImage(image, file, cropInfo = {}) {
       if (!state.pattern.length) createBlankCanvas({ confirmReplace: false });
       else renderPattern();
       elements.projectMeta.textContent = `参考图已导入：${image.width} x ${image.height}，画图模式不会自动转图。`;
-      elements.cellInfo.textContent = "参考图已放到画布描图层，并保留右侧浮窗；点“调整参考图”可移动缩放。";
+      elements.cellInfo.textContent = "参考图已放到透明描图层；使用顶部工具可调整位置、层级和透明度。";
       markProjectDirty();
       return;
     }
@@ -2461,9 +2666,13 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.fileName = file.name.replace(/\.[^.]+$/, "");
     state.referenceName = state.fileName;
     state.referenceVisible = true;
-    state.traceReference.enabled = state.appMode === "draw";
+    state.traceReference.enabled = true;
     state.traceReference.visible = true;
     state.traceReference.adjustMode = false;
+    state.traceReference.locked = true;
+    state.traceReference.x = null;
+    state.traceReference.y = null;
+    state.traceReference.scale = 1;
     state.selectedCell = null;
     state.selection.clear();
     state.penPoints = [];
@@ -2489,6 +2698,8 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     elements.referenceStatus.textContent = state.referenceName;
     updateBackgroundHint();
     updateReferenceMenuState();
+    fitTraceReferenceToCanvas();
+    syncTraceReferenceControls();
     renderReferenceFloatPanel();
     renderPattern();
     markProjectDirty();
@@ -2791,11 +3002,14 @@ function imageToDataUrl(image, maxSize = 1600) {
 }
 
 function toggleReferenceMenu() {
-  if (state.referenceImage && !state.referenceVisible) {
+  if (state.referenceImage && !state.traceReference.visible) {
+    state.traceReference.visible = true;
+    state.traceReference.enabled = true;
     state.referenceVisible = true;
     elements.referenceVisibleToggle.checked = true;
     updateReferenceMenuState();
-    renderReferenceFloatPanel();
+    syncTraceReferenceControls();
+    renderPattern();
     return;
   }
   const isOpen = !elements.referenceMenu.hidden;
@@ -2814,13 +3028,13 @@ function updateReferenceMenuState() {
   const statusParts = [];
   if (hasReference) statusParts.push("已上传");
   else statusParts.push("未上传");
-  if (hasReference && !state.referenceVisible) statusParts.push("已隐藏");
-  if (hasReference && state.referenceLocked) statusParts.push("已锁定");
+  if (hasReference && !state.traceReference.visible) statusParts.push("已隐藏");
+  if (hasReference && state.traceReference.locked) statusParts.push("已锁定");
   elements.referenceMenuStatus.textContent = statusParts.join(" · ");
   elements.referenceUploadMenuText.textContent = hasReference ? "替换参考图" : "上传参考图";
-  elements.referenceToggleVisibleButton.querySelector("span").textContent = state.referenceVisible ? "隐藏参考窗" : "显示参考窗";
+  elements.referenceToggleVisibleButton.querySelector("span").textContent = state.traceReference.visible ? "隐藏画布参考" : "显示画布参考";
   elements.referenceToggleVisibleButton.disabled = !hasReference;
-  elements.referenceLockButton.querySelector("span").textContent = state.referenceLocked ? "解锁参考窗" : "锁定参考窗";
+  elements.referenceLockButton.querySelector("span").textContent = state.traceReference.locked ? "解锁画布参考" : "锁定画布参考";
   elements.referenceLockButton.disabled = !hasReference;
   elements.referenceFitButton.disabled = !hasReference;
   elements.referenceClearButton.disabled = !hasReference;
@@ -2836,7 +3050,9 @@ function clearReferenceImage() {
   state.referenceName = "";
   state.referenceVisible = true;
   state.referenceLocked = false;
-  state.traceReference.visible = true;
+  state.traceReference.enabled = false;
+  state.traceReference.visible = false;
+  state.traceReference.locked = false;
   state.traceReference.adjustMode = false;
   state.traceReference.x = null;
   state.traceReference.y = null;
@@ -2866,25 +3082,7 @@ function resetReferencePanelPosition() {
 function renderReferenceFloatPanel() {
   const panelEl = elements.referenceFloatPanel;
   if (!panelEl) return;
-  const visible = Boolean(state.referenceImage && state.referenceImageUrl && state.referenceVisible);
-  panelEl.hidden = !visible;
-  if (!visible) return;
-
-  const panel = state.referencePanel;
-  if (panel.x == null || panel.y == null) resetReferencePanelPosition();
-  const bounds = referencePanelBounds(panel.x, panel.y, panel.width, panel.height);
-  panel.x = bounds.x;
-  panel.y = bounds.y;
-  panel.width = bounds.width;
-  panel.height = bounds.height;
-  panelEl.style.left = `${panel.x}px`;
-  panelEl.style.top = `${panel.y}px`;
-  panelEl.style.width = `${panel.width}px`;
-  panelEl.style.height = `${panel.height}px`;
-  panelEl.style.opacity = String(clampRange(state.referenceOpacity, 0.05, 1));
-  panelEl.classList.toggle("is-locked", state.referenceLocked);
-  elements.referenceFloatImage.src = state.referenceImageUrl;
-  elements.referenceFloatImage.style.transform = `scale(${panel.zoom})`;
+  panelEl.hidden = true;
 }
 
 function referencePanelBounds(x, y, width, height) {
@@ -2906,10 +3104,14 @@ function setReferenceZoom(value) {
 
 function fitReferencePanel() {
   state.referenceVisible = true;
+  state.traceReference.enabled = Boolean(state.referenceImage);
+  state.traceReference.visible = true;
   state.referencePanel.zoom = 1;
   elements.referenceVisibleToggle.checked = true;
   resetReferencePanelPosition();
+  fitTraceReferenceToCanvas();
   updateReferenceMenuState();
+  syncTraceReferenceControls();
   renderReferenceFloatPanel();
 }
 
@@ -2987,7 +3189,7 @@ function generatePattern() {
       state.hasConfirmedGrid = true;
       state.editGridVersion += 1;
       state.suspendHistory = false;
-      elements.projectMeta.textContent = `${size} x ${size} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 照片原色映射`;
+      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 照片原色映射`;
       renderPattern();
       renderStats();
       markProjectDirty();
@@ -3007,7 +3209,7 @@ function generatePattern() {
       state.hasConfirmedGrid = true;
       state.editGridVersion += 1;
       state.suspendHistory = false;
-      elements.projectMeta.textContent = `${size} x ${size} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 准确匹配 + 制作优化`;
+      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 准确匹配 + 制作优化`;
       renderPattern();
       renderStats();
       showQualityHint();
@@ -3033,7 +3235,7 @@ function generatePattern() {
     state.hasConfirmedGrid = true;
     state.editGridVersion += 1;
     state.suspendHistory = false;
-    elements.projectMeta.textContent = `${size} x ${size} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
+    elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
     renderPattern();
     renderStats();
     showQualityHint();
@@ -3616,7 +3818,7 @@ function requestPreviewUpdate(message = "参数预览已更新。调整完成后
     renderPattern();
     renderStats();
     showQualityHint();
-    elements.projectMeta.textContent = `预览 / ${result.size} x ${result.size} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
+    elements.projectMeta.textContent = `预览 / ${gridDimensionsLabel()} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
     elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑；参数只更新预览，最后点击“生成并应用”才会覆盖。" : message;
     markProjectDirty();
   } catch (error) {
@@ -3670,7 +3872,7 @@ function applyPreviewToEditGrid() {
   renderStats();
   showQualityHint();
   updateHistoryButtons();
-  elements.projectMeta.textContent = `${state.gridSize} x ${state.gridSize} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
+  elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
   elements.cellInfo.textContent = "预览已应用到当前图纸。";
   markProjectDirty();
 }
@@ -3704,14 +3906,13 @@ function updatePreviewButtons() {
 function buildPixelSamples(image, size) {
   const sampleScale = state.patternMode === "pixelPattern" ? 6 : 4;
   const sampleSize = size * sampleScale;
+  const activeSampleWidth = activeGridWidth() * sampleScale;
+  const activeSampleHeight = activeGridHeight() * sampleScale;
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = sampleSize;
   sourceCanvas.height = sampleSize;
   const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
-  const preservePixelComposition = state.processingProfile === "detail64" && state.patternMode === "pixelPattern";
-  const crop = preservePixelComposition
-    ? { x: 0, y: 0, size: Math.max(image.width, image.height), contain: true }
-    : state.fitMode === "subject" ? detectSubjectCrop(image) : coverCrop(image.width, image.height);
+  const crop = { x: 0, y: 0, size: Math.max(image.width, image.height), contain: true };
   state.lastSampleCrop = crop;
   state.lastSampleSourceSize = { width: image.width, height: image.height };
   state.lastSampleScale = sampleScale;
@@ -3719,16 +3920,12 @@ function buildPixelSamples(image, size) {
   sourceCtx.clearRect(0, 0, sampleSize, sampleSize);
   sourceCtx.imageSmoothingEnabled = state.patternMode !== "pixelPattern";
   sourceCtx.imageSmoothingQuality = state.patternMode === "pixelPattern" ? "low" : "high";
-  if (preservePixelComposition) {
-    const containScale = Math.min(sampleSize / image.width, sampleSize / image.height);
-    const drawWidth = Math.max(1, Math.round(image.width * containScale));
-    const drawHeight = Math.max(1, Math.round(image.height * containScale));
-    const drawX = Math.round((sampleSize - drawWidth) / 2);
-    const drawY = Math.round((sampleSize - drawHeight) / 2);
-    sourceCtx.drawImage(image, 0, 0, image.width, image.height, drawX, drawY, drawWidth, drawHeight);
-  } else {
-    sourceCtx.drawImage(image, crop.x, crop.y, crop.size, crop.size, 0, 0, sampleSize, sampleSize);
-  }
+  const containScale = Math.min(activeSampleWidth / image.width, activeSampleHeight / image.height);
+  const drawWidth = Math.max(1, Math.round(image.width * containScale));
+  const drawHeight = Math.max(1, Math.round(image.height * containScale));
+  const drawX = Math.round((activeSampleWidth - drawWidth) / 2);
+  const drawY = Math.round((activeSampleHeight - drawHeight) / 2);
+  sourceCtx.drawImage(image, 0, 0, image.width, image.height, drawX, drawY, drawWidth, drawHeight);
 
   const imageData = sourceCtx.getImageData(0, 0, sampleSize, sampleSize);
   const data = imageData.data;
@@ -5964,7 +6161,7 @@ function drawSheetBase() {
   ctx.font = "500 32px Arial, Microsoft YaHei, sans-serif";
   ctx.textAlign = "right";
   const pattern = displayPattern();
-  const total = pattern.length ? totalBeadCount(pattern) : state.gridSize * state.gridSize;
+  const total = pattern.length ? totalBeadCount(pattern) : activeGridWidth() * activeGridHeight();
   const name = state.fileName || "Mard-120";
   ctx.fillText(`${name}   ${total}颗豆子`, sheet.width - 58, sheet.titleY);
   ctx.textAlign = "left";
@@ -5990,9 +6187,9 @@ function drawEditorBase() {
   ctx.font = "500 34px Arial, Microsoft YaHei, sans-serif";
   ctx.textAlign = "right";
   const pattern = displayPattern();
-  const total = pattern.length ? totalBeadCount(pattern) : state.gridSize * state.gridSize;
+  const total = pattern.length ? totalBeadCount(pattern) : activeGridWidth() * activeGridHeight();
   const colorCount = pattern === state.pattern ? state.counts.size : buildCounts(pattern).size;
-  ctx.fillText(`${state.isPreviewDirty ? "预览 / " : ""}${state.gridSize} x ${state.gridSize} / ${total}颗 / ${colorCount}色`, gridEditor.width - 120, 70);
+  ctx.fillText(`${state.isPreviewDirty ? "预览 / " : ""}${gridDimensionsLabel()} / ${total}颗 / ${colorCount}色`, gridEditor.width - 120, 70);
   ctx.textAlign = "left";
 }
 
@@ -6000,38 +6197,57 @@ function currentPlotMetrics() {
   return state.editorView === "sheet" ? sheet : gridEditor;
 }
 
-function drawPlotBackground(grid) {
+function activePlotMetrics() {
   const plot = currentPlotMetrics();
+  const widthCells = activeGridWidth();
+  const heightCells = activeGridHeight();
+  const cell = Math.min(plot.plotSize / widthCells, plot.plotSize / heightCells);
+  const width = cell * widthCells;
+  const height = cell * heightCells;
+  return {
+    ...plot,
+    gridX: plot.plotX + (plot.plotSize - width) / 2,
+    gridY: plot.plotY + (plot.plotSize - height) / 2,
+    gridWidth: width,
+    gridHeight: height,
+    widthCells,
+    heightCells,
+    cell,
+  };
+}
+
+function drawPlotBackground(grid) {
+  const plot = activePlotMetrics();
   ctx.fillStyle = "#fdfdfd";
-  ctx.fillRect(plot.plotX, plot.plotY, plot.plotSize, plot.plotSize);
+  ctx.fillRect(plot.gridX, plot.gridY, plot.gridWidth, plot.gridHeight);
   if (state.showCoordinates && state.viewMode !== "clean") {
     drawCoordinateLabels(grid);
   }
 }
 
 function drawEmptyMessage() {
-  const plot = currentPlotMetrics();
+  const plot = activePlotMetrics();
   ctx.fillStyle = "#6d6d6d";
   ctx.font = "700 28px Microsoft YaHei, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("上传图片后生成像素图纸", plot.plotX + plot.plotSize / 2, plot.plotY + plot.plotSize / 2);
+  ctx.fillText("先设画布尺寸，再上传图片", plot.gridX + plot.gridWidth / 2, plot.gridY + plot.gridHeight / 2);
   ctx.textAlign = "left";
 }
 
 function drawPatternCells() {
-  const plot = currentPlotMetrics();
+  const plot = activePlotMetrics();
   const grid = state.gridSize;
-  const cell = plot.plotSize / grid;
+  const cell = plot.cell;
   const pattern = displayPattern();
   const traceUnderGrid = shouldDrawTraceReference("belowGrid");
   const showCellCodes = state.viewMode === "pixel" && state.showCellCodes && cellCodesFitCurrentZoom(cell);
 
-  for (let y = 0; y < grid; y += 1) {
-    for (let x = 0; x < grid; x += 1) {
+  for (let y = 0; y < plot.heightCells; y += 1) {
+    for (let x = 0; x < plot.widthCells; x += 1) {
       const item = pattern[y * grid + x];
-      const cellX = plot.plotX + x * cell;
-      const cellY = plot.plotY + y * cell;
-      const letTraceShowThrough = traceUnderGrid && state.appMode === "draw" && isTraceTransparentCell(item);
+      const cellX = plot.gridX + x * cell;
+      const cellY = plot.gridY + y * cell;
+      const letTraceShowThrough = traceUnderGrid && isTraceTransparentCell(item);
 
       if (item.empty) {
         if (!letTraceShowThrough) {
@@ -6085,7 +6301,7 @@ function drawReferenceLayer() {
   );
   ctx.restore();
 
-  if (state.traceReference.adjustMode && state.appMode === "draw") {
+  if (state.traceReference.adjustMode) {
     ctx.save();
     ctx.strokeStyle = state.traceReference.locked ? "#111" : "#e82f63";
     ctx.lineWidth = 3;
@@ -6102,8 +6318,7 @@ function drawReferenceLayer() {
 function shouldDrawTraceReference(layer) {
   const trace = state.traceReference;
   return Boolean(
-    state.appMode === "draw" &&
-      state.editorView === "grid" &&
+    state.editorView === "grid" &&
       state.referenceImage &&
       trace.enabled &&
       trace.visible &&
@@ -6118,12 +6333,11 @@ function isTraceTransparentCell(item) {
 }
 
 function traceBaseSizeCells() {
-  if (!state.referenceImage) return { width: state.gridSize, height: state.gridSize };
+  if (!state.referenceImage) return { width: activeGridWidth(), height: activeGridHeight() };
   const imageRatio = state.referenceImage.width / Math.max(1, state.referenceImage.height);
-  if (imageRatio >= 1) {
-    return { width: state.gridSize, height: state.gridSize / imageRatio };
-  }
-  return { width: state.gridSize * imageRatio, height: state.gridSize };
+  const canvasRatio = activeGridWidth() / activeGridHeight();
+  if (imageRatio >= canvasRatio) return { width: activeGridWidth(), height: activeGridWidth() / imageRatio };
+  return { width: activeGridHeight() * imageRatio, height: activeGridHeight() };
 }
 
 function traceReferenceSizeCells() {
@@ -6136,19 +6350,19 @@ function ensureTraceReferencePosition() {
   if (!state.referenceImage) return;
   const trace = state.traceReference;
   const size = traceReferenceSizeCells();
-  if (!Number.isFinite(trace.x)) trace.x = (state.gridSize - size.width) / 2;
-  if (!Number.isFinite(trace.y)) trace.y = (state.gridSize - size.height) / 2;
+  if (!Number.isFinite(trace.x)) trace.x = (activeGridWidth() - size.width) / 2;
+  if (!Number.isFinite(trace.y)) trace.y = (activeGridHeight() - size.height) / 2;
 }
 
 function traceReferenceGeometry() {
   if (!state.referenceImage || !state.traceReference.enabled || !state.traceReference.visible) return null;
   ensureTraceReferencePosition();
-  const plot = currentPlotMetrics();
-  const cell = plot.plotSize / state.gridSize;
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
   const size = traceReferenceSizeCells();
   return {
-    left: plot.plotX + state.traceReference.x * cell,
-    top: plot.plotY + state.traceReference.y * cell,
+    left: plot.gridX + state.traceReference.x * cell,
+    top: plot.gridY + state.traceReference.y * cell,
     width: size.width * cell,
     height: size.height * cell,
     xCells: state.traceReference.x,
@@ -6177,8 +6391,8 @@ function centerTraceReference(sync = true) {
     return;
   }
   const size = traceReferenceSizeCells();
-  state.traceReference.x = (state.gridSize - size.width) / 2;
-  state.traceReference.y = (state.gridSize - size.height) / 2;
+  state.traceReference.x = (activeGridWidth() - size.width) / 2;
+  state.traceReference.y = (activeGridHeight() - size.height) / 2;
   if (state.traceReference.snapToGrid) {
     state.traceReference.x = Math.round(state.traceReference.x);
     state.traceReference.y = Math.round(state.traceReference.y);
@@ -6220,28 +6434,33 @@ function traceReferenceSizeCellsForScale(scale) {
 }
 
 function drawGridLines(grid) {
-  const plot = currentPlotMetrics();
-  const cell = plot.plotSize / grid;
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
 
   ctx.save();
   ctx.strokeStyle = "#222";
   ctx.lineWidth = 1.4;
-  ctx.strokeRect(plot.plotX, plot.plotY, plot.plotSize, plot.plotSize);
+  ctx.strokeRect(plot.gridX, plot.gridY, plot.gridWidth, plot.gridHeight);
 
-  for (let index = 0; index <= grid; index += 1) {
-    const vertical = plot.plotX + index * cell;
+  for (let index = 0; index <= plot.widthCells; index += 1) {
+    const vertical = plot.gridX + index * cell;
     ctx.beginPath();
     const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
     ctx.strokeStyle = index % guide === 0 ? "#a8a2e5" : "rgba(216,216,216,0.9)";
     ctx.lineWidth = index % guide === 0 ? 1.6 : 0.75;
-    ctx.moveTo(vertical, plot.plotY);
-    ctx.lineTo(vertical, plot.plotY + plot.plotSize);
+    ctx.moveTo(vertical, plot.gridY);
+    ctx.lineTo(vertical, plot.gridY + plot.gridHeight);
     ctx.stroke();
+  }
 
-    const horizontal = plot.plotY + index * cell;
+  for (let index = 0; index <= plot.heightCells; index += 1) {
+    const horizontal = plot.gridY + index * cell;
     ctx.beginPath();
-    ctx.moveTo(plot.plotX, horizontal);
-    ctx.lineTo(plot.plotX + plot.plotSize, horizontal);
+    const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
+    ctx.strokeStyle = index % guide === 0 ? "#a8a2e5" : "rgba(216,216,216,0.9)";
+    ctx.lineWidth = index % guide === 0 ? 1.6 : 0.75;
+    ctx.moveTo(plot.gridX, horizontal);
+    ctx.lineTo(plot.gridX + plot.gridWidth, horizontal);
     ctx.stroke();
   }
   ctx.restore();
@@ -6249,25 +6468,29 @@ function drawGridLines(grid) {
 
 function drawCoordinateLabels(grid) {
   if (!state.showCoordinates) return;
-  const plot = currentPlotMetrics();
-  const cell = plot.plotSize / grid;
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
   ctx.save();
   ctx.fillStyle = "#9b9b9b";
   const isGridEditor = state.editorView === "grid";
   ctx.font = `${isGridEditor ? 16 : 10}px Arial, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const step = grid <= 64 ? 2 : 5;
+  const step = Math.max(plot.widthCells, plot.heightCells) <= 64 ? 2 : 5;
   const offset = isGridEditor ? 26 : 13;
   const sideOffset = isGridEditor ? 34 : 17;
-  for (let index = 1; index <= grid; index += 1) {
-    if (index === 1 || index % step === 0 || grid <= 32) {
-      const center = plot.plotX + (index - 0.5) * cell;
-      ctx.fillText(String(index), center, plot.plotY - offset);
-      ctx.fillText(String(index), center, plot.plotY + plot.plotSize + offset);
-      const rowCenter = plot.plotY + (index - 0.5) * cell;
-      ctx.fillText(String(index), plot.plotX - sideOffset, rowCenter);
-      ctx.fillText(String(index), plot.plotX + plot.plotSize + sideOffset, rowCenter);
+  for (let index = 1; index <= plot.widthCells; index += 1) {
+    if (index === 1 || index % step === 0 || plot.widthCells <= 32) {
+      const center = plot.gridX + (index - 0.5) * cell;
+      ctx.fillText(String(index), center, plot.gridY - offset);
+      ctx.fillText(String(index), center, plot.gridY + plot.gridHeight + offset);
+    }
+  }
+  for (let index = 1; index <= plot.heightCells; index += 1) {
+    if (index === 1 || index % step === 0 || plot.heightCells <= 32) {
+      const rowCenter = plot.gridY + (index - 0.5) * cell;
+      ctx.fillText(String(index), plot.gridX - sideOffset, rowCenter);
+      ctx.fillText(String(index), plot.gridX + plot.gridWidth + sideOffset, rowCenter);
     }
   }
   ctx.restore();
@@ -6308,10 +6531,10 @@ function drawSquareBead(x, y, cell, item) {
 
 function drawSelectedCell() {
   if (!state.selectedCell) return;
-  const plot = currentPlotMetrics();
-  const cell = plot.plotSize / state.gridSize;
-  const x = plot.plotX + state.selectedCell.x * cell;
-  const y = plot.plotY + state.selectedCell.y * cell;
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
+  const x = plot.gridX + state.selectedCell.x * cell;
+  const y = plot.gridY + state.selectedCell.y * cell;
   ctx.save();
   ctx.strokeStyle = "#ff4d5d";
   ctx.lineWidth = 4;
@@ -6320,8 +6543,8 @@ function drawSelectedCell() {
 }
 
 function drawSelectionOverlay() {
-  const plot = currentPlotMetrics();
-  const cell = plot.plotSize / state.gridSize;
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
 
   ctx.save();
   ctx.fillStyle = "rgba(232, 59, 100, 0.22)";
@@ -6330,7 +6553,8 @@ function drawSelectionOverlay() {
   for (const index of state.selection) {
     const x = index % state.gridSize;
     const y = Math.floor(index / state.gridSize);
-    ctx.fillRect(plot.plotX + x * cell + 1, plot.plotY + y * cell + 1, Math.max(1, cell - 2), Math.max(1, cell - 2));
+    if (!isActiveGridCell(x, y)) continue;
+    ctx.fillRect(plot.gridX + x * cell + 1, plot.gridY + y * cell + 1, Math.max(1, cell - 2), Math.max(1, cell - 2));
   }
 
   if (state.penPoints.length) {
@@ -6338,15 +6562,15 @@ function drawSelectionOverlay() {
     ctx.lineWidth = 3;
     ctx.beginPath();
     state.penPoints.forEach((point, index) => {
-      const px = plot.plotX + (point.x + 0.5) * cell;
-      const py = plot.plotY + (point.y + 0.5) * cell;
+      const px = plot.gridX + (point.x + 0.5) * cell;
+      const py = plot.gridY + (point.y + 0.5) * cell;
       if (index === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
     ctx.stroke();
     for (const point of state.penPoints) {
       ctx.fillStyle = "#e83b64";
-      ctx.fillRect(plot.plotX + (point.x + 0.25) * cell, plot.plotY + (point.y + 0.25) * cell, cell * 0.5, cell * 0.5);
+      ctx.fillRect(plot.gridX + (point.x + 0.25) * cell, plot.gridY + (point.y + 0.25) * cell, cell * 0.5, cell * 0.5);
     }
   }
   ctx.restore();
@@ -6355,8 +6579,8 @@ function drawSelectionOverlay() {
 function drawBrushPreview() {
   if (!state.brushHoverCell || !state.pattern.length || state.editorView !== "grid") return;
   if (!["brush", "eraser", "line"].includes(state.activeTool)) return;
-  const plot = currentPlotMetrics();
-  const cellSize = plot.plotSize / state.gridSize;
+  const plot = activePlotMetrics();
+  const cellSize = plot.cell;
   ctx.save();
   ctx.fillStyle = state.activeTool === "eraser" ? "rgba(255,255,255,0.35)" : "rgba(232, 59, 100, 0.20)";
   ctx.strokeStyle = state.activeTool === "eraser" ? "#111111" : "#e83b64";
@@ -6371,8 +6595,8 @@ function drawBrushPreview() {
       const key = `${brushCell.x},${brushCell.y}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const x = plot.plotX + brushCell.x * cellSize;
-      const y = plot.plotY + brushCell.y * cellSize;
+      const x = plot.gridX + brushCell.x * cellSize;
+      const y = plot.gridY + brushCell.y * cellSize;
       ctx.fillRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
       ctx.strokeRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
     }
@@ -6452,7 +6676,9 @@ function currentPaletteRows() {
 function renderStats() {
   const sorted = currentPaletteRows();
   const total = sorted.reduce((sum, item) => sum + item.count, 0);
-  elements.totalBeads.textContent = `${state.isPreviewDirty ? "预览 " : ""}共 ${total} 颗`;
+  const listRows = sorted.filter((item) => item.count > 0 || item.isLocked || item.isActive || (state.paletteSearch && item.isSearchResult));
+  const usedColorCount = listRows.filter((item) => item.count > 0).length;
+  elements.totalBeads.textContent = `${state.isPreviewDirty ? "预览 " : ""}共 ${usedColorCount} 色 / ${total.toLocaleString("zh-CN")} 颗`;
   const pattern = displayPattern();
   state.usedBounds = pattern.length ? calculateUsedBounds(pattern, state.gridSize) : null;
 
@@ -6463,17 +6689,29 @@ function renderStats() {
     return;
   }
 
-  elements.paletteList.innerHTML = sorted
+  elements.paletteList.innerHTML = `
+    <div class="palette-table-head" aria-hidden="true">
+      <span>序号</span>
+      <span>色号</span>
+      <span>颗数</span>
+      <span>占比</span>
+      <span></span>
+    </div>
+  ` + listRows
     .map(
-      (item) => `
+      (item, index) => `
         <div class="palette-row${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}${item.isAllowed ? " is-allowed" : ""}" data-code="${item.code}" role="button" tabindex="0" draggable="true" title="单击设为画笔色，Ctrl+单击加入固定色板并激活，双击色号可全局替换">
-          <span class="swatch" style="background:${item.hex}">${item.code}</span>
-          <span>
-            <span class="palette-name">${item.name}</span>
-            <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code} / ${item.hex}${item.isLocked ? " / 已锁定" : item.isAllowed ? " / 固定色板" : ""}</span>
+          <span class="palette-rank">${index + 1}</span>
+          <span class="palette-identity">
+            <span class="swatch" style="background:${item.hex}">${item.code}</span>
+            <span>
+              <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code}${item.isLocked ? " · 锁" : ""}</span>
+              <span class="palette-name">${item.name}</span>
+            </span>
           </span>
-          <span class="palette-count">x${item.count}</span>
-          <button class="palette-replace-button" data-replace-code="${item.code}" type="button">替换</button>
+          <span class="palette-count">${item.count.toLocaleString("zh-CN")}</span>
+          <span class="palette-ratio">${total ? ((item.count / total) * 100).toFixed(2) : "0.00"}%</span>
+          <button class="palette-replace-button" data-replace-code="${item.code}" type="button" title="替换 ${item.code}">换</button>
         </div>
       `,
     )
@@ -6794,17 +7032,30 @@ function renderConstraintPalette() {
 
 function renderPaletteChoices() {
   const choices = currentPaletteRows().length ? currentPaletteRows() : activePalette().map((item) => ({ ...item, count: 0 }));
-  elements.paletteList.innerHTML = choices
+  const visibleChoices = choices.filter((item) => item.count > 0 || item.isLocked || item.isActive || (state.paletteSearch && item.isSearchResult));
+  elements.paletteList.innerHTML = `
+    <div class="palette-table-head" aria-hidden="true">
+      <span>序号</span>
+      <span>色号</span>
+      <span>颗数</span>
+      <span>占比</span>
+      <span></span>
+    </div>
+  ` + visibleChoices
     .map(
-      (item) => `
+      (item, index) => `
         <div class="palette-row${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}${item.isAllowed ? " is-allowed" : ""}" data-code="${item.code}" role="button" tabindex="0" draggable="true">
-          <span class="swatch" style="background:${item.hex}">${item.code}</span>
-          <span>
-            <span class="palette-name">${item.name}</span>
-            <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code} / ${item.hex}${item.isLocked ? " / 已锁定" : item.isAllowed ? " / 固定色板" : ""}</span>
+          <span class="palette-rank">${index + 1}</span>
+          <span class="palette-identity">
+            <span class="swatch" style="background:${item.hex}">${item.code}</span>
+            <span>
+              <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code}${item.isLocked ? " · 锁" : ""}</span>
+              <span class="palette-name">${item.name}</span>
+            </span>
           </span>
-          <span class="palette-count">x${item.count || 0}</span>
-          <button class="palette-replace-button" data-replace-code="${item.code}" type="button">替换</button>
+          <span class="palette-count">${Number(item.count || 0).toLocaleString("zh-CN")}</span>
+          <span class="palette-ratio">0.00%</span>
+          <button class="palette-replace-button" data-replace-code="${item.code}" type="button" title="替换 ${item.code}">换</button>
         </div>
       `,
     )
@@ -7189,7 +7440,7 @@ function brushCellsForPoint(point) {
     for (let dx = -radius; dx <= radius; dx += 1) {
       const x = point.x + dx;
       const y = point.y + dy;
-      if (x < 0 || y < 0 || x >= state.gridSize || y >= state.gridSize) continue;
+      if (!isActiveGridCell(x, y)) continue;
       if (state.brushShape === "circle" && Math.sqrt(dx * dx + dy * dy) > radius + 0.25) continue;
       cells.push({ x, y });
     }
@@ -7201,11 +7452,11 @@ function brushCellsForPoint(point) {
 function symmetryPointsFor(point) {
   const points = new Map();
   const add = (x, y) => {
-    if (x < 0 || y < 0 || x >= state.gridSize || y >= state.gridSize) return;
+    if (!isActiveGridCell(x, y)) return;
     points.set(`${x}:${y}`, { x, y });
   };
-  const mirrorX = state.gridSize - 1 - point.x;
-  const mirrorY = state.gridSize - 1 - point.y;
+  const mirrorX = activeGridWidth() - 1 - point.x;
+  const mirrorY = activeGridHeight() - 1 - point.y;
   add(point.x, point.y);
   if (state.symmetryMode === "horizontal" || state.symmetryMode === "both") add(mirrorX, point.y);
   if (state.symmetryMode === "vertical" || state.symmetryMode === "both") add(point.x, mirrorY);
@@ -7226,8 +7477,8 @@ function symmetryModeHint() {
 function mirroredIndex(index, direction) {
   const x = index % state.gridSize;
   const y = Math.floor(index / state.gridSize);
-  const targetX = direction === "horizontal" ? state.gridSize - 1 - x : x;
-  const targetY = direction === "vertical" ? state.gridSize - 1 - y : y;
+  const targetX = direction === "horizontal" ? activeGridWidth() - 1 - x : x;
+  const targetY = direction === "vertical" ? activeGridHeight() - 1 - y : y;
   return targetY * state.gridSize + targetX;
 }
 
@@ -7238,24 +7489,35 @@ function mirrorPattern(direction) {
   }
   if (!state.pattern.length || state.gridLocked) return;
   pushHistory();
-  const mirrored = new Array(state.pattern.length);
-  for (let index = 0; index < state.pattern.length; index += 1) {
-    mirrored[mirroredIndex(index, direction)] = state.pattern[index];
+  const mirrored = Array.from({ length: state.pattern.length }, () => EMPTY_CELL);
+  for (let y = 0; y < activeGridHeight(); y += 1) {
+    for (let x = 0; x < activeGridWidth(); x += 1) {
+      const index = y * state.gridSize + x;
+      mirrored[mirroredIndex(index, direction)] = state.pattern[index];
+    }
   }
   state.pattern = mirrored;
-  state.manualEditedCells = new Set([...state.manualEditedCells].map((index) => mirroredIndex(index, direction)));
-  state.selection = new Set([...state.selection].map((index) => mirroredIndex(index, direction)));
+  const activeIndexes = (indexes) => indexes.filter((index) => {
+    const x = index % state.gridSize;
+    const y = Math.floor(index / state.gridSize);
+    return isActiveGridCell(x, y);
+  });
+  state.manualEditedCells = new Set(activeIndexes([...state.manualEditedCells]).map((index) => mirroredIndex(index, direction)));
+  state.selection = new Set(activeIndexes([...state.selection]).map((index) => mirroredIndex(index, direction)));
   if (state.backgroundMask?.length === mirrored.length) {
     const mask = new Uint8Array(mirrored.length);
-    for (let index = 0; index < state.backgroundMask.length; index += 1) {
-      mask[mirroredIndex(index, direction)] = state.backgroundMask[index];
+    for (let y = 0; y < activeGridHeight(); y += 1) {
+      for (let x = 0; x < activeGridWidth(); x += 1) {
+        const index = y * state.gridSize + x;
+        mask[mirroredIndex(index, direction)] = state.backgroundMask[index];
+      }
     }
     state.backgroundMask = mask;
   }
   if (state.selectedCell) {
     state.selectedCell = direction === "horizontal"
-      ? { x: state.gridSize - 1 - state.selectedCell.x, y: state.selectedCell.y }
-      : { x: state.selectedCell.x, y: state.gridSize - 1 - state.selectedCell.y };
+      ? { x: activeGridWidth() - 1 - state.selectedCell.x, y: state.selectedCell.y }
+      : { x: state.selectedCell.x, y: activeGridHeight() - 1 - state.selectedCell.y };
   }
   state.counts = buildCounts(state.pattern);
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
@@ -7322,6 +7584,9 @@ function floodFillFromCell(cell, color) {
     const x = index % state.gridSize;
     const y = Math.floor(index / state.gridSize);
     for (const next of getFourNeighbors(x, y, state.gridSize)) {
+      const nextX = next % state.gridSize;
+      const nextY = Math.floor(next / state.gridSize);
+      if (!isActiveGridCell(nextX, nextY)) continue;
       if (visited.has(next)) continue;
       visited.add(next);
       queue.push(next);
@@ -7509,7 +7774,7 @@ function handleCanvasDrop(event) {
 }
 
 function getCellFromPointer(event) {
-  const plot = currentPlotMetrics();
+  const plot = activePlotMetrics();
   const rect = elements.patternCanvas.getBoundingClientRect();
   const scaleX = elements.patternCanvas.width / rect.width;
   const scaleY = elements.patternCanvas.height / rect.height;
@@ -7517,18 +7782,18 @@ function getCellFromPointer(event) {
   const canvasY = (event.clientY - rect.top) * scaleY;
 
   if (
-    canvasX < plot.plotX ||
-    canvasX >= plot.plotX + plot.plotSize ||
-    canvasY < plot.plotY ||
-    canvasY >= plot.plotY + plot.plotSize
+    canvasX < plot.gridX ||
+    canvasX >= plot.gridX + plot.gridWidth ||
+    canvasY < plot.gridY ||
+    canvasY >= plot.gridY + plot.gridHeight
   ) {
     return null;
   }
 
-  const cell = plot.plotSize / state.gridSize;
+  const cell = plot.cell;
   return {
-    x: Math.floor((canvasX - plot.plotX) / cell),
-    y: Math.floor((canvasY - plot.plotY) / cell),
+    x: Math.floor((canvasX - plot.gridX) / cell),
+    y: Math.floor((canvasY - plot.gridY) / cell),
   };
 }
 
@@ -7543,19 +7808,18 @@ function getCanvasPointFromPointer(event) {
 }
 
 function getGridPointFromPointer(event) {
-  const plot = currentPlotMetrics();
+  const plot = activePlotMetrics();
   const point = getCanvasPointFromPointer(event);
-  const cell = plot.plotSize / state.gridSize;
+  const cell = plot.cell;
   return {
-    x: (point.x - plot.plotX) / cell,
-    y: (point.y - plot.plotY) / cell,
+    x: (point.x - plot.gridX) / cell,
+    y: (point.y - plot.gridY) / cell,
   };
 }
 
 function tryStartTraceReferenceDrag(event) {
   const trace = state.traceReference;
   if (
-    state.appMode !== "draw" ||
     state.editorView !== "grid" ||
     !state.referenceImage ||
     !trace.enabled ||
@@ -7591,11 +7855,11 @@ function tryStartTraceReferenceDrag(event) {
 function moveTraceReferenceDrag(event) {
   const trace = state.traceReference;
   if (!trace.dragging || trace.pointerId !== event.pointerId) return;
-  const plot = currentPlotMetrics();
+  const plot = activePlotMetrics();
   const rect = elements.patternCanvas.getBoundingClientRect();
   const cssToCanvasX = elements.patternCanvas.width / rect.width;
   const cssToCanvasY = elements.patternCanvas.height / rect.height;
-  const cell = plot.plotSize / state.gridSize;
+  const cell = plot.cell;
   trace.x = trace.startX + ((event.clientX - trace.startClientX) * cssToCanvasX) / cell;
   trace.y = trace.startY + ((event.clientY - trace.startClientY) * cssToCanvasY) / cell;
   if (trace.snapToGrid) {
@@ -7617,7 +7881,7 @@ function finishTraceReferenceDrag(event) {
 }
 
 function pickColorFromTraceReference(event) {
-  if (state.appMode !== "draw" || state.activeTool !== "eyedropper" || !state.referenceImage) return false;
+  if (state.activeTool !== "eyedropper" || !state.referenceImage) return false;
   if (!state.traceReference.enabled || !state.traceReference.visible || state.traceReference.opacity <= 0) return false;
   const geometry = traceReferenceGeometry();
   const point = getCanvasPointFromPointer(event);
@@ -7682,7 +7946,7 @@ function updateCanvasCursor() {
     cursor = "grabbing";
   } else if (state.isSpacePressed) {
     cursor = "grab";
-  } else if (state.traceReference.adjustMode && state.appMode === "draw") {
+  } else if (state.traceReference.adjustMode) {
     cursor = state.traceReference.locked ? "not-allowed" : "move";
   } else if (state.editing && !state.gridLocked) {
     if (state.activeTool === "eyedropper") cursor = "copy";
@@ -7738,8 +8002,8 @@ function finishPenSelection() {
     return;
   }
   const selected = new Set();
-  for (let y = 0; y < state.gridSize; y += 1) {
-    for (let x = 0; x < state.gridSize; x += 1) {
+  for (let y = 0; y < activeGridHeight(); y += 1) {
+    for (let x = 0; x < activeGridWidth(); x += 1) {
       if (pointInPolygon(x + 0.5, y + 0.5, state.penPoints)) {
         selected.add(y * state.gridSize + x);
       }
@@ -7825,8 +8089,8 @@ function pasteSelectionPixels() {
   const offset = clipboard.pasteCount + 1;
   const preferredX = state.brushHoverCell?.x ?? clipboard.sourceX + offset;
   const preferredY = state.brushHoverCell?.y ?? clipboard.sourceY + offset;
-  const anchorX = Math.max(0, Math.min(state.gridSize - clipboard.width, preferredX));
-  const anchorY = Math.max(0, Math.min(state.gridSize - clipboard.height, preferredY));
+  const anchorX = Math.max(0, Math.min(activeGridWidth() - clipboard.width, preferredX));
+  const anchorY = Math.max(0, Math.min(activeGridHeight() - clipboard.height, preferredY));
   const changes = clipboard.cells
     .map((cell) => {
       const x = anchorX + cell.dx;
@@ -7834,7 +8098,11 @@ function pasteSelectionPixels() {
       const index = y * state.gridSize + x;
       return { ...cell, index };
     })
-    .filter((cell) => cell.index >= 0 && cell.index < state.pattern.length && canEditCell(cell.index));
+    .filter((cell) => {
+      const x = cell.index % state.gridSize;
+      const y = Math.floor(cell.index / state.gridSize);
+      return cell.index >= 0 && cell.index < state.pattern.length && isActiveGridCell(x, y) && canEditCell(cell.index);
+    });
   if (!changes.length) {
     elements.cellInfo.textContent = "粘贴位置没有可编辑的格子，请解锁相关颜色后再试。";
     return;
@@ -7869,6 +8137,8 @@ function pasteSelectionPixels() {
 function snapshotPattern() {
   return {
     size: state.patternSize || state.gridSize,
+    width: activeGridWidth(),
+    height: activeGridHeight(),
     codes: state.pattern.map((item) => (item.empty ? "__EMPTY__" : item.code)),
     manualEditedCells: [...state.manualEditedCells],
     lockedColorCodes: [...state.lockedColorCodes],
@@ -7881,11 +8151,18 @@ function snapshotPattern() {
 
 function restorePattern(snapshot) {
   const codes = Array.isArray(snapshot) ? snapshot : snapshot.codes;
-  if (!Array.isArray(snapshot) && snapshot.size && snapshot.size !== state.gridSize) {
-    state.gridSize = snapshot.size;
-    elements.sizeLabel.textContent = `${state.gridSize} x ${state.gridSize}`;
+  if (!Array.isArray(snapshot) && snapshot.size) {
+    state.gridWidth = Number(snapshot.width) || snapshot.size;
+    state.gridHeight = Number(snapshot.height) || snapshot.size;
+    state.gridSize = Math.max(snapshot.size, state.gridWidth, state.gridHeight);
+    elements.sizeLabel.textContent = gridDimensionsLabel();
+    elements.customWidth.value = state.gridWidth;
+    elements.customHeight.value = state.gridHeight;
     document.querySelectorAll(".seg-option").forEach((button) => {
-      button.classList.toggle("is-active", Number(button.dataset.size) === state.gridSize);
+      button.classList.toggle(
+        "is-active",
+        state.gridWidth === state.gridHeight && Number(button.dataset.size) === state.gridWidth,
+      );
     });
   }
   const byCode = new Map(palette.map((item) => [item.code, item]));
@@ -8289,6 +8566,7 @@ function setupToolboxDrag() {
   const panel = elements.editToolPanel;
   const handle = panel?.querySelector(".group-title");
   if (!panel || !handle) return;
+  if (panel.classList.contains("is-docked")) return;
 
   handle.addEventListener("click", (event) => {
     if (event.target.closest("button")) return;
@@ -8378,20 +8656,23 @@ function exportPattern() {
     return;
   }
   const readableCanvas = renderReadableExportCanvas();
-  downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${state.gridSize}x${state.gridSize}-高清.png`);
+  downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
 }
 
 function renderReadableExportCanvas() {
-  const grid = state.gridSize;
-  const cellSize = grid >= 120 ? 38 : grid >= 100 ? 44 : grid >= 64 ? 42 : 46;
+  const widthCells = activeGridWidth();
+  const heightCells = activeGridHeight();
+  const largestSide = Math.max(widthCells, heightCells);
+  const cellSize = largestSide >= 120 ? 38 : largestSide >= 100 ? 44 : largestSide >= 64 ? 42 : 46;
   const margin = Math.max(96, Math.round(cellSize * 2.5));
   const top = Math.max(180, Math.round(cellSize * 4.1));
-  const plot = grid * cellSize;
-  const legendRows = Math.ceil(sortedCounts().length / Math.max(1, Math.floor(plot / 188)));
+  const plotWidth = widthCells * cellSize;
+  const plotHeight = heightCells * cellSize;
+  const legendRows = Math.ceil(sortedCounts().length / Math.max(1, Math.floor(plotWidth / 188)));
   const legendHeight = Math.max(280, 90 + legendRows * 82);
   const canvas = document.createElement("canvas");
-  canvas.width = margin * 2 + plot;
-  canvas.height = top + plot + legendHeight;
+  canvas.width = margin * 2 + plotWidth;
+  canvas.height = top + plotHeight + legendHeight;
   const exportCtx = canvas.getContext("2d");
 
   exportCtx.fillStyle = "#fffdf8";
@@ -8401,25 +8682,28 @@ function renderReadableExportCanvas() {
   exportCtx.fillText("小麦拼豆", margin, 76);
   exportCtx.font = `500 ${Math.max(34, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
   exportCtx.textAlign = "right";
-  exportCtx.fillText(`${state.fileName || "pattern"}   ${grid} x ${grid} / ${totalBeadCount()}颗 / ${state.counts.size}色`, canvas.width - margin, 76);
+  exportCtx.fillText(`${state.fileName || "pattern"}   ${gridDimensionsLabel()} / ${totalBeadCount()}颗 / ${state.counts.size}色`, canvas.width - margin, 76);
   exportCtx.textAlign = "left";
 
   drawReadableCells(exportCtx, margin, top, cellSize);
-  drawReadableLegend(exportCtx, margin, top + plot + 80, canvas.width - margin * 2);
+  drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2);
 
   return canvas;
 }
 
 function drawReadableCells(exportCtx, startX, startY, cellSize) {
-  const grid = state.gridSize;
-  const plotSize = grid * cellSize;
+  const widthCells = activeGridWidth();
+  const heightCells = activeGridHeight();
+  const stride = state.gridSize;
+  const plotWidth = widthCells * cellSize;
+  const plotHeight = heightCells * cellSize;
 
   exportCtx.fillStyle = "#fff";
-  exportCtx.fillRect(startX, startY, plotSize, plotSize);
+  exportCtx.fillRect(startX, startY, plotWidth, plotHeight);
 
-  for (let y = 0; y < grid; y += 1) {
-    for (let x = 0; x < grid; x += 1) {
-      const item = state.pattern[y * grid + x];
+  for (let y = 0; y < heightCells; y += 1) {
+    for (let x = 0; x < widthCells; x += 1) {
+      const item = state.pattern[y * stride + x];
       const cellX = startX + x * cellSize;
       const cellY = startY + y * cellSize;
       if (item.empty) {
@@ -8441,36 +8725,45 @@ function drawReadableCells(exportCtx, startX, startY, cellSize) {
   exportCtx.textBaseline = "middle";
   exportCtx.font = "14px Arial, sans-serif";
   exportCtx.fillStyle = "#777";
-  for (let index = 1; index <= grid; index += 1) {
-    if (index === 1 || index % 5 === 0 || grid <= 64) {
+  for (let index = 1; index <= widthCells; index += 1) {
+    if (index === 1 || index % 5 === 0 || widthCells <= 64) {
       const center = startX + (index - 0.5) * cellSize;
       exportCtx.fillText(String(index), center, startY - 20);
-      exportCtx.fillText(String(index), center, startY + plotSize + 20);
+      exportCtx.fillText(String(index), center, startY + plotHeight + 20);
+    }
+  }
+  for (let index = 1; index <= heightCells; index += 1) {
+    if (index === 1 || index % 5 === 0 || heightCells <= 64) {
       const rowCenter = startY + (index - 0.5) * cellSize;
       exportCtx.fillText(String(index), startX - 28, rowCenter);
-      exportCtx.fillText(String(index), startX + plotSize + 28, rowCenter);
+      exportCtx.fillText(String(index), startX + plotWidth + 28, rowCenter);
     }
   }
 
   exportCtx.strokeStyle = "rgba(0,0,0,0.22)";
   exportCtx.lineWidth = 1;
-  for (let index = 0; index <= grid; index += 1) {
+  for (let index = 0; index <= widthCells; index += 1) {
     const offset = index * cellSize;
     exportCtx.beginPath();
     exportCtx.strokeStyle = index % 10 === 0 ? "#8f88da" : "rgba(0,0,0,0.18)";
     exportCtx.lineWidth = index % 10 === 0 ? 2 : 1;
     exportCtx.moveTo(startX + offset, startY);
-    exportCtx.lineTo(startX + offset, startY + plotSize);
+    exportCtx.lineTo(startX + offset, startY + plotHeight);
     exportCtx.stroke();
+  }
+  for (let index = 0; index <= heightCells; index += 1) {
+    const offset = index * cellSize;
     exportCtx.beginPath();
+    exportCtx.strokeStyle = index % 10 === 0 ? "#8f88da" : "rgba(0,0,0,0.18)";
+    exportCtx.lineWidth = index % 10 === 0 ? 2 : 1;
     exportCtx.moveTo(startX, startY + offset);
-    exportCtx.lineTo(startX + plotSize, startY + offset);
+    exportCtx.lineTo(startX + plotWidth, startY + offset);
     exportCtx.stroke();
   }
 
   exportCtx.strokeStyle = "#111";
   exportCtx.lineWidth = 3;
-  exportCtx.strokeRect(startX, startY, plotSize, plotSize);
+  exportCtx.strokeRect(startX, startY, plotWidth, plotHeight);
 }
 
 function drawReadableLegend(exportCtx, startX, startY, maxWidth) {
@@ -8519,7 +8812,7 @@ function exportPatternPdf() {
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.download = `${state.fileName || "小麦拼豆"}-${state.gridSize}x${state.gridSize}-清晰图纸.pdf`;
+  link.download = `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-清晰图纸.pdf`;
   link.href = url;
   link.click();
   window.setTimeout(() => URL.revokeObjectURL(url), 800);
@@ -8527,14 +8820,18 @@ function exportPatternPdf() {
 
 function buildVectorPdf() {
   const page = { width: 842, height: 595 };
+  const widthCells = activeGridWidth();
+  const heightCells = activeGridHeight();
+  const stride = state.gridSize;
   const margin = 28;
   const titleY = 32;
   const legendX = 594;
   const legendWidth = page.width - legendX - margin;
   const maxPlotW = legendX - margin * 2 - 16;
   const maxPlotH = page.height - 112;
-  const cell = Math.min(maxPlotW / state.gridSize, maxPlotH / state.gridSize);
-  const plot = cell * state.gridSize;
+  const cell = Math.min(maxPlotW / widthCells, maxPlotH / heightCells);
+  const plotWidth = cell * widthCells;
+  const plotHeight = cell * heightCells;
   const startX = margin;
   const startY = 74;
   const commands = [];
@@ -8559,13 +8856,13 @@ function buildVectorPdf() {
 
   rect(0, 0, page.width, page.height, "#fffdf8");
   text("小麦拼豆", margin, titleY, 16);
-  text(`${state.gridSize} x ${state.gridSize} / ${totalBeadCount()} beads / ${state.counts.size} colors / MARD ${palette.length}`, page.width - margin, titleY, 10, "right");
+  text(`${gridDimensionsLabel()} / ${totalBeadCount()} beads / ${state.counts.size} colors / MARD ${palette.length}`, page.width - margin, titleY, 10, "right");
   text(state.fileName || "pattern", margin, titleY + 18, 9);
 
-  rect(startX, startY, plot, plot, "#ffffff");
-  for (let y = 0; y < state.gridSize; y += 1) {
-    for (let x = 0; x < state.gridSize; x += 1) {
-      const item = state.pattern[y * state.gridSize + x];
+  rect(startX, startY, plotWidth, plotHeight, "#ffffff");
+  for (let y = 0; y < heightCells; y += 1) {
+    for (let x = 0; x < widthCells; x += 1) {
+      const item = state.pattern[y * stride + x];
       const px = startX + x * cell;
       const py = startY + y * cell;
       if (!item.empty) {
@@ -8578,23 +8875,30 @@ function buildVectorPdf() {
     }
   }
 
-  for (let i = 0; i <= state.gridSize; i += 1) {
+  for (let i = 0; i <= widthCells; i += 1) {
     const pos = startX + i * cell;
     const guide = i % state.guideEvery === 0;
-    strokeLine(pos, startY, pos, startY + plot, guide ? "#8f88da" : "#d9d9d9", guide ? 0.7 : 0.25);
-    const row = startY + i * cell;
-    strokeLine(startX, row, startX + plot, row, guide ? "#8f88da" : "#d9d9d9", guide ? 0.7 : 0.25);
+    strokeLine(pos, startY, pos, startY + plotHeight, guide ? "#8f88da" : "#d9d9d9", guide ? 0.7 : 0.25);
   }
-  strokeLine(startX, startY, startX + plot, startY, "#111111", 1.1);
-  strokeLine(startX, startY + plot, startX + plot, startY + plot, "#111111", 1.1);
-  strokeLine(startX, startY, startX, startY + plot, "#111111", 1.1);
-  strokeLine(startX + plot, startY, startX + plot, startY + plot, "#111111", 1.1);
+  for (let i = 0; i <= heightCells; i += 1) {
+    const guide = i % state.guideEvery === 0;
+    const row = startY + i * cell;
+    strokeLine(startX, row, startX + plotWidth, row, guide ? "#8f88da" : "#d9d9d9", guide ? 0.7 : 0.25);
+  }
+  strokeLine(startX, startY, startX + plotWidth, startY, "#111111", 1.1);
+  strokeLine(startX, startY + plotHeight, startX + plotWidth, startY + plotHeight, "#111111", 1.1);
+  strokeLine(startX, startY, startX, startY + plotHeight, "#111111", 1.1);
+  strokeLine(startX + plotWidth, startY, startX + plotWidth, startY + plotHeight, "#111111", 1.1);
 
-  const coordStep = state.gridSize <= 64 ? 5 : 10;
-  for (let i = 1; i <= state.gridSize; i += 1) {
-    if (i === 1 || i % coordStep === 0 || i === state.gridSize) {
+  const coordStep = Math.max(widthCells, heightCells) <= 64 ? 5 : 10;
+  for (let i = 1; i <= widthCells; i += 1) {
+    if (i === 1 || i % coordStep === 0 || i === widthCells) {
       const center = startX + (i - 0.5) * cell;
       text(i, center, startY - 7, 5, "center");
+    }
+  }
+  for (let i = 1; i <= heightCells; i += 1) {
+    if (i === 1 || i % coordStep === 0 || i === heightCells) {
       const rowCenter = startY + (i - 0.5) * cell;
       text(i, startX - 10, rowCenter + 1.5, 5, "right");
     }
@@ -8783,6 +9087,7 @@ function resetApp() {
 function init() {
   moveAdvancedSettingsBeforeGeneration();
   elevateToolboxLayer();
+  setupWorkbenchLayout();
   moveQuickTogglesToToolbar();
   setupEvents();
   syncLocalPreprocessControls();
