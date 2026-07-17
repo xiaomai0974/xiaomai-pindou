@@ -20,6 +20,40 @@
           </div>
         </div>
 
+        <nav class="sidebar-rail-nav" aria-label="生成和项目工具">
+          <span class="rail-group-label">图像</span>
+          <button class="sidebar-rail-button is-active" data-sidebar-target="size" type="button" title="画布尺寸">
+            <i data-lucide="grid-3x3" aria-hidden="true"></i>
+            <span>画布尺寸</span>
+          </button>
+          <button class="sidebar-rail-button" data-sidebar-target="upload" type="button" title="上传图片">
+            <i data-lucide="image-plus" aria-hidden="true"></i>
+            <span>上传图片</span>
+          </button>
+          <button class="sidebar-rail-button" data-sidebar-target="colors" type="button" title="颜色数量">
+            <i data-lucide="palette" aria-hidden="true"></i>
+            <span>颜色数量</span>
+          </button>
+          <span class="rail-group-label">处理</span>
+          <button class="sidebar-rail-button" data-sidebar-target="process" type="button" title="图像设置">
+            <i data-lucide="sliders-horizontal" aria-hidden="true"></i>
+            <span>图像设置</span>
+          </button>
+          <button class="sidebar-rail-button rail-generate-button" data-sidebar-target="generate" type="button" title="生成图纸">
+            <i data-lucide="sparkles" aria-hidden="true"></i>
+            <span>生成</span>
+          </button>
+          <span class="rail-spacer" aria-hidden="true"></span>
+          <button class="sidebar-rail-button" data-sidebar-target="project" type="button" title="打开或保存项目">
+            <i data-lucide="folder-open" aria-hidden="true"></i>
+            <span>项目</span>
+          </button>
+          <button class="sidebar-rail-button" data-sidebar-target="export" type="button" title="导出图纸">
+            <i data-lucide="download" aria-hidden="true"></i>
+            <span>导出</span>
+          </button>
+        </nav>
+
         <section class="control-group sidebar-card project-card">
           <div class="group-title">
             <span>项目</span>
@@ -34,8 +68,8 @@
 
         <section class="control-group sidebar-card upload-card">
           <div class="group-title">
-            <span><b class="workflow-step">1</b>上传图片</span>
-            <small>上传后先裁剪</small>
+            <span><b class="workflow-step">2</b>上传图片</span>
+            <small>自动完整适配</small>
           </div>
           <label class="upload-zone" for="imageInput">
             <input id="imageInput" type="file" accept="image/*" />
@@ -48,7 +82,7 @@
 
         <section class="control-group sidebar-card size-card">
           <div class="group-title">
-            <span><b class="workflow-step">2</b>图纸尺寸</span>
+            <span><b class="workflow-step">1</b>画布尺寸</span>
             <output id="sizeLabel">48 x 48</output>
           </div>
           <div class="segmented hidden-presets" role="group" aria-label="拼豆尺寸" hidden>
@@ -113,7 +147,7 @@
 
         <section class="control-group sidebar-card image-process-card">
           <div class="group-title">
-            <span><b class="workflow-step">4</b>图像处理</span>
+            <span><b class="workflow-step">4</b>图像设置</span>
             <output id="fitModeLabel">主体</output>
           </div>
           <div class="fit-summary-row">
@@ -199,7 +233,7 @@
 
         <section class="control-group sidebar-card generation-card">
           <div class="group-title">
-            <span><b class="workflow-step">6</b>生成</span>
+            <span><b class="workflow-step">5</b>生成</span>
             <small>一次完成</small>
           </div>
           <button id="generateButton" class="primary" type="button">
@@ -221,7 +255,7 @@
         </section>
 
         <details class="control-group sidebar-card advanced-settings">
-          <summary><b class="workflow-step">5</b>高级设置</summary>
+          <summary>更多图像设置</summary>
           <section class="advanced-section app-mode-panel">
             <div class="group-title">
               <span>工作模式</span>
@@ -365,13 +399,17 @@
             </button>
           </div>
           <div class="tool-grid" role="group" aria-label="编辑工具">
-            <button class="canvas-tool is-active" data-tool="brush" type="button" title="画笔快捷键 B">画笔 (B)</button>
-            <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U">擦除 (U)</button>
-            <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I">吸管 (I)</button>
-            <button class="canvas-tool" data-tool="rect" type="button">框选</button>
-            <button class="canvas-tool" data-tool="pen" type="button" title="钢笔快捷键 P；逐点勾选，双击闭合">钢笔 (P)</button>
-            <button class="canvas-tool" data-tool="sameColor" type="button">同色</button>
+            <button class="canvas-tool is-active" data-tool="brush" type="button" title="画笔快捷键 B"><i data-lucide="pencil" aria-hidden="true"></i><span>画笔</span></button>
+            <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U"><i data-lucide="eraser" aria-hidden="true"></i><span>擦除</span></button>
+            <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I"><i data-lucide="pipette" aria-hidden="true"></i><span>吸管</span></button>
+            <button class="canvas-tool" data-tool="rect" type="button" title="框选"><i data-lucide="box-select" aria-hidden="true"></i><span>框选</span></button>
+            <button class="canvas-tool" data-tool="pen" type="button" title="钢笔快捷键 P；逐点勾选，双击闭合"><i data-lucide="pen-tool" aria-hidden="true"></i><span>钢笔</span></button>
+            <button class="canvas-tool" data-tool="sameColor" type="button" title="选择全部同色格"><i data-lucide="scan-search" aria-hidden="true"></i><span>同色</span></button>
           </div>
+          <button id="toolPropertiesButton" class="tool-properties-button" type="button" title="工具设置" aria-expanded="false">
+            <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span>
+          </button>
+          <div class="tool-properties-popover">
           <div class="brush-options">
             <label>
               画笔大小
@@ -419,6 +457,7 @@
             <button id="copySelectionButton" type="button" disabled>复制选区</button>
             <button id="pasteSelectionButton" type="button" disabled>粘贴选区</button>
             <button id="clearSelectionButton" type="button">清空选区</button>
+          </div>
           </div>
         </section>
 
@@ -630,43 +669,56 @@
       </section>
 
       <aside class="panel stats-panel" aria-label="用豆统计">
-        <div class="stats-header">
-          <div>
-            <h2>用豆清单</h2>
-            <p id="totalBeads">共 0 颗</p>
-          </div>
-          <button id="copyListButton" class="icon-button" type="button" title="复制清单">
-            <i data-lucide="copy" aria-hidden="true"></i>
+        <div class="stats-tabs" role="tablist" aria-label="颜色与用豆">
+          <button class="stats-tab is-active" data-stats-tab="beads" role="tab" aria-selected="true" type="button">用豆清单</button>
+          <button class="stats-tab" data-stats-tab="colors" role="tab" aria-selected="false" type="button">颜色面板</button>
+          <button id="statsCollapseButton" class="icon-button stats-collapse-button" type="button" title="收起右侧面板">
+            <i data-lucide="panel-right-close" aria-hidden="true"></i>
           </button>
         </div>
-        <section class="control-group color-constraint-panel stats-color-panel">
-          <div class="group-title">
-            <span>颜色面板</span>
-            <output id="colorModeLabel">MARD 221</output>
+
+        <div class="stats-tab-content" data-stats-content="colors" role="tabpanel" hidden>
+          <section class="control-group color-constraint-panel stats-color-panel">
+            <div class="group-title">
+              <span>选择画笔颜色</span>
+              <output id="colorModeLabel">MARD 221</output>
+            </div>
+            <div class="constraint-tools">
+              <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
+              <button id="showSelectedColorsButton" type="button">只看使用</button>
+            </div>
+            <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
+          </section>
+          <div class="color-diagnostic-tools" aria-label="颜色识别验证">
+            <label class="mini-check">
+              <input id="accurateMatchToggle" type="checkbox" checked />
+              <span>准确匹配</span>
+            </label>
+            <label class="mini-check">
+              <input id="colorDebugToggle" type="checkbox" />
+              <span>颜色诊断</span>
+            </label>
+            <div class="segmented mini-segmented" role="group" aria-label="Raw Final 对比">
+              <button id="showFinalGridButton" class="is-active" type="button">最终</button>
+              <button id="showRawGridButton" type="button">原始匹配</button>
+            </div>
+            <small id="colorDebugInfo">开启后按住 Alt 点击格子，查看采样 RGB、LAB、候选 MARD 色号和后处理变化。</small>
           </div>
-          <div class="constraint-tools">
-            <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
-            <button id="showSelectedColorsButton" type="button">只看使用</button>
-          </div>
-          <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
-        </section>
-        <div class="color-diagnostic-tools" aria-label="颜色识别验证">
-          <label class="mini-check">
-            <input id="accurateMatchToggle" type="checkbox" checked />
-            <span>准确匹配</span>
-          </label>
-          <label class="mini-check">
-            <input id="colorDebugToggle" type="checkbox" />
-            <span>颜色诊断</span>
-          </label>
-          <div class="segmented mini-segmented" role="group" aria-label="Raw Final 对比">
-            <button id="showFinalGridButton" class="is-active" type="button">最终</button>
-            <button id="showRawGridButton" type="button">原始匹配</button>
-          </div>
-          <small id="colorDebugInfo">开启后按住 Alt 点击格子，查看采样 RGB、LAB、候选 MARD 色号和后处理变化。</small>
         </div>
-        <div id="paletteList" class="palette-list">
-          <div class="empty-list">生成后会显示每种颜色需要多少颗</div>
+
+        <div class="stats-tab-content is-active" data-stats-content="beads" role="tabpanel">
+          <div class="stats-header">
+            <div>
+              <h2>用豆清单</h2>
+              <p id="totalBeads">共 0 颗</p>
+            </div>
+            <button id="copyListButton" class="icon-button" type="button" title="复制清单">
+              <i data-lucide="copy" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div id="paletteList" class="palette-list">
+            <div class="empty-list">生成后会显示每种颜色需要多少颗</div>
+          </div>
         </div>
       </aside>
     </main>

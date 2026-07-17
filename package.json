@@ -6,9 +6,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "sync:app": "node scripts/sync-app.cjs",
-    "dev": "npm run sync:app && vinext dev",
-    "build": "npm run sync:app && vinext build",
+    "dev": "vinext dev",
+    "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
