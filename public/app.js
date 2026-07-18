@@ -168,7 +168,7 @@ const state = {
     enabled: true,
     visible: true,
     opacity: 0.35,
-    zMode: "belowGrid",
+    zMode: "aboveGrid",
     scale: 1,
     x: null,
     y: null,
@@ -196,7 +196,7 @@ const state = {
   colorTrace: [],
   accurateMatch: true,
   colorDebugEnabled: false,
-  diagnosticViewMode: "final",
+  diagnosticViewMode: "raw",
   baselineGrid: [],
   optimizedGrid: [],
   compareMetrics: null,
@@ -249,6 +249,7 @@ const state = {
   lastEraseCell: null,
   penPoints: [],
   renderFrameId: null,
+  isProcessingPattern: false,
   referenceSampler: {
     image: null,
     canvas: null,
@@ -361,17 +362,17 @@ const elements = {
   traceReferenceToggle: document.querySelector("#traceReferenceToggle"),
   traceReferenceAdjustButton: document.querySelector("#traceReferenceAdjustButton"),
   traceReferenceLockButton: document.querySelector("#traceReferenceLockButton"),
-  traceReferenceZMode: document.querySelector("#traceReferenceZMode"),
   traceReferenceOpacity: document.querySelector("#traceReferenceOpacity"),
   traceReferenceOpacityLabel: document.querySelector("#traceReferenceOpacityLabel"),
   traceReferenceZoomOutButton: document.querySelector("#traceReferenceZoomOutButton"),
   traceReferenceZoomInButton: document.querySelector("#traceReferenceZoomInButton"),
   traceReferenceFitButton: document.querySelector("#traceReferenceFitButton"),
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
+  traceReferenceClearButton: document.querySelector("#traceReferenceClearButton"),
   traceReferenceSnapToggle: document.querySelector("#traceReferenceSnapToggle"),
-  generateButton: document.querySelector("#generateButton"),
-  applyPreviewButton: document.querySelector("#applyPreviewButton"),
-  cancelPreviewButton: document.querySelector("#cancelPreviewButton"),
+  pendingPreviewBar: document.querySelector("#pendingPreviewBar"),
+  confirmPreviewButton: document.querySelector("#confirmPreviewButton"),
+  discardPreviewButton: document.querySelector("#discardPreviewButton"),
   exportButton: document.querySelector("#exportButton"),
   exportFormat: document.querySelector("#exportFormat"),
   coverButton: document.querySelector("#coverButton"),
@@ -459,6 +460,78 @@ const elements = {
 
 const ctx = elements.patternCanvas.getContext("2d");
 const cropCtx = elements.cropCanvas?.getContext("2d");
+const renderCache = {
+  statsSignature: null,
+  constraintSignature: null,
+};
+const plotMetricsCache = {
+  signature: null,
+  value: null,
+};
+const watermarkTileCache = new Map();
+const performanceMetrics = new Map();
+let pendingPatternRenderBounds = null;
+let pendingFullPatternRender = false;
+let paletteWorker = null;
+let paletteWorkerDisabled = false;
+let paletteWorkerRequestId = 0;
+let previewUpdateVersion = 0;
+const pendingPaletteWorkerRequests = new Map();
+
+function performanceNow() {
+  return globalThis.performance?.now?.() ?? Date.now();
+}
+
+function recordPerformance(name, durationMs, skipped = false) {
+  const metric = performanceMetrics.get(name) || {
+    runs: 0,
+    skipped: 0,
+    totalMs: 0,
+    maxMs: 0,
+    lastMs: 0,
+  };
+  if (skipped) {
+    metric.skipped += 1;
+  } else {
+    metric.runs += 1;
+    metric.totalMs += durationMs;
+    metric.maxMs = Math.max(metric.maxMs, durationMs);
+    metric.lastMs = durationMs;
+  }
+  performanceMetrics.set(name, metric);
+}
+
+function measurePerformance(name, action) {
+  const startedAt = performanceNow();
+  try {
+    return action();
+  } finally {
+    recordPerformance(name, performanceNow() - startedAt);
+  }
+}
+
+function performanceSummary() {
+  return Object.fromEntries(
+    [...performanceMetrics.entries()].map(([name, metric]) => [
+      name,
+      {
+        runs: metric.runs,
+        skipped: metric.skipped,
+        averageMs: metric.runs ? Number((metric.totalMs / metric.runs).toFixed(2)) : 0,
+        maxMs: Number(metric.maxMs.toFixed(2)),
+        lastMs: Number(metric.lastMs.toFixed(2)),
+      },
+    ]),
+  );
+}
+
+window.xiaomaiPerformance = {
+  summary: performanceSummary,
+  reset() {
+    performanceMetrics.clear();
+  },
+};
+
 const cropState = {
   image: null,
   file: null,
@@ -778,6 +851,85 @@ function nearestPaletteCandidates(color, sourcePalette = palette, limit = 5) {
 }
 
 function mapSamplesToPalette(pixels, size, sourcePalette, allowDither = true) {
+  return measurePerformance("pipeline.paletteMap", () => mapSamplesToPaletteNow(pixels, size, sourcePalette, allowDither));
+}
+
+async function mapSamplesToPaletteAsync(pixels, size, sourcePalette, allowDither = true) {
+  const startedAt = performanceNow();
+  const dither = Boolean(allowDither && state.dither && state.patternMode !== "pixelPattern");
+  try {
+    const indices = await requestPaletteWorkerMapping(pixels, size, sourcePalette, dither);
+    recordPerformance("pipeline.paletteMapWorker", performanceNow() - startedAt);
+    return Array.from(indices, (paletteIndex, pixelIndex) =>
+      paletteIndex < 0 ? pixels[pixelIndex] : sourcePalette[paletteIndex] || nearestPaletteColor(pixels[pixelIndex], sourcePalette),
+    );
+  } catch (error) {
+    recordPerformance("pipeline.paletteMapFallback", performanceNow() - startedAt);
+    console.warn("色板后台计算不可用，已切回兼容模式。", error);
+    return mapSamplesToPalette(pixels, size, sourcePalette, allowDither);
+  } finally {
+    recordPerformance("pipeline.paletteMapAsyncTotal", performanceNow() - startedAt);
+  }
+}
+
+function requestPaletteWorkerMapping(pixels, size, sourcePalette, dither) {
+  if (paletteWorkerDisabled || typeof Worker !== "function") {
+    return Promise.reject(new Error("当前浏览器不支持 Web Worker"));
+  }
+  const worker = ensurePaletteWorker();
+  const requestId = ++paletteWorkerRequestId;
+  const payloadPixels = pixels.map((pixel) => ({
+    r: Number(pixel.r ?? pixel.rgb?.r ?? 255),
+    g: Number(pixel.g ?? pixel.rgb?.g ?? 255),
+    b: Number(pixel.b ?? pixel.rgb?.b ?? 255),
+    empty: Boolean(pixel.empty),
+  }));
+  const payloadPalette = sourcePalette.map((color) => ({
+    rgb: color.rgb,
+    lab: color.lab,
+  }));
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      pendingPaletteWorkerRequests.delete(requestId);
+      reject(new Error("后台颜色匹配超时"));
+    }, 30000);
+    pendingPaletteWorkerRequests.set(requestId, { resolve, reject, timeoutId });
+    worker.postMessage({ type: "mapPalette", requestId, pixels: payloadPixels, palette: payloadPalette, size, dither });
+  });
+}
+
+function ensurePaletteWorker() {
+  if (paletteWorker) return paletteWorker;
+  paletteWorker = new Worker("palette-worker.js?v=20260717-1", { name: "xiaomai-palette-mapper" });
+  paletteWorker.addEventListener("message", handlePaletteWorkerMessage);
+  paletteWorker.addEventListener("error", handlePaletteWorkerError);
+  return paletteWorker;
+}
+
+function handlePaletteWorkerMessage(event) {
+  const { type, requestId, indices, message } = event.data || {};
+  const pending = pendingPaletteWorkerRequests.get(requestId);
+  if (!pending) return;
+  window.clearTimeout(pending.timeoutId);
+  pendingPaletteWorkerRequests.delete(requestId);
+  if (type === "mapped" && indices) pending.resolve(indices);
+  else pending.reject(new Error(message || "后台颜色匹配失败"));
+}
+
+function handlePaletteWorkerError(event) {
+  const error = new Error(event.message || "后台颜色匹配线程异常");
+  paletteWorkerDisabled = true;
+  paletteWorker?.terminate();
+  paletteWorker = null;
+  for (const pending of pendingPaletteWorkerRequests.values()) {
+    window.clearTimeout(pending.timeoutId);
+    pending.reject(error);
+  }
+  pendingPaletteWorkerRequests.clear();
+}
+
+function mapSamplesToPaletteNow(pixels, size, sourcePalette, allowDither = true) {
   const pattern = new Array(size * size);
   if (allowDither && state.dither && state.patternMode !== "pixelPattern") {
     const working = pixels.map((pixel) => ({ ...pixel }));
@@ -829,7 +981,7 @@ function clearColorDiagnostics() {
   state.rawDebugCandidates = [];
   state.finalGrid = [];
   state.colorTrace = [];
-  state.diagnosticViewMode = "final";
+  state.diagnosticViewMode = state.accurateMatch ? "raw" : "final";
   syncDiagnosticControls();
 }
 
@@ -864,6 +1016,7 @@ function validateMardPalette() {
 }
 
 function setupEvents() {
+  setupPaletteEventDelegation();
   elements.openProjectButton.addEventListener("click", () => elements.projectFileInput.click());
   elements.saveProjectButton.addEventListener("click", saveProjectFile);
   elements.projectFileInput.addEventListener("change", handleProjectFileOpen);
@@ -924,7 +1077,7 @@ function setupEvents() {
       state.pixelBackground = button.dataset.bg;
       updatePixelBackgroundLabel();
       updateBackgroundHint();
-      requestPreviewUpdate("背景预览已更新；调整完成后点击“生成并应用”。", { backgroundOnly: true });
+      requestPreviewUpdate("背景预览已更新，请确认应用后再编辑或导出。", { backgroundOnly: true });
     });
   });
   elements.showCodesToggle.addEventListener("change", () => {
@@ -962,7 +1115,7 @@ function setupEvents() {
     requestPreviewUpdate(
       state.accurateMatch
         ? `准确匹配已生成预览：先做 ${PALETTE_NAME} LAB/DeltaE 精确匹配，再遵守最大颜色、空背景和制作优化。`
-        : "已退出准确匹配并更新预览；调整完成后点击“生成并应用”。",
+        : "已退出准确匹配并更新预览，请确认应用。",
     );
   });
   elements.colorDebugToggle.addEventListener("change", () => {
@@ -987,7 +1140,7 @@ function setupEvents() {
     state.outlineMode = elements.outlineModeSelect.value;
     state.lineBoost = state.outlineMode !== "off";
     elements.lineBoostToggle.checked = state.lineBoost;
-    requestPreviewUpdate("轮廓预览已更新；调整完成后点击“生成并应用”。");
+    requestPreviewUpdate("轮廓预览已更新，请确认应用。");
   });
   elements.localPreprocessEnabledToggle.addEventListener("change", () => {
     state.localPreprocessSettings.enabled = elements.localPreprocessEnabledToggle.checked;
@@ -995,8 +1148,8 @@ function setupEvents() {
     syncLocalPreprocessControls();
     requestPreviewUpdate(
       state.localPreprocessSettings.enabled
-        ? "本地底图优化预览已更新；调整完成后点击“生成并应用”。"
-        : "已关闭本地底图优化并恢复原图预览；调整完成后点击“生成并应用”。",
+        ? "本地底图优化预览已更新，请确认应用。"
+        : "已关闭本地底图优化并恢复原图预览，请确认应用。",
     );
   });
   elements.localPreprocessMenuButton.addEventListener("click", (event) => {
@@ -1019,7 +1172,7 @@ function setupEvents() {
       invalidateOptimizedBaseImage();
       syncLocalPreprocessControls();
       if (state.localPreprocessSettings.enabled) {
-        requestPreviewUpdate("本地底图优化预览已更新；调整完成后点击“生成并应用”。");
+        requestPreviewUpdate("本地底图优化预览已更新，请确认应用。");
       }
     });
   });
@@ -1030,9 +1183,9 @@ function setupEvents() {
     }
     invalidateOptimizedBaseImage();
     syncLocalPreprocessControls();
-    requestPreviewUpdate("本地底图优化预览已更新；调整完成后点击“生成并应用”。");
+    requestPreviewUpdate("本地底图优化预览已更新，请确认应用。");
   });
-  elements.localPreprocessApplyButton.addEventListener("click", applyPreviewToEditGrid);
+  elements.localPreprocessApplyButton.addEventListener("click", confirmPendingPreview);
   elements.localPreprocessRestoreButton.addEventListener("click", () => {
     state.localPreprocessSettings.enabled = false;
     invalidateOptimizedBaseImage();
@@ -1186,10 +1339,6 @@ function setupEvents() {
     renderPattern();
     markProjectDirty();
   });
-  elements.traceReferenceZMode.addEventListener("change", () => {
-    state.traceReference.zMode = elements.traceReferenceZMode.value;
-    renderPattern();
-  });
   elements.traceReferenceOpacity.addEventListener("input", () => {
     state.traceReference.opacity = Number(elements.traceReferenceOpacity.value) / 100;
     syncTraceReferenceControls();
@@ -1207,7 +1356,8 @@ function setupEvents() {
     renderPattern();
     markProjectDirty();
   });
-  elements.traceReferenceSnapToggle.addEventListener("change", () => {
+  elements.traceReferenceClearButton.addEventListener("click", clearReferenceImage);
+  elements.traceReferenceSnapToggle?.addEventListener("change", () => {
     state.traceReference.snapToGrid = elements.traceReferenceSnapToggle.checked;
     if (state.traceReference.snapToGrid) {
       state.traceReference.x = Math.round(state.traceReference.x || 0);
@@ -1225,10 +1375,7 @@ function setupEvents() {
     if (event.target.closest("#localPreprocessToolbar")) return;
     closeLocalPreprocessPanel();
   });
-  elements.generateButton.addEventListener("click", generateAndApplyPattern);
-  elements.applyPreviewButton.addEventListener("click", applyPreviewToEditGrid);
-  elements.cancelPreviewButton.addEventListener("click", cancelPreview);
-  elements.smartOptimizeButton.addEventListener("click", showSmartOptimize);
+  elements.smartOptimizeButton?.addEventListener("click", showSmartOptimize);
   elements.variantButton.addEventListener("click", showImageVariants);
   elements.closeOptimizeButton.addEventListener("click", () => {
     elements.optimizePanel.hidden = true;
@@ -1363,7 +1510,7 @@ function setupEvents() {
         ].filter(Boolean));
       }
       renderConstraintPalette();
-      requestPreviewUpdate("颜色约束已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。");
+      requestPreviewUpdate("颜色约束预览已更新，请确认应用。");
     });
   });
 
@@ -1396,7 +1543,6 @@ function setupProjectDirtyTracking() {
     "#referenceOpacity",
     "#referenceOpacityProxy",
     "#traceReferenceToggle",
-    "#traceReferenceZMode",
     "#traceReferenceOpacity",
     "#traceReferenceSnapToggle",
     "#brushSizeInput",
@@ -1456,9 +1602,7 @@ function setupWorkbenchLayout() {
     size: ".size-card",
     colors: ".palette-settings-card",
     process: ".image-process-card",
-    generate: ".generation-card",
     project: ".project-card",
-    export: ".export-actions",
   };
   const drawerPanels = new Map();
 
@@ -1495,7 +1639,10 @@ function setupWorkbenchLayout() {
 
   railButtons.forEach((button) => {
     button.setAttribute("aria-expanded", "false");
-    button.addEventListener("click", () => openSidebarDrawer(button.dataset.sidebarTarget));
+    button.addEventListener("click", () => {
+      setWorkbenchMode("transform", { preserveDrawer: true });
+      openSidebarDrawer(button.dataset.sidebarTarget);
+    });
   });
 
   if (window.innerWidth > 760 && drawerPanels.has("size")) {
@@ -1508,10 +1655,6 @@ function setupWorkbenchLayout() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeSidebarDrawer();
-  });
-
-  elements.generateButton?.addEventListener("click", () => {
-    window.setTimeout(closeSidebarDrawer, 0);
   });
 
   const statsTabs = Array.from(document.querySelectorAll(".stats-tab[data-stats-tab]"));
@@ -1565,7 +1708,8 @@ function setupWorkbenchLayout() {
   });
 
   const propertiesButton = document.querySelector("#toolPropertiesButton");
-  const closeToolProperties = () => {
+  const closeToolProperties = (force = false) => {
+    if (!force && document.body.dataset.workbenchMode === "edit") return;
     elements.editToolPanel?.classList.remove("is-properties-open");
     propertiesButton?.setAttribute("aria-expanded", "false");
   };
@@ -1579,6 +1723,137 @@ function setupWorkbenchLayout() {
     if (event.target.closest("#editToolPanel")) return;
     closeToolProperties();
   });
+  document.querySelector("#toolPropertiesCloseButton")?.addEventListener("click", () => closeToolProperties(true));
+}
+
+const WORKBENCH_MODE_STORAGE_KEY = "xiaomai-workbench-mode-v1";
+
+function syncModeHeaderProject() {
+  const topName = document.querySelector("#topProjectName");
+  const topStatus = document.querySelector("#topProjectStatus");
+  if (topName && elements.projectName) topName.textContent = elements.projectName.textContent || "小麦拼豆";
+  if (topStatus && elements.projectSaveStatus) {
+    topStatus.textContent = elements.projectSaveStatus.textContent || "未保存";
+    topStatus.classList.toggle("is-dirty", state.projectDirty);
+  }
+}
+
+function setFocusCanvasMode(active, options = {}) {
+  const focusButton = document.querySelector("#focusCanvasButton");
+  document.body.classList.toggle("focus-canvas-mode", active);
+  focusButton?.classList.toggle("is-active", active);
+  if (focusButton) {
+    focusButton.innerHTML = active
+      ? '<i data-lucide="minimize-2" aria-hidden="true"></i>退出专注'
+      : '<i data-lucide="maximize-2" aria-hidden="true"></i>专注模式';
+  }
+  if (active) {
+    elements.editToolPanel?.classList.remove("is-properties-open");
+    document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "false");
+  }
+  window.lucide?.createIcons();
+  if (options.fit !== false) {
+    window.setTimeout(() => state.pattern.length && fitCanvasToScreen(), 180);
+  }
+}
+
+function canLeaveTransformWithCurrentPreview(mode) {
+  if (mode === "transform") return true;
+  if (state.isProcessingPattern) {
+    elements.cellInfo.textContent = "转图预览仍在处理中，请稍等片刻。";
+    return false;
+  }
+  if (state.isPreviewDirty && state.previewPattern.length) {
+    elements.cellInfo.textContent = "请先确认应用或放弃本次参数预览，再进入编辑或导出。";
+    elements.confirmPreviewButton?.focus();
+    return false;
+  }
+  return true;
+}
+
+function setWorkbenchMode(mode, options = {}) {
+  if (!["transform", "edit", "export"].includes(mode)) mode = "edit";
+  if (!canLeaveTransformWithCurrentPreview(mode)) return false;
+  if (mode !== "edit" && document.body.classList.contains("focus-canvas-mode")) {
+    setFocusCanvasMode(false, { fit: false });
+  }
+  document.body.dataset.workbenchMode = mode;
+  document.querySelectorAll(".workbench-mode-button").forEach((button) => {
+    const active = button.dataset.workbenchMode === mode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+
+  const propertiesButton = document.querySelector("#toolPropertiesButton");
+  if (mode === "edit") {
+    elements.editToolPanel?.classList.add("is-properties-open");
+    propertiesButton?.setAttribute("aria-expanded", "true");
+  } else {
+    elements.editToolPanel?.classList.remove("is-properties-open");
+    propertiesButton?.setAttribute("aria-expanded", "false");
+  }
+
+  const statsPanel = document.querySelector(".stats-panel");
+  const statsCollapseButton = document.querySelector("#statsCollapseButton");
+  if (mode === "export" && statsPanel) {
+    document.body.classList.remove("stats-panel-collapsed");
+    statsPanel.classList.remove("is-collapsed");
+    if (statsCollapseButton) {
+      statsCollapseButton.title = "收起右侧面板";
+      statsCollapseButton.innerHTML = '<i data-lucide="panel-right-close" aria-hidden="true"></i>';
+    }
+    document.querySelector('.stats-tab[data-stats-tab="beads"]')?.click();
+  }
+
+  if (!options.preserveDrawer && mode !== "transform") {
+    document.querySelectorAll(".workbench-drawer-panel.is-sidebar-open").forEach((panel) => panel.classList.remove("is-sidebar-open"));
+  }
+  try {
+    window.localStorage.setItem(WORKBENCH_MODE_STORAGE_KEY, mode);
+  } catch {}
+  window.lucide?.createIcons();
+  window.setTimeout(() => {
+    if (state.pattern.length) fitCanvasToScreen();
+  }, 180);
+  return true;
+}
+
+function setupWorkbenchModes() {
+  const toolbarHistory = document.querySelector(".toolbar-history");
+  if (toolbarHistory && elements.undoButton && elements.redoButton) {
+    elements.undoButton.innerHTML = '<i data-lucide="undo-2" aria-hidden="true"></i><span>撤销</span>';
+    elements.redoButton.innerHTML = '<i data-lucide="redo-2" aria-hidden="true"></i><span>重做</span>';
+    toolbarHistory.append(elements.undoButton, elements.redoButton);
+  }
+
+  const statsPanel = document.querySelector(".stats-panel");
+  const exportActions = document.querySelector(".export-actions");
+  if (statsPanel && exportActions) {
+    exportActions.classList.add("mode-export-actions");
+    statsPanel.appendChild(exportActions);
+  }
+
+  document.querySelectorAll(".workbench-mode-button").forEach((button) => {
+    button.addEventListener("click", () => setWorkbenchMode(button.dataset.workbenchMode));
+  });
+  elements.confirmPreviewButton?.addEventListener("click", confirmPendingPreview);
+  elements.discardPreviewButton?.addEventListener("click", discardPendingPreview);
+  document.querySelector("#topSaveProjectButton")?.addEventListener("click", () => elements.saveProjectButton?.click());
+  document.querySelector("#focusCanvasButton")?.addEventListener("click", () => {
+    setFocusCanvasMode(!document.body.classList.contains("focus-canvas-mode"));
+  });
+
+  const observer = new MutationObserver(syncModeHeaderProject);
+  if (elements.projectName) observer.observe(elements.projectName, { childList: true, subtree: true, characterData: true });
+  if (elements.projectSaveStatus) observer.observe(elements.projectSaveStatus, { childList: true, subtree: true, characterData: true });
+  syncModeHeaderProject();
+
+  let initialMode = "edit";
+  try {
+    const storedMode = window.localStorage.getItem(WORKBENCH_MODE_STORAGE_KEY);
+    if (["transform", "edit", "export"].includes(storedMode)) initialMode = storedMode;
+  } catch {}
+  setWorkbenchMode(initialMode);
 }
 
 function handleColorLimitChange() {
@@ -1615,7 +1890,7 @@ function applyCustomSize() {
     createBlankCanvas({ confirmReplace: false });
   } else {
     if (state.image) {
-      requestPreviewUpdate(`已按 ${gridDimensionsLabel()} 完整适配图片；调整完成后点击“生成并应用”。`);
+      requestPreviewUpdate(`已按 ${gridDimensionsLabel()} 完整适配图片，请确认应用。`);
     } else {
       renderPattern();
       elements.cellInfo.textContent = `画布已设为 ${gridDimensionsLabel()}，现在可以上传图片。`;
@@ -1642,7 +1917,7 @@ function setColorLimit(value, regenerate = true) {
     updateSelectedColorUi();
   }
   renderConstraintPalette();
-  if (regenerate) requestPreviewUpdate("颜色数量预览已更新；调整完成后点击“生成并应用”。");
+  if (regenerate) requestPreviewUpdate("颜色数量预览已更新，请确认应用。");
 }
 
 function syncColorLimitControls() {
@@ -1690,7 +1965,7 @@ function setPatternMode(mode) {
   }
 
   syncControlsFromState();
-  if (state.image) requestPreviewUpdate("图纸模式预览已更新；调整完成后点击“生成并应用”。");
+  if (state.image) requestPreviewUpdate("图纸模式预览已更新，请确认应用。");
   else renderPattern();
 }
 
@@ -1744,11 +2019,7 @@ function createBlankCanvas(options = {}) {
   state.counts = buildCounts(state.pattern);
   state.projectPalette = fill.empty ? [] : [fill];
   state.backgroundMask = new Uint8Array(state.pattern.length);
-  state.previewPattern = [];
-  state.previewCounts = new Map();
-  state.previewQualityMetrics = null;
-  state.previewBackgroundMask = null;
-  state.isPreviewDirty = false;
+  clearPreviewState();
   state.hasConfirmedGrid = true;
   state.manualEditedCells = new Set();
   state.manualEditCount = 0;
@@ -1756,7 +2027,6 @@ function createBlankCanvas(options = {}) {
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.editGridVersion += 1;
-  updatePreviewButtons();
   updateHistoryButtons();
   updateSelectedColorUi();
   renderPattern();
@@ -1816,7 +2086,7 @@ function setProcessingProfile(profile, options = {}) {
   syncControlsFromState();
   if (regenerate && state.image) {
     const label = state.processingProfile === "compact48" ? "48 精简版" : state.processingProfile === "detail64" ? "64+ 细节版" : "照片原色";
-    requestPreviewUpdate(`已切换到${label}并更新预览；调整完成后点击“生成并应用”。`);
+    requestPreviewUpdate(`已切换到${label}并更新预览，请确认应用。`);
   }
 }
 
@@ -1942,17 +2212,18 @@ function syncTraceReferenceControls() {
   elements.traceReferenceLockButton.disabled = !hasReference;
   elements.traceReferenceLockButton.classList.toggle("is-active", Boolean(trace.locked));
   elements.traceReferenceLockButton.title = trace.locked ? "已锁定，点击解锁画布参考图" : "未锁定，点击锁定画布参考图";
-  elements.traceReferenceZMode.value = trace.zMode;
-  elements.traceReferenceZMode.disabled = !hasReference;
-  elements.traceReferenceOpacity.value = Math.round(trace.opacity * 100);
-  elements.traceReferenceOpacityLabel.textContent = `${Math.round(trace.opacity * 100)}%`;
+  const traceVisibility = Math.round(trace.opacity * 100);
+  elements.traceReferenceOpacity.value = traceVisibility;
+  elements.traceReferenceOpacityLabel.textContent = `${traceVisibility}%`;
   elements.traceReferenceOpacity.disabled = !hasReference;
   elements.traceReferenceZoomOutButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;
   elements.traceReferenceCenterButton.disabled = !hasReference;
-  elements.traceReferenceSnapToggle.checked = Boolean(trace.snapToGrid);
-  elements.traceReferenceSnapToggle.disabled = !hasReference;
+  if (elements.traceReferenceSnapToggle) {
+    elements.traceReferenceSnapToggle.checked = Boolean(trace.snapToGrid);
+    elements.traceReferenceSnapToggle.disabled = !hasReference;
+  }
   updateCanvasCursor();
 }
 
@@ -1973,16 +2244,9 @@ function updateBackgroundHint() {
 }
 
 function moveQuickTogglesToToolbar() {
-  const target = document.querySelector(".top-parameter-toggles");
+  const target = document.querySelector(".top-parameter-toggles") || document.querySelector(".advanced-parameter-toggles");
   if (!target) return;
-  const ids = [
-    "transparentToggle",
-    "lineBoostToggle",
-    "dominantSamplingToggle",
-    "mergeSimilarToggle",
-    "cleanSmallRegionsToggle",
-    "animeModeToggle",
-  ];
+  const ids = ["gridToggle", "showCodesToggle"];
   for (const id of ids) {
     const toggle = elements[id]?.closest(".toggle");
     if (toggle) target.appendChild(toggle);
@@ -1992,7 +2256,7 @@ function moveQuickTogglesToToolbar() {
   });
 }
 
-function moveAdvancedSettingsBeforeGeneration() {
+function organizeWorkbenchSidebar() {
   const panel = document.querySelector(".control-panel");
   const project = document.querySelector(".project-card");
   const upload = document.querySelector(".upload-card");
@@ -2001,12 +2265,11 @@ function moveAdvancedSettingsBeforeGeneration() {
   const size = document.querySelector(".size-card");
   const paletteSettings = document.querySelector(".palette-settings-card");
   const background = document.querySelector(".background-card");
-  const generation = document.querySelector(".generation-card");
   const exportActions = document.querySelector(".export-actions");
   if (!panel) return;
   if (advanced && background && background.parentElement !== advanced) advanced.appendChild(background);
   if (imageProcess && advanced && advanced.parentElement !== imageProcess) imageProcess.appendChild(advanced);
-  for (const section of [upload, size, paletteSettings, imageProcess, generation, project, exportActions]) {
+  for (const section of [upload, size, paletteSettings, imageProcess, project, exportActions]) {
     if (section) panel.appendChild(section);
   }
 }
@@ -2058,7 +2321,7 @@ function syncLocalPreprocessControls() {
   elements.localPreprocessStatus.textContent = settings.enabled
     ? state.optimizedBaseImage
       ? "已使用本地优化底图生成预览"
-      : "开启后自动更新预览，最后点击生成并应用"
+      : "开启后自动更新预览，确认应用后进入编辑或导出"
     : "默认关闭，当前使用原图转换流程";
 }
 
@@ -2099,21 +2362,19 @@ function arrayToMask(values, length) {
 }
 
 function serializableReferencePanel() {
-  const { dragging, pointerId, startX, startY, startPanelX, startPanelY, ...panel } = state.referencePanel;
-  return { ...panel };
+  const panel = { ...state.referencePanel };
+  for (const transientKey of ["dragging", "pointerId", "startX", "startY", "startPanelX", "startPanelY"]) {
+    delete panel[transientKey];
+  }
+  return panel;
 }
 
 function serializableTraceReference() {
-  const {
-    dragging,
-    pointerId,
-    startClientX,
-    startClientY,
-    startX,
-    startY,
-    ...trace
-  } = state.traceReference;
-  return { ...trace };
+  const trace = { ...state.traceReference };
+  for (const transientKey of ["dragging", "pointerId", "startClientX", "startClientY", "startX", "startY"]) {
+    delete trace[transientKey];
+  }
+  return trace;
 }
 
 function projectFileName() {
@@ -2200,6 +2461,7 @@ function buildProjectData() {
       accurateMatch: state.accurateMatch,
     },
     displaySettings: {
+      codeVisibilityVersion: 2,
       showColorCode: state.showCellCodes,
       showCoordinates: state.showCoordinates,
       showFiveGridLines: state.guideEvery === 5,
@@ -2374,7 +2636,7 @@ async function restoreProjectData(projectData, options = {}) {
     state.optimizedBaseImage = null;
     state.optimizedBaseImageSignature = "";
 
-    state.showCellCodes = display.showColorCode !== false;
+    state.showCellCodes = Number(display.codeVisibilityVersion || 0) >= 2 ? display.showColorCode !== false : true;
     state.showCoordinates = display.showCoordinates !== false;
     state.guideEvery = Number(display.guideEvery || (display.showFiveGridLines === false ? 10 : 5));
     state.showGrid = display.showGrid !== false;
@@ -2402,10 +2664,10 @@ async function restoreProjectData(projectData, options = {}) {
       enabled: trace.enabled !== false,
       visible: trace.visible !== false,
       opacity: Number(trace.opacity ?? 0.35),
-      zMode: trace.zMode || "belowGrid",
+      zMode: "aboveGrid",
       scale: Number(trace.scale || 1),
       locked: trace.locked !== false,
-      snapToGrid: Boolean(trace.snapToGrid),
+      snapToGrid: false,
       adjustMode: false,
     };
 
@@ -2457,6 +2719,7 @@ function updateProjectSaveStatus(text) {
   if (!elements.projectSaveStatus) return;
   elements.projectSaveStatus.textContent = text;
   elements.projectSaveStatus.classList.toggle("is-dirty", state.projectDirty);
+  syncModeHeaderProject();
 }
 
 function markProjectDirty(status = "未保存") {
@@ -2677,14 +2940,10 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.selection.clear();
     state.penPoints = [];
     state.pattern = [];
-    state.previewPattern = [];
-    state.previewCounts = new Map();
-    state.previewQualityMetrics = null;
-    state.previewBackgroundMask = null;
+    clearPreviewState();
     state.backgroundMask = null;
     clearColorDiagnostics();
     invalidateOptimizedBaseImage();
-    state.isPreviewDirty = false;
     state.hasConfirmedGrid = false;
     state.editGridVersion = 0;
     state.previewGridVersion = 0;
@@ -3151,15 +3410,10 @@ function handleReferencePanelPointerUp(event) {
   panel.pointerId = null;
 }
 
-function generatePattern() {
+async function generatePattern() {
+  const startedAt = performanceNow();
   try {
-    state.previewPattern = [];
-    state.previewCounts = new Map();
-    state.previewQualityMetrics = null;
-    state.previewBackgroundMask = null;
-    state.previewPreservesManualEdits = false;
-    state.isPreviewDirty = false;
-    updatePreviewButtons();
+    clearPreviewState();
     if (!state.image) {
       renderPattern();
       return;
@@ -3174,7 +3428,12 @@ function generatePattern() {
     const pixels = buildPixelSamples(sourceImage, size);
     const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
     const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
-    const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !(state.accurateMatch || state.processingProfile === "photoColor"));
+    const pattern = await mapSamplesToPaletteAsync(
+      pixels,
+      size,
+      limitedPalette,
+      !(state.accurateMatch || state.processingProfile === "photoColor"),
+    );
 
     if (state.processingProfile === "photoColor") {
       const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
@@ -3244,17 +3503,24 @@ function generatePattern() {
     console.error("generatePattern failed", error);
     elements.projectMeta.textContent = "生成图纸失败";
     elements.cellInfo.textContent = `生成失败：${error.message || error}`;
+  } finally {
+    recordPerformance("pipeline.generateTotal", performanceNow() - startedAt);
   }
 }
 
-function buildPatternResultFromImage() {
+async function buildPatternResultFromImage() {
   if (!state.image) return null;
   const size = state.gridSize;
   const sourceImage = conversionSourceImage();
   const pixels = buildPixelSamples(sourceImage, size);
   const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
   const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
-  const pattern = mapSamplesToPalette(pixels, size, limitedPalette, !(state.accurateMatch || state.processingProfile === "photoColor"));
+  const pattern = await mapSamplesToPaletteAsync(
+    pixels,
+    size,
+    limitedPalette,
+    !(state.accurateMatch || state.processingProfile === "photoColor"),
+  );
 
   if (state.processingProfile === "photoColor") {
     const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
@@ -3785,7 +4051,42 @@ function isPreprocessNearBackground(r, g, b, alpha) {
   return (r > 232 && g > 232 && b > 224 && saturation < 36) || (Math.max(r, g, b) > 238 && saturation < 22);
 }
 
-function requestPreviewUpdate(message = "参数预览已更新。调整完成后点击“生成并应用”。", options = {}) {
+function clearPreviewState(options = {}) {
+  state.previewPattern = [];
+  state.previewCounts = new Map();
+  state.previewQualityMetrics = null;
+  state.previewBackgroundMask = null;
+  state.previewPreservesManualEdits = false;
+  state.isPreviewDirty = false;
+  if (options.syncControls !== false) updatePreviewButtons();
+}
+
+function setPendingPreview(pattern, options = {}) {
+  const preview = Array.isArray(pattern) ? pattern : [];
+  const size = Number(options.size) || state.gridSize;
+  state.previewPattern = preview;
+  state.previewCounts = options.counts || buildCounts(preview);
+  state.previewQualityMetrics = options.qualityMetrics || calculateQualityMetrics(preview, size);
+  state.previewBackgroundMask = Object.prototype.hasOwnProperty.call(options, "backgroundMask")
+    ? options.backgroundMask
+    : state.backgroundMask;
+  state.previewPreservesManualEdits = Boolean(options.preservesManualEdits);
+  state.previewGridVersion += 1;
+  state.isPreviewDirty = preview.length > 0;
+  state.patternSize = size;
+  updatePreviewButtons();
+  return preview;
+}
+
+function renderPendingPreview() {
+  renderPattern();
+  renderStats();
+  showQualityHint();
+}
+
+async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
+  const requestVersion = ++previewUpdateVersion;
+  setPatternProcessingBusy(true);
   try {
     let result = null;
     if (options.backgroundOnly && state.pattern.length) {
@@ -3797,54 +4098,41 @@ function requestPreviewUpdate(message = "参数预览已更新。调整完成后
         preservesManualEdits: true,
       };
     } else {
-      result = buildPatternResultFromImage();
+      result = await buildPatternResultFromImage();
     }
+
+    if (requestVersion !== previewUpdateVersion) return false;
 
     if (!result) {
       elements.cellInfo.textContent = "请先上传图片，再生成预览。";
       renderPattern();
-      return;
+      return false;
     }
 
-    state.previewPattern = result.pattern;
-    state.previewCounts = buildCounts(result.pattern);
-    state.previewQualityMetrics = calculateQualityMetrics(result.pattern, result.size);
-    state.previewBackgroundMask = result.backgroundMask;
-    state.previewPreservesManualEdits = Boolean(result.preservesManualEdits);
-    state.previewGridVersion += 1;
-    state.isPreviewDirty = true;
-    state.patternSize = result.size;
-    updatePreviewButtons();
-    renderPattern();
-    renderStats();
-    showQualityHint();
+    setPendingPreview(result.pattern, {
+      backgroundMask: result.backgroundMask,
+      preservesManualEdits: result.preservesManualEdits,
+      size: result.size,
+    });
+    renderPendingPreview();
     elements.projectMeta.textContent = `预览 / ${gridDimensionsLabel()} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
-    elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑；参数只更新预览，最后点击“生成并应用”才会覆盖。" : message;
+    elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑；确认应用新预览时会询问是否覆盖。" : message;
     markProjectDirty();
+    return true;
   } catch (error) {
+    if (requestVersion !== previewUpdateVersion) return false;
     console.error("生成预览失败", error);
     elements.cellInfo.textContent = `生成预览失败：${error.message || error}`;
-  }
-}
-
-function generateAndApplyPattern() {
-  if (!state.image && !state.previewPattern.length) {
-    elements.cellInfo.textContent = "请先上传图片。";
-    return;
-  }
-  if (!state.isPreviewDirty || !state.previewPattern.length) {
-    requestPreviewUpdate("图纸已生成，正在应用到编辑画布。");
-  }
-  if (state.isPreviewDirty && state.previewPattern.length) {
-    applyPreviewToEditGrid();
-    elements.cellInfo.textContent = "图纸已生成并应用，可以直接编辑。";
+    return false;
+  } finally {
+    if (requestVersion === previewUpdateVersion) setPatternProcessingBusy(false);
   }
 }
 
 function applyPreviewToEditGrid() {
   if (!state.previewPattern.length) {
     elements.cellInfo.textContent = "当前没有可应用的预览。";
-    return;
+    return false;
   }
   if (state.pattern.length) pushHistory();
   state.pattern = validateColorConstraints([...state.previewPattern]);
@@ -3859,51 +4147,79 @@ function applyPreviewToEditGrid() {
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.backgroundMask = state.previewBackgroundMask;
   refreshFinalDiagnosticsFromCurrentPattern("applyPreview");
-  state.previewPattern = [];
-  state.previewCounts = new Map();
-      state.previewQualityMetrics = null;
-      state.previewBackgroundMask = null;
-      state.previewPreservesManualEdits = false;
-  state.isPreviewDirty = false;
+  clearPreviewState();
   state.hasConfirmedGrid = true;
   state.editGridVersion += 1;
-  updatePreviewButtons();
   renderPattern();
   renderStats();
   showQualityHint();
   updateHistoryButtons();
   elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
-  elements.cellInfo.textContent = "预览已应用到当前图纸。";
+  elements.cellInfo.textContent = "预览已确认应用，现在可以进入编辑或导出。";
   markProjectDirty();
+  return true;
 }
 
-function cancelPreview() {
-  state.previewPattern = [];
-  state.previewCounts = new Map();
-  state.previewQualityMetrics = null;
-  state.previewBackgroundMask = null;
-  state.previewPreservesManualEdits = false;
-  state.isPreviewDirty = false;
-  if (state.pattern.length && state.patternSize !== state.gridSize) {
-    state.gridSize = state.patternSize;
-    syncControlsFromState();
+function confirmPendingPreview() {
+  if (state.isProcessingPattern) {
+    elements.cellInfo.textContent = "预览仍在处理中，请稍等片刻。";
+    return false;
   }
-  updatePreviewButtons();
-  renderPattern();
-  renderStats();
-  elements.cellInfo.textContent = "已取消预览，当前编辑图纸未改变。";
+  if (!state.isPreviewDirty || !state.previewPattern.length) return true;
+  if (state.manualEditCount && !state.previewPreservesManualEdits) {
+    const confirmed = window.confirm("应用新的转图预览会覆盖当前手动编辑，是否继续？");
+    if (!confirmed) return false;
+  }
+  return applyPreviewToEditGrid();
+}
+
+function discardPendingPreview() {
+  if (state.isProcessingPattern) return false;
+  clearPreviewState();
+  renderPendingPreview();
+  if (state.pattern.length) {
+    const bounds = state.usedBounds || calculateUsedBounds(state.pattern, state.gridSize);
+    elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${bounds.width} x ${bounds.height}`;
+    elements.cellInfo.textContent = "已放弃本次参数预览，保留当前已确认图纸。";
+  } else {
+    elements.projectMeta.textContent = "当前还没有已确认图纸";
+    elements.cellInfo.textContent = "已放弃本次参数预览。";
+  }
+  return true;
 }
 
 function updatePreviewButtons() {
   const hasPreview = state.isPreviewDirty && state.previewPattern.length;
-  elements.applyPreviewButton.disabled = !hasPreview;
-  elements.cancelPreviewButton.disabled = !hasPreview;
+  const isBlocking = state.isProcessingPattern || hasPreview;
   if (elements.localPreprocessApplyButton) {
-    elements.localPreprocessApplyButton.disabled = !hasPreview;
+    elements.localPreprocessApplyButton.disabled = state.isProcessingPattern || !hasPreview;
   }
+  if (elements.pendingPreviewBar) {
+    elements.pendingPreviewBar.hidden = !isBlocking;
+    const label = elements.pendingPreviewBar.querySelector("span");
+    if (label) label.textContent = state.isProcessingPattern ? "正在生成参数预览…" : "参数已调整，当前是预览";
+  }
+  if (elements.confirmPreviewButton) elements.confirmPreviewButton.disabled = state.isProcessingPattern || !hasPreview;
+  if (elements.discardPreviewButton) elements.discardPreviewButton.disabled = state.isProcessingPattern || !hasPreview;
+  document.body.classList.toggle("preview-confirmation-pending", Boolean(isBlocking));
+  document.querySelectorAll('.workbench-mode-button[data-workbench-mode="edit"], .workbench-mode-button[data-workbench-mode="export"]').forEach((button) => {
+    button.disabled = Boolean(isBlocking);
+    button.setAttribute("aria-disabled", String(Boolean(isBlocking)));
+    button.title = isBlocking ? "请先确认应用或放弃当前参数预览" : "";
+  });
+}
+
+function setPatternProcessingBusy(isBusy) {
+  state.isProcessingPattern = isBusy;
+  updatePreviewButtons();
+  if (isBusy) elements.cellInfo.textContent = "正在后台匹配颜色，页面仍可继续操作…";
 }
 
 function buildPixelSamples(image, size) {
+  return measurePerformance("pipeline.samples", () => buildPixelSamplesNow(image, size));
+}
+
+function buildPixelSamplesNow(image, size) {
   const sampleScale = state.patternMode === "pixelPattern" ? 6 : 4;
   const sampleSize = size * sampleScale;
   const activeSampleWidth = activeGridWidth() * sampleScale;
@@ -3940,90 +4256,6 @@ function buildPixelSamples(image, size) {
   return pixels;
 }
 
-function applyForegroundMaskToSamples(samples, size) {
-  if (!usesEmptyBackground()) return samples;
-  const masked = [...samples];
-  const edgeBackgroundSamples = detectEdgeBackgroundSamples(masked, size);
-  const visited = new Uint8Array(masked.length);
-  const queue = [];
-
-  const pushIfBackground = (index) => {
-    if (visited[index]) return;
-    const sample = masked[index];
-    const backgroundLike =
-      sample?.empty ||
-      sample?.background ||
-      isLikelyBackgroundSample(sample) ||
-      edgeBackgroundSamples.some((edgeSample) => colorDistance(sample, edgeSample) <= 16);
-    if (!backgroundLike) return;
-    visited[index] = 1;
-    queue.push(index);
-  };
-
-  for (let i = 0; i < size; i += 1) {
-    pushIfBackground(i);
-    pushIfBackground((size - 1) * size + i);
-    pushIfBackground(i * size);
-    pushIfBackground(i * size + size - 1);
-  }
-
-  for (let head = 0; head < queue.length; head += 1) {
-    const index = queue[head];
-    masked[index] = { ...EMPTY_CELL, background: true };
-    const x = index % size;
-    const y = Math.floor(index / size);
-    for (const nextIndex of getFourNeighbors(x, y, size)) {
-      pushIfBackground(nextIndex);
-    }
-  }
-
-  return masked;
-}
-
-function detectEdgeBackgroundSamples(samples, size) {
-  const buckets = new Map();
-  const add = (sample) => {
-    if (!sample || sample.empty) return;
-    const key = `${Math.round(sample.r / 12)},${Math.round(sample.g / 12)},${Math.round(sample.b / 12)}`;
-    const entry = buckets.get(key) || { r: 0, g: 0, b: 0, count: 0, backgroundCount: 0 };
-    entry.r += sample.r;
-    entry.g += sample.g;
-    entry.b += sample.b;
-    entry.count += 1;
-    if (sample.background || isLikelyBackgroundSample(sample)) entry.backgroundCount += 1;
-    buckets.set(key, entry);
-  };
-
-  for (let i = 0; i < size; i += 1) {
-    add(samples[i]);
-    add(samples[(size - 1) * size + i]);
-    add(samples[i * size]);
-    add(samples[i * size + size - 1]);
-  }
-
-  return [...buckets.values()]
-    .filter((entry) => entry.count >= Math.max(2, size * 0.06) || entry.backgroundCount >= 2)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 4)
-    .map((entry) => ({
-      r: entry.r / entry.count,
-      g: entry.g / entry.count,
-      b: entry.b / entry.count,
-      lab: rgbToLab({ r: entry.r / entry.count, g: entry.g / entry.count, b: entry.b / entry.count }),
-    }));
-}
-
-function isLikelyBackgroundSample(sample) {
-  if (!sample || sample.empty) return true;
-  const r = sample.r ?? sample.rgb?.r ?? 255;
-  const g = sample.g ?? sample.rgb?.g ?? 255;
-  const b = sample.b ?? sample.rgb?.b ?? 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const saturation = max - min;
-  return (r >= 232 && g >= 232 && b >= 224 && saturation < 34) || (max > 214 && saturation < 18);
-}
-
 function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
   if (!state.dominantSampling && (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
     return averageSampleCell(data, sampleSize, cellX, cellY, sampleScale);
@@ -4033,8 +4265,6 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
   const bucketStep = state.patternMode === "pixelPattern" ? 16 : state.animeMode ? 24 : 18;
   let darkWeight = 0;
   let darkBucketKey = "";
-  let totalWeight = 0;
-  let backgroundWeight = 0;
   let backgroundPixels = 0;
 
   for (let yy = 0; yy < sampleScale; yy += 1) {
@@ -4057,8 +4287,6 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
         backgroundPixels += 1;
         continue;
       }
-      totalWeight += weight;
-      if (background) backgroundWeight += weight;
       const key = `${Math.round(pr / bucketStep)},${Math.round(pg / bucketStep)},${Math.round(pb / bucketStep)}`;
       const bucket = buckets.get(key) || { r: 0, g: 0, b: 0, weight: 0, backgroundWeight: 0 };
 
@@ -4160,11 +4388,6 @@ function applyBackgroundModeToGrid(pattern, mask, mode = state.pixelBackground) 
   return pattern.map((color, index) => (mask[index] ? fill : color));
 }
 
-function applyBackgroundMaskToPattern(pattern, pixels, size) {
-  const mask = computeBackgroundMask(pattern, pixels, size);
-  return applyBackgroundModeToGrid(pattern, mask, state.pixelBackground);
-}
-
 function detectEdgeBackgroundColors(pattern, size) {
   const border = [];
   for (let i = 0; i < size; i += 1) {
@@ -4247,82 +4470,9 @@ function isBackgroundLikePixel(r, g, b, alpha = 1) {
   return r > 242 && g > 242 && b > 242 && saturation < 12;
 }
 
-function detectSubjectCrop(image) {
-  const maxAnalysisSize = 720;
-  const scale = Math.min(1, maxAnalysisSize / Math.max(image.width, image.height));
-  const width = Math.max(1, Math.round(image.width * scale));
-  const height = Math.max(1, Math.round(image.height * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const analysisCtx = canvas.getContext("2d", { willReadFrequently: true });
-  analysisCtx.drawImage(image, 0, 0, width, height);
-
-  const data = analysisCtx.getImageData(0, 0, width, height).data;
-  let minX = width;
-  let minY = height;
-  let maxX = -1;
-  let maxY = -1;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = (y * width + x) * 4;
-      const alpha = data[index + 3];
-      const r = data[index];
-      const g = data[index + 1];
-      const b = data[index + 2];
-
-      if (isSubjectPixel(r, g, b, alpha)) {
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      }
-    }
-  }
-
-  if (maxX < minX || maxY < minY) {
-    return coverCrop(image.width, image.height);
-  }
-
-  const padding = Math.max(maxX - minX, maxY - minY) * 0.06;
-  const centerX = (minX + maxX) / 2 / scale;
-  const centerY = (minY + maxY) / 2 / scale;
-  const subjectWidth = (maxX - minX + padding * 2) / scale;
-  const subjectHeight = (maxY - minY + padding * 2) / scale;
-  let cropSize = Math.max(subjectWidth, subjectHeight);
-  cropSize = Math.min(cropSize, image.width, image.height);
-
-  let x = centerX - cropSize / 2;
-  let y = centerY - cropSize / 2;
-  x = clampRange(x, 0, image.width - cropSize);
-  y = clampRange(y, 0, image.height - cropSize);
-
-  return { x, y, size: cropSize };
-}
-
-function isSubjectPixel(r, g, b, alpha) {
-  if (state.removeTransparent && alpha < 24) return false;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const saturation = max - min;
-  const isNearWhite = r > 245 && g > 245 && b > 245;
-  const isCheckerGray = saturation < 8 && r > 210 && r < 246;
-  return alpha > 24 && !isNearWhite && !isCheckerGray;
-}
-
 function clampRange(value, min, max) {
   if (max <= min) return min;
   return Math.max(min, Math.min(max, value));
-}
-
-function coverCrop(width, height) {
-  const size = Math.min(width, height);
-  return {
-    x: (width - size) / 2,
-    y: (height - size) / 2,
-    size,
-  };
 }
 
 function spreadError(pixels, size, x, y, error, factor) {
@@ -5255,10 +5405,6 @@ function cleanPatternRegions(pattern, size, minRegionSize) {
   return cleaned;
 }
 
-function findColorRegions(pattern, size) {
-  return analyzeColorRegions(pattern, size).regions;
-}
-
 function analyzeColorRegions(pattern, size) {
   const visited = new Uint8Array(pattern.length);
   const regions = [];
@@ -5625,7 +5771,7 @@ function showQualityHint() {
   const metrics = displayQualityMetrics();
   if (!metrics) return;
   if (metrics.fixedPaletteViolation) {
-    elements.cellInfo.textContent = "固定色板约束未满足：请应用预览或重新映射到允许色板。";
+    elements.cellInfo.textContent = "固定色板约束未满足：请重新映射到允许色板。";
   } else if (metrics.maxColorsViolation) {
     elements.cellInfo.textContent = "颜色数超过当前最大颜色数：建议智能优化或提高最大颜色数。";
   } else if (!metrics.backgroundModeConsistency) {
@@ -5997,21 +6143,16 @@ function renderPlanCard(plan, index) {
 function applyOptimizePlan(index) {
   const plan = state.pendingOptimizePlans[index];
   if (!plan) return;
-  state.previewPattern = validateColorConstraints(plan.pattern);
-  state.previewCounts = buildCounts(state.previewPattern);
-  state.previewQualityMetrics = calculateQualityMetrics(state.previewPattern, state.gridSize);
-  state.previewBackgroundMask = state.backgroundMask;
-  state.previewPreservesManualEdits = true;
+  setPendingPreview(validateColorConstraints(plan.pattern), {
+    backgroundMask: state.backgroundMask,
+    preservesManualEdits: true,
+    size: state.gridSize,
+  });
   state.optimizedGrid = [...state.previewPattern];
   state.compareMetrics = plan.compare || compareOptimizationResult(state.pattern, state.previewPattern, state.gridSize);
-  state.isPreviewDirty = true;
-  state.previewGridVersion += 1;
-  updatePreviewButtons();
   elements.optimizePanel.hidden = true;
-  renderPattern();
-  renderStats();
-  showQualityHint();
-  elements.cellInfo.textContent = `${plan.name} 已生成预览。点击“应用预览”后才会覆盖当前编辑图纸。`;
+  renderPendingPreview();
+  elements.cellInfo.textContent = `${plan.name} 已生成预览，请确认应用。`;
 }
 
 function patternPreviewDataUrl(pattern, size) {
@@ -6080,80 +6221,181 @@ function calculateUsedBounds(pattern = state.pattern, size = state.gridSize) {
   return { minX, minY, maxX, maxY, width: maxX - minX + 1, height: maxY - minY + 1 };
 }
 
-function renderPattern() {
-  configureCanvasForView();
+function renderPattern(options = {}) {
+  if (state.renderFrameId !== null) {
+    window.cancelAnimationFrame(state.renderFrameId);
+    state.renderFrameId = null;
+    pendingPatternRenderBounds = null;
+    pendingFullPatternRender = false;
+  }
+  const dirtyBounds = options.dirtyBounds || null;
+  return measurePerformance(dirtyBounds ? "render.canvas.partial" : "render.canvas", () => renderPatternNow(dirtyBounds));
+}
+
+function renderPatternNow(requestedDirtyBounds = null) {
+  const canvasResized = configureCanvasForView();
   const pattern = displayPattern();
   const canvasWidth = elements.patternCanvas.width;
   const canvasHeight = elements.patternCanvas.height;
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  const dirtyBounds = !canvasResized && state.editorView === "grid" && pattern.length ? normalizeCellBounds(requestedDirtyBounds) : null;
 
-  if (state.editorView === "sheet") {
-    drawSheetBase();
-  } else {
-    drawEditorBase();
-  }
-
-  if (!pattern.length) {
-    drawPlotBackground(48);
-    drawGridLines(48);
-    drawEmptyMessage();
-    elements.emptyState.hidden = false;
-    return;
+  if (dirtyBounds) {
+    const dirtyRect = canvasRectForCellBounds(dirtyBounds);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+    ctx.clip();
   }
 
-  elements.emptyState.hidden = true;
-  drawPlotBackground(state.gridSize);
-  if (shouldDrawTraceReference("belowGrid")) {
-    drawReferenceLayer();
-  }
-  drawPatternCells();
-  if (state.showGrid && state.viewMode !== "clean") {
-    drawGridLines(state.gridSize);
-  }
-  if (shouldDrawTraceReference("aboveGrid")) {
-    drawReferenceLayer();
-  }
-  drawSelectionOverlay();
-  drawBrushPreview();
-  drawSelectedCell();
-  if (state.editorView === "sheet") {
-    drawLegendOnCanvas();
+  try {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+    if (state.editorView === "sheet") {
+      drawSheetBase();
+    } else {
+      drawEditorBase();
+    }
+
+    if (!pattern.length) {
+      drawPlotBackground();
+      drawGridLines();
+      drawEmptyMessage();
+      elements.emptyState.hidden = false;
+      return;
+    }
+
+    elements.emptyState.hidden = true;
+    drawPlotBackground();
+    drawPatternCells(dirtyBounds);
+    if (state.showGrid && state.viewMode !== "clean") {
+      drawGridLines(dirtyBounds);
+    }
+    drawPatternCellCodes(dirtyBounds);
+    if (shouldDrawTraceReference("aboveGrid")) {
+      drawReferenceLayer();
+    }
+    drawSelectionOverlay(dirtyBounds);
+    drawBrushPreview();
+    drawSelectedCell();
+    if (state.editorView === "sheet") {
+      drawLegendOnCanvas();
+    }
+  } finally {
+    if (dirtyBounds) ctx.restore();
   }
 }
 
-function requestPatternRender() {
+function requestPatternRender(dirtyCells = null) {
+  if (dirtyCells === null) {
+    pendingFullPatternRender = true;
+    pendingPatternRenderBounds = null;
+  } else if (!pendingFullPatternRender) {
+    pendingPatternRenderBounds = mergeCellBounds(pendingPatternRenderBounds, boundsForCells(dirtyCells));
+  }
   if (state.renderFrameId !== null) return;
   state.renderFrameId = window.requestAnimationFrame(() => {
     state.renderFrameId = null;
-    renderPattern();
+    const fullRender = pendingFullPatternRender;
+    const dirtyBounds = pendingPatternRenderBounds;
+    pendingFullPatternRender = false;
+    pendingPatternRenderBounds = null;
+    if (fullRender || !dirtyBounds) renderPattern();
+    else renderPattern({ dirtyBounds });
   });
 }
 
 function configureCanvasForView() {
   const view = state.editorView === "sheet" ? sheet : gridEditor;
+  let resized = false;
   if (elements.patternCanvas.width !== view.width) {
     elements.patternCanvas.width = view.width;
+    resized = true;
   }
   if (elements.patternCanvas.height !== view.height) {
     elements.patternCanvas.height = view.height;
+    resized = true;
   }
   elements.patternCanvas.style.aspectRatio = `${view.width} / ${view.height}`;
   setZoom(state.zoom, false);
+  return resized;
+}
+
+function boundsForCells(cells) {
+  if (!cells?.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const cell of cells) {
+    if (!cell || !Number.isFinite(cell.x) || !Number.isFinite(cell.y)) continue;
+    minX = Math.min(minX, cell.x);
+    minY = Math.min(minY, cell.y);
+    maxX = Math.max(maxX, cell.x);
+    maxY = Math.max(maxY, cell.y);
+  }
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
+function mergeCellBounds(left, right) {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    minX: Math.min(left.minX, right.minX),
+    minY: Math.min(left.minY, right.minY),
+    maxX: Math.max(left.maxX, right.maxX),
+    maxY: Math.max(left.maxY, right.maxY),
+  };
+}
+
+function normalizeCellBounds(bounds) {
+  if (!bounds) return null;
+  const minX = clampRange(Math.floor(bounds.minX) - 1, 0, activeGridWidth() - 1);
+  const minY = clampRange(Math.floor(bounds.minY) - 1, 0, activeGridHeight() - 1);
+  const maxX = clampRange(Math.ceil(bounds.maxX) + 1, 0, activeGridWidth() - 1);
+  const maxY = clampRange(Math.ceil(bounds.maxY) + 1, 0, activeGridHeight() - 1);
+  if (maxX < minX || maxY < minY) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+function canvasRectForCellBounds(bounds) {
+  const plot = activePlotMetrics();
+  const left = plot.gridX + bounds.minX * plot.cell;
+  const top = plot.gridY + bounds.minY * plot.cell;
+  const right = plot.gridX + (bounds.maxX + 1) * plot.cell;
+  const bottom = plot.gridY + (bounds.maxY + 1) * plot.cell;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function drawWatermarkBackground(view) {
+  const config =
+    view === "sheet"
+      ? { tileWidth: 170, tileHeight: 92, x: 18, y: 28, font: "700 22px Microsoft YaHei, sans-serif", alpha: 0.18 }
+      : { tileWidth: 230, tileHeight: 132, x: 28, y: 44, font: "700 32px Microsoft YaHei, sans-serif", alpha: 0.16 };
+  let tile = watermarkTileCache.get(view);
+  if (!tile) {
+    tile = document.createElement("canvas");
+    tile.width = config.tileWidth;
+    tile.height = config.tileHeight;
+    const tileContext = tile.getContext("2d");
+    tileContext.globalAlpha = config.alpha;
+    tileContext.fillStyle = "#d8d8d8";
+    tileContext.font = config.font;
+    tileContext.fillText("拼豆", config.x, config.y);
+    watermarkTileCache.set(view, tile);
+  }
+
+  const pattern = ctx.createPattern(tile, "repeat");
+  if (!pattern) return;
+  ctx.save();
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, elements.patternCanvas.width, elements.patternCanvas.height);
+  ctx.restore();
 }
 
 function drawSheetBase() {
   ctx.fillStyle = "#fffdf8";
   ctx.fillRect(0, 0, sheet.width, sheet.height);
-  ctx.save();
-  ctx.globalAlpha = 0.18;
-  ctx.fillStyle = "#d8d8d8";
-  ctx.font = "700 22px Microsoft YaHei, sans-serif";
-  for (let y = 28; y < sheet.height; y += 92) {
-    for (let x = 18; x < sheet.width; x += 170) {
-      ctx.fillText("拼豆", x, y);
-    }
-  }
-  ctx.restore();
+  drawWatermarkBackground("sheet");
 
   ctx.fillStyle = "#111";
   ctx.font = "900 38px Microsoft YaHei, sans-serif";
@@ -6161,7 +6403,7 @@ function drawSheetBase() {
   ctx.font = "500 32px Arial, Microsoft YaHei, sans-serif";
   ctx.textAlign = "right";
   const pattern = displayPattern();
-  const total = pattern.length ? totalBeadCount(pattern) : activeGridWidth() * activeGridHeight();
+  const total = pattern.length ? totalBeadCount(pattern) : 0;
   const name = state.fileName || "Mard-120";
   ctx.fillText(`${name}   ${total}颗豆子`, sheet.width - 58, sheet.titleY);
   ctx.textAlign = "left";
@@ -6170,16 +6412,7 @@ function drawSheetBase() {
 function drawEditorBase() {
   ctx.fillStyle = "#fffdf8";
   ctx.fillRect(0, 0, gridEditor.width, gridEditor.height);
-  ctx.save();
-  ctx.globalAlpha = 0.16;
-  ctx.fillStyle = "#d8d8d8";
-  ctx.font = "700 32px Microsoft YaHei, sans-serif";
-  for (let y = 44; y < gridEditor.height; y += 132) {
-    for (let x = 28; x < gridEditor.width; x += 230) {
-      ctx.fillText("拼豆", x, y);
-    }
-  }
-  ctx.restore();
+  drawWatermarkBackground("grid");
 
   ctx.fillStyle = "#111";
   ctx.font = "900 42px Microsoft YaHei, sans-serif";
@@ -6187,7 +6420,7 @@ function drawEditorBase() {
   ctx.font = "500 34px Arial, Microsoft YaHei, sans-serif";
   ctx.textAlign = "right";
   const pattern = displayPattern();
-  const total = pattern.length ? totalBeadCount(pattern) : activeGridWidth() * activeGridHeight();
+  const total = pattern.length ? totalBeadCount(pattern) : 0;
   const colorCount = pattern === state.pattern ? state.counts.size : buildCounts(pattern).size;
   ctx.fillText(`${state.isPreviewDirty ? "预览 / " : ""}${gridDimensionsLabel()} / ${total}颗 / ${colorCount}色`, gridEditor.width - 120, 70);
   ctx.textAlign = "left";
@@ -6201,10 +6434,14 @@ function activePlotMetrics() {
   const plot = currentPlotMetrics();
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
+  const signature = `${state.editorView}:${widthCells}x${heightCells}`;
+  if (plotMetricsCache.signature === signature && plotMetricsCache.value) {
+    return plotMetricsCache.value;
+  }
   const cell = Math.min(plot.plotSize / widthCells, plot.plotSize / heightCells);
   const width = cell * widthCells;
   const height = cell * heightCells;
-  return {
+  const metrics = {
     ...plot,
     gridX: plot.plotX + (plot.plotSize - width) / 2,
     gridY: plot.plotY + (plot.plotSize - height) / 2,
@@ -6214,14 +6451,17 @@ function activePlotMetrics() {
     heightCells,
     cell,
   };
+  plotMetricsCache.signature = signature;
+  plotMetricsCache.value = metrics;
+  return metrics;
 }
 
-function drawPlotBackground(grid) {
+function drawPlotBackground() {
   const plot = activePlotMetrics();
   ctx.fillStyle = "#fdfdfd";
   ctx.fillRect(plot.gridX, plot.gridY, plot.gridWidth, plot.gridHeight);
   if (state.showCoordinates && state.viewMode !== "clean") {
-    drawCoordinateLabels(grid);
+    drawCoordinateLabels();
   }
 }
 
@@ -6234,26 +6474,21 @@ function drawEmptyMessage() {
   ctx.textAlign = "left";
 }
 
-function drawPatternCells() {
+function drawPatternCells(dirtyBounds = null) {
   const plot = activePlotMetrics();
   const grid = state.gridSize;
   const cell = plot.cell;
   const pattern = displayPattern();
-  const traceUnderGrid = shouldDrawTraceReference("belowGrid");
-  const showCellCodes = state.viewMode === "pixel" && state.showCellCodes && cellCodesFitCurrentZoom(cell);
+  const bounds = dirtyBounds || { minX: 0, minY: 0, maxX: plot.widthCells - 1, maxY: plot.heightCells - 1 };
 
-  for (let y = 0; y < plot.heightCells; y += 1) {
-    for (let x = 0; x < plot.widthCells; x += 1) {
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
       const item = pattern[y * grid + x];
       const cellX = plot.gridX + x * cell;
       const cellY = plot.gridY + y * cell;
-      const letTraceShowThrough = traceUnderGrid && isTraceTransparentCell(item);
-
       if (item.empty) {
-        if (!letTraceShowThrough) {
-          ctx.fillStyle = "#fff";
-          ctx.fillRect(cellX, cellY, cell, cell);
-        }
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(cellX, cellY, cell, cell);
       } else if (state.viewMode === "bead") {
         drawSquareBead(cellX, cellY, cell, item);
       } else if (state.viewMode === "clean") {
@@ -6261,14 +6496,23 @@ function drawPatternCells() {
         ctx.fillRect(cellX, cellY, cell, cell);
       } else {
         ctx.fillStyle = item.hex;
-        if (letTraceShowThrough) ctx.globalAlpha = 0.42;
         ctx.fillRect(cellX + 0.7, cellY + 0.7, Math.max(1, cell - 1.4), Math.max(1, cell - 1.4));
-        if (letTraceShowThrough) ctx.globalAlpha = 1;
       }
+    }
+  }
+}
 
-      if (showCellCodes && !item.empty) {
-        drawCellCode(item, cellX, cellY, cell);
-      }
+function drawPatternCellCodes(dirtyBounds = null) {
+  const plot = activePlotMetrics();
+  const cell = plot.cell;
+  if (state.viewMode !== "pixel" || !state.showCellCodes || !cellCodesFitCurrentZoom(cell)) return;
+  const pattern = displayPattern();
+  const bounds = dirtyBounds || { minX: 0, minY: 0, maxX: plot.widthCells - 1, maxY: plot.heightCells - 1 };
+  for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+    for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
+      const item = pattern[y * state.gridSize + x];
+      if (!item || item.empty) continue;
+      drawCellCode(item, plot.gridX + x * cell, plot.gridY + y * cell, cell);
     }
   }
 }
@@ -6323,13 +6567,8 @@ function shouldDrawTraceReference(layer) {
       trace.enabled &&
       trace.visible &&
       trace.opacity > 0 &&
-      trace.zMode === layer,
+      layer === "aboveGrid",
   );
-}
-
-function isTraceTransparentCell(item) {
-  if (!item || item.empty) return true;
-  return item.code === "F1" || item.hex?.toLowerCase() === whiteBeadColor().hex.toLowerCase();
 }
 
 function traceBaseSizeCells() {
@@ -6433,16 +6672,17 @@ function traceReferenceSizeCellsForScale(scale) {
   return { width: base.width * scale, height: base.height * scale };
 }
 
-function drawGridLines(grid) {
+function drawGridLines(dirtyBounds = null) {
   const plot = activePlotMetrics();
   const cell = plot.cell;
+  const bounds = dirtyBounds || { minX: 0, minY: 0, maxX: plot.widthCells - 1, maxY: plot.heightCells - 1 };
 
   ctx.save();
   ctx.strokeStyle = "#222";
   ctx.lineWidth = 1.4;
   ctx.strokeRect(plot.gridX, plot.gridY, plot.gridWidth, plot.gridHeight);
 
-  for (let index = 0; index <= plot.widthCells; index += 1) {
+  for (let index = bounds.minX; index <= bounds.maxX + 1; index += 1) {
     const vertical = plot.gridX + index * cell;
     ctx.beginPath();
     const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
@@ -6453,7 +6693,7 @@ function drawGridLines(grid) {
     ctx.stroke();
   }
 
-  for (let index = 0; index <= plot.heightCells; index += 1) {
+  for (let index = bounds.minY; index <= bounds.maxY + 1; index += 1) {
     const horizontal = plot.gridY + index * cell;
     ctx.beginPath();
     const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
@@ -6466,7 +6706,7 @@ function drawGridLines(grid) {
   ctx.restore();
 }
 
-function drawCoordinateLabels(grid) {
+function drawCoordinateLabels() {
   if (!state.showCoordinates) return;
   const plot = activePlotMetrics();
   const cell = plot.cell;
@@ -6542,7 +6782,7 @@ function drawSelectedCell() {
   ctx.restore();
 }
 
-function drawSelectionOverlay() {
+function drawSelectionOverlay(dirtyBounds = null) {
   const plot = activePlotMetrics();
   const cell = plot.cell;
 
@@ -6554,6 +6794,7 @@ function drawSelectionOverlay() {
     const x = index % state.gridSize;
     const y = Math.floor(index / state.gridSize);
     if (!isActiveGridCell(x, y)) continue;
+    if (dirtyBounds && (x < dirtyBounds.minX || x > dirtyBounds.maxX || y < dirtyBounds.minY || y > dirtyBounds.maxY)) continue;
     ctx.fillRect(plot.gridX + x * cell + 1, plot.gridY + y * cell + 1, Math.max(1, cell - 2), Math.max(1, cell - 2));
   }
 
@@ -6586,22 +6827,29 @@ function drawBrushPreview() {
   ctx.strokeStyle = state.activeTool === "eraser" ? "#111111" : "#e83b64";
   ctx.lineWidth = Math.max(1, cellSize * 0.08);
 
-  const previewPoints = state.activeTool === "line" && state.lineStartCell
-    ? interpolateCells(state.lineStartCell, state.brushHoverCell)
-    : [state.brushHoverCell];
+  for (const brushCell of brushPreviewCellsForCell(state.brushHoverCell)) {
+    const x = plot.gridX + brushCell.x * cellSize;
+    const y = plot.gridY + brushCell.y * cellSize;
+    ctx.fillRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
+    ctx.strokeRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
+  }
+  ctx.restore();
+}
+
+function brushPreviewCellsForCell(hoverCell) {
+  if (!hoverCell) return [];
+  const previewPoints = state.activeTool === "line" && state.lineStartCell ? interpolateCells(state.lineStartCell, hoverCell) : [hoverCell];
   const seen = new Set();
+  const cells = [];
   for (const point of previewPoints) {
     for (const brushCell of brushCellsForPoint(point)) {
       const key = `${brushCell.x},${brushCell.y}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      const x = plot.gridX + brushCell.x * cellSize;
-      const y = plot.gridY + brushCell.y * cellSize;
-      ctx.fillRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
-      ctx.strokeRect(x + 1, y + 1, Math.max(1, cellSize - 2), Math.max(1, cellSize - 2));
+      cells.push(brushCell);
     }
   }
-  ctx.restore();
+  return cells;
 }
 
 function contrastColor(rgb) {
@@ -6674,18 +6922,49 @@ function currentPaletteRows() {
 }
 
 function renderStats() {
+  const startedAt = performanceNow();
   const sorted = currentPaletteRows();
   const total = sorted.reduce((sum, item) => sum + item.count, 0);
   const listRows = sorted.filter((item) => item.count > 0 || item.isLocked || item.isActive || (state.paletteSearch && item.isSearchResult));
+  const pattern = displayPattern();
+  const usedBounds = pattern.length ? calculateUsedBounds(pattern, state.gridSize) : null;
+  const signature = [
+    state.isPreviewDirty ? "preview" : "pattern",
+    state.patternMode,
+    state.colorMode,
+    state.paletteSearch,
+    state.diagnosticViewMode,
+    `${activeGridWidth()}x${activeGridHeight()}`,
+    pattern.length,
+    state.projectPalette.length,
+    usedBounds ? `${usedBounds.width}x${usedBounds.height}` : "empty",
+    sorted
+      .map((item) => `${item.code}:${item.count}:${Number(item.isActive)}:${Number(item.isLocked)}:${Number(item.isAllowed)}:${Number(item.isSearchResult)}`)
+      .join(","),
+  ].join("|");
+
+  if (renderCache.statsSignature === signature) {
+    recordPerformance("render.stats", performanceNow() - startedAt, true);
+    return;
+  }
+
+  try {
+    renderStatsNow(sorted, total, listRows, pattern, usedBounds);
+    renderCache.statsSignature = signature;
+  } finally {
+    recordPerformance("render.stats", performanceNow() - startedAt);
+  }
+}
+
+function renderStatsNow(sorted, total, listRows, pattern, usedBounds) {
   const usedColorCount = listRows.filter((item) => item.count > 0).length;
   elements.totalBeads.textContent = `${state.isPreviewDirty ? "预览 " : ""}共 ${usedColorCount} 色 / ${total.toLocaleString("zh-CN")} 颗`;
-  const pattern = displayPattern();
-  state.usedBounds = pattern.length ? calculateUsedBounds(pattern, state.gridSize) : null;
+  state.usedBounds = usedBounds;
 
   if (!pattern.length && !state.projectPalette.length) {
     elements.paletteList.innerHTML = '<div class="empty-list">生成后会显示每种颜色需要多少颗</div>';
     elements.legendStrip.innerHTML = "<span>色卡会显示在这里</span>";
-    renderPaletteChoices();
+    renderPaletteChoices(sorted);
     return;
   }
 
@@ -6724,7 +7003,7 @@ function renderStats() {
     .slice(0, state.patternMode === "pixelPattern" || state.colorMode === "fixedPalette" || state.paletteSearch ? sorted.length : 12)
     .map(
       (item) => `
-        <button class="legend-chip${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}" data-code="${item.code}" type="button" title="单击设为画笔色，Ctrl+单击加入固定色板并激活">
+        <button class="legend-chip${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}" data-code="${item.code}" type="button" draggable="true" title="单击设为画笔色，Ctrl+单击加入固定色板并激活">
           <span class="legend-swatch" style="background:${item.hex}">${item.code}</span>
           <span>x${item.count}</span>
         </button>
@@ -6732,106 +7011,6 @@ function renderStats() {
     )
     .join("");
 
-  bindPaletteButtons();
-}
-
-function renderConstraintPaletteLegacy() {
-  const labels = {
-    auto: "自动颜色",
-    max: "最大颜色",
-    fixedCount: "固定数量",
-    fixedPalette: "固定色板",
-  };
-  elements.colorModeLabel.textContent = labels[state.colorMode] || "最大颜色";
-
-  const query = state.paletteSearch;
-  const filteredPalette = palette.filter((item) => {
-    const locked = state.lockedColorCodes.has(item.code);
-    const allowed = state.allowedColorCodes.has(item.code) || locked;
-    if (state.showSelectedColorsOnly && !allowed) return false;
-    if (!query) return true;
-    return `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query);
-  });
-
-  elements.constraintPalette.innerHTML = filteredPalette
-    .map((item) => {
-      const locked = state.lockedColorCodes.has(item.code);
-      const allowed = state.allowedColorCodes.has(item.code) || locked;
-      const disabled = state.colorMode === "fixedPalette" && state.disabledColorCodes.has(item.code);
-      const title = `${item.code} ${item.name} ${item.hex}${locked ? " / 已锁定" : ""}${disabled ? " / 已禁用" : ""}`;
-      return `
-        <button
-          class="constraint-chip${allowed ? "" : " is-off"}${locked ? " is-locked" : ""}${disabled ? " is-disabled" : ""}"
-          data-constraint-code="${item.code}"
-          style="background:${item.hex}"
-          title="${title}。固定色板中单击设为画笔色，Shift+单击取消，双击锁定，右键禁用"
-          type="button"
-        >${item.code}</button>
-      `;
-    })
-    .join("") || '<div class="empty-list">没有匹配的色号</div>';
-
-  document.querySelectorAll("[data-constraint-code]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      const code = button.dataset.constraintCode;
-      if (state.disabledColorCodes.has(code)) return;
-      if (state.lockedColorCodes.has(code)) {
-        state.allowedColorCodes.add(code);
-        state.selectedColor = palette.find((item) => item.code === code) || state.selectedColor;
-        updateSelectedColorUi();
-        elements.cellInfo.textContent = `${code} 已锁定，双击可解锁。`;
-        renderConstraintPalette();
-        return;
-      }
-      if (state.colorMode === "fixedPalette" && state.allowedColorCodes.has(code) && !event.shiftKey) {
-        state.selectedColor = palette.find((item) => item.code === code) || state.selectedColor;
-        updateSelectedColorUi();
-        elements.cellInfo.textContent = `${code} 已设为当前画笔色。Shift+单击可从固定色板取消。`;
-        renderStats();
-        renderPattern();
-        return;
-      }
-      if (state.allowedColorCodes.has(code)) {
-        state.allowedColorCodes.delete(code);
-      } else {
-        state.allowedColorCodes.add(code);
-        state.selectedColor = palette.find((item) => item.code === code) || state.selectedColor;
-        updateSelectedColorUi();
-      }
-      ensureUsableAllowedPalette();
-      applyConstraintChange();
-    });
-    button.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      const code = button.dataset.constraintCode;
-      if (state.disabledColorCodes.has(code)) return;
-      state.allowedColorCodes.add(code);
-      state.selectedColor = palette.find((item) => item.code === code) || state.selectedColor;
-      if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
-      else state.lockedColorCodes.add(code);
-      updateSelectedColorUi();
-      applyConstraintChange();
-    });
-    button.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      const code = button.dataset.constraintCode;
-      if (state.lockedColorCodes.has(code)) {
-        elements.cellInfo.textContent = `${code} 已锁定，不能禁用；先双击解锁。`;
-        renderConstraintPalette();
-        return;
-      }
-      if (state.disabledColorCodes.has(code)) {
-        state.disabledColorCodes.delete(code);
-        state.allowedColorCodes.add(code);
-      } else {
-        state.disabledColorCodes.add(code);
-        state.allowedColorCodes.delete(code);
-        state.lockedColorCodes.delete(code);
-      }
-      ensureUsableAllowedPalette();
-      applyConstraintChange();
-    });
-  });
 }
 
 function ensureUsableAllowedPalette() {
@@ -6845,72 +7024,20 @@ function applyConstraintChange() {
   updateSelectedColorUi();
   const base = state.pattern.length ? state.pattern : state.previewPattern;
   if (base.length) {
-    state.previewPattern = validateColorConstraints(base);
-    state.previewCounts = buildCounts(state.previewPattern);
-    state.previewQualityMetrics = calculateQualityMetrics(state.previewPattern, state.gridSize);
-    state.previewBackgroundMask = state.backgroundMask;
-    state.isPreviewDirty = true;
-    state.previewGridVersion += 1;
-    updatePreviewButtons();
-    renderPattern();
-    renderStats();
-    showQualityHint();
-    elements.cellInfo.textContent = "颜色约束已生成预览。点击“应用预览”后才会替换正式图纸。";
+    setPendingPreview(validateColorConstraints(base), {
+      backgroundMask: state.backgroundMask,
+      preservesManualEdits: state.isPreviewDirty && state.previewPreservesManualEdits,
+      size: state.gridSize,
+    });
+    renderPendingPreview();
+    elements.cellInfo.textContent = "颜色约束预览已更新，请确认应用。";
   } else if (state.image) {
-    requestPreviewUpdate("颜色约束已生成预览。点击“应用预览”后才会替换正式图纸。");
+    requestPreviewUpdate("颜色约束预览已更新，请确认应用。");
   }
 }
 
-function renderPaletteChoicesLegacy() {
-  const choices = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : activePalette();
-  elements.paletteList.innerHTML = choices
-    .map(
-      (item) => `
-        <button class="palette-row${item.code === state.selectedColor.code ? " is-selected" : ""}" data-code="${item.code}" type="button">
-          <span class="swatch" style="background:${item.hex}">${item.code}</span>
-          <span>
-            <span class="palette-name">${item.name}</span>
-            <span class="palette-code">${item.code} / ${item.hex}</span>
-          </span>
-          <span class="palette-count">选色</span>
-        </button>
-      `,
-    )
-    .join("");
-  bindPaletteButtons();
-}
-
-function bindPaletteButtonsLegacy() {
-  document.querySelectorAll("[data-code]").forEach((button) => {
-    button.draggable = true;
-    button.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/plain", button.dataset.code);
-      event.dataTransfer.effectAllowed = "copy";
-    });
-    button.addEventListener("click", () => {
-      const color = palette.find((item) => item.code === button.dataset.code);
-      if (!color) return;
-      state.selectedColor = color;
-      updateSelectedColorUi();
-      if (state.activeTool === "sameColor") {
-        selectAllMatchingColor(color);
-      }
-      renderStats();
-      renderPattern();
-    });
-    button.addEventListener("dblclick", () => {
-      const color = palette.find((item) => item.code === button.dataset.code);
-      if (!color) return;
-      state.selectedColor = color;
-      updateSelectedColorUi();
-      selectAllMatchingColor(color);
-      renderStats();
-      renderPattern();
-    });
-  });
-}
-
 function renderConstraintPalette() {
+  const startedAt = performanceNow();
   elements.colorModeLabel.textContent = "MARD 221";
 
   const query = state.paletteSearch;
@@ -6923,6 +7050,35 @@ function renderConstraintPalette() {
     return `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query);
   });
 
+  const signature = [
+    state.colorMode,
+    query,
+    Number(state.showSelectedColorsOnly),
+    state.selectedColor?.code || "",
+    filteredPalette
+      .map(
+        (item) =>
+          `${item.code}:${Number(state.lockedColorCodes.has(item.code))}:${Number(state.allowedColorCodes.has(item.code))}:${Number(
+            state.disabledColorCodes.has(item.code),
+          )}`,
+      )
+      .join(","),
+  ].join("|");
+
+  if (renderCache.constraintSignature === signature) {
+    recordPerformance("render.palette", performanceNow() - startedAt, true);
+    return;
+  }
+
+  try {
+    renderConstraintPaletteNow(filteredPalette);
+    renderCache.constraintSignature = signature;
+  } finally {
+    recordPerformance("render.palette", performanceNow() - startedAt);
+  }
+}
+
+function renderConstraintPaletteNow(filteredPalette) {
   elements.constraintPalette.innerHTML = filteredPalette
     .map((item) => {
       const locked = state.lockedColorCodes.has(item.code);
@@ -6942,96 +7098,10 @@ function renderConstraintPalette() {
     })
     .join("") || '<div class="empty-list">没有匹配的色号</div>';
 
-  document.querySelectorAll("[data-constraint-code]").forEach((button) => {
-    button.addEventListener("click", (event) => {
-      const code = button.dataset.constraintCode;
-      const color = paletteColorByCode(code);
-      if (!color) return;
-
-      if (state.colorMode !== "fixedPalette") {
-        activatePaintColor(color, { addToAllowed: false });
-        return;
-      }
-
-      if (event.ctrlKey || event.metaKey) {
-        activatePaintColor(color, { addToAllowed: true });
-        elements.cellInfo.textContent = `${code} 已加入固定色板，并设为当前画笔色。`;
-        return;
-      }
-
-      if (state.lockedColorCodes.has(code)) {
-        state.allowedColorCodes.add(code);
-        state.disabledColorCodes.delete(code);
-        activatePaintColor(color, { addToAllowed: true, announce: false });
-        elements.cellInfo.textContent = `${code} 已锁定，右键或双击可解锁。`;
-        return;
-      }
-
-      if (state.colorMode === "fixedPalette" && state.allowedColorCodes.has(code) && !event.shiftKey) {
-        activatePaintColor(color, { addToAllowed: true, announce: false });
-        elements.cellInfo.textContent = `${code} 已设为当前画笔色。Shift+单击可从固定色板取消。`;
-        return;
-      }
-
-      if (state.allowedColorCodes.has(code)) {
-        if (state.lockedColorCodes.has(code)) {
-          elements.cellInfo.textContent = `${code} 已锁定，请先右键或双击解锁后再移出固定色板。`;
-          renderConstraintPalette();
-          return;
-        }
-        state.allowedColorCodes.delete(code);
-      } else {
-        state.allowedColorCodes.add(code);
-        state.disabledColorCodes.delete(code);
-        state.selectedColor = color;
-        rememberPaletteColor(color);
-        updateSelectedColorUi();
-      }
-      ensureUsableAllowedPalette();
-      applyConstraintChange();
-    });
-
-    button.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      const code = button.dataset.constraintCode;
-      const color = paletteColorByCode(code);
-      if (!color) return;
-      state.disabledColorCodes.delete(code);
-      state.allowedColorCodes.add(code);
-      if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
-      else state.lockedColorCodes.add(code);
-      activatePaintColor(color, { addToAllowed: true, announce: false });
-      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定。` : `${code} 已解锁。`;
-      if (state.colorMode === "fixedPalette") applyConstraintChange();
-      else {
-        renderConstraintPalette();
-        renderStats();
-        markProjectDirty();
-      }
-    });
-
-    button.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      const code = button.dataset.constraintCode;
-      const color = paletteColorByCode(code);
-      if (!color) return;
-      state.disabledColorCodes.delete(code);
-      state.allowedColorCodes.add(code);
-      if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
-      else state.lockedColorCodes.add(code);
-      elements.cellInfo.textContent = state.lockedColorCodes.has(code) ? `${code} 已锁定，不会被自动优化修改。` : `${code} 已解锁。`;
-      if (state.colorMode === "fixedPalette") applyConstraintChange();
-      else {
-        renderConstraintPalette();
-        renderStats();
-        markProjectDirty();
-      }
-    });
-  });
 }
 
-function renderPaletteChoices() {
-  const choices = currentPaletteRows().length ? currentPaletteRows() : activePalette().map((item) => ({ ...item, count: 0 }));
+function renderPaletteChoices(rows = currentPaletteRows()) {
+  const choices = rows.length ? rows : activePalette().map((item) => ({ ...item, count: 0 }));
   const visibleChoices = choices.filter((item) => item.count > 0 || item.isLocked || item.isActive || (state.paletteSearch && item.isSearchResult));
   elements.paletteList.innerHTML = `
     <div class="palette-table-head" aria-hidden="true">
@@ -7060,66 +7130,164 @@ function renderPaletteChoices() {
       `,
     )
     .join("");
-  bindPaletteButtons();
 }
 
-function bindPaletteButtons() {
-  document.querySelectorAll("[data-code]").forEach((button) => {
-    if (button.dataset.boundPaletteRow === "true") return;
-    button.dataset.boundPaletteRow = "true";
-    button.draggable = true;
-    button.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("text/plain", button.dataset.code);
-      event.dataTransfer.effectAllowed = "copy";
-    });
-    button.addEventListener("click", (event) => {
-      if (event.target.closest("[data-replace-code]")) return;
-      const color = paletteColorByCode(button.dataset.code);
-      if (!color) return;
-      if (event.ctrlKey || event.metaKey) {
-        activatePaintColor(color, { addToAllowed: true });
-        elements.cellInfo.textContent = `${color.code} 已加入固定色板，并设为当前画笔色。`;
-        return;
-      }
-      activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette", announce: false });
-      if (state.activeTool === "sameColor") {
-        selectAllMatchingColor(color);
-      }
-    });
-    button.addEventListener("dblclick", (event) => {
-      if (event.target.closest("[data-replace-code]")) return;
-      if (event.target.closest("[data-edit-code]")) {
-        promptReplaceColor(button.dataset.code);
-        return;
-      }
-      const color = paletteColorByCode(button.dataset.code);
-      if (!color) return;
-      activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette", announce: false });
-      selectAllMatchingColor(color);
-    });
-  });
+function setupPaletteEventDelegation() {
+  for (const root of [elements.paletteList, elements.legendStrip]) {
+    root.addEventListener("dragstart", handlePaletteDragStart);
+    root.addEventListener("click", handlePaletteClick);
+    root.addEventListener("dblclick", handlePaletteDoubleClick);
+  }
+  elements.constraintPalette.addEventListener("click", handleConstraintPaletteClick);
+  elements.constraintPalette.addEventListener("dblclick", handleConstraintPaletteDoubleClick);
+  elements.constraintPalette.addEventListener("contextmenu", handleConstraintPaletteContextMenu);
+}
 
-  document.querySelectorAll("[data-replace-code]").forEach((button) => {
-    if (button.dataset.boundReplace === "true") return;
-    button.dataset.boundReplace = "true";
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      promptReplaceColor(button.dataset.replaceCode);
-    });
-  });
+function paletteButtonFromEvent(event) {
+  const button = event.target.closest("[data-code]");
+  return button && event.currentTarget.contains(button) ? button : null;
+}
+
+function handlePaletteDragStart(event) {
+  const button = paletteButtonFromEvent(event);
+  if (!button || !event.dataTransfer) return;
+  event.dataTransfer.setData("text/plain", button.dataset.code);
+  event.dataTransfer.effectAllowed = "copy";
+}
+
+function handlePaletteClick(event) {
+  const replaceButton = event.target.closest("[data-replace-code]");
+  if (replaceButton && event.currentTarget.contains(replaceButton)) {
+    event.stopPropagation();
+    promptReplaceColor(replaceButton.dataset.replaceCode);
+    return;
+  }
+  const button = paletteButtonFromEvent(event);
+  if (!button) return;
+  const color = paletteColorByCode(button.dataset.code);
+  if (!color) return;
+  if (event.ctrlKey || event.metaKey) {
+    activatePaintColor(color, { addToAllowed: true });
+    elements.cellInfo.textContent = `${color.code} 已加入固定色板，并设为当前画笔色。`;
+    return;
+  }
+  activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette", announce: false });
+  if (state.activeTool === "sameColor") selectAllMatchingColor(color);
+}
+
+function handlePaletteDoubleClick(event) {
+  if (event.target.closest("[data-replace-code]")) return;
+  const button = paletteButtonFromEvent(event);
+  if (!button) return;
+  if (event.target.closest("[data-edit-code]")) {
+    promptReplaceColor(button.dataset.code);
+    return;
+  }
+  const color = paletteColorByCode(button.dataset.code);
+  if (!color) return;
+  activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette", announce: false });
+  selectAllMatchingColor(color);
+}
+
+function constraintButtonFromEvent(event) {
+  const button = event.target.closest("[data-constraint-code]");
+  return button && elements.constraintPalette.contains(button) ? button : null;
+}
+
+function handleConstraintPaletteClick(event) {
+  const button = constraintButtonFromEvent(event);
+  if (!button) return;
+  const code = button.dataset.constraintCode;
+  const color = paletteColorByCode(code);
+  if (!color) return;
+
+  if (state.colorMode !== "fixedPalette") {
+    activatePaintColor(color, { addToAllowed: false });
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    activatePaintColor(color, { addToAllowed: true });
+    elements.cellInfo.textContent = `${code} 已加入固定色板，并设为当前画笔色。`;
+    return;
+  }
+  if (state.lockedColorCodes.has(code)) {
+    state.allowedColorCodes.add(code);
+    state.disabledColorCodes.delete(code);
+    activatePaintColor(color, { addToAllowed: true, announce: false });
+    elements.cellInfo.textContent = `${code} 已锁定，右键或双击可解锁。`;
+    return;
+  }
+  if (state.allowedColorCodes.has(code) && !event.shiftKey) {
+    activatePaintColor(color, { addToAllowed: true, announce: false });
+    elements.cellInfo.textContent = `${code} 已设为当前画笔色。Shift+单击可从固定色板取消。`;
+    return;
+  }
+  if (state.allowedColorCodes.has(code)) {
+    state.allowedColorCodes.delete(code);
+  } else {
+    state.allowedColorCodes.add(code);
+    state.disabledColorCodes.delete(code);
+    state.selectedColor = color;
+    rememberPaletteColor(color);
+    updateSelectedColorUi();
+  }
+  ensureUsableAllowedPalette();
+  applyConstraintChange();
+}
+
+function toggleConstraintPaletteLock(button, activateColor) {
+  const code = button.dataset.constraintCode;
+  const color = paletteColorByCode(code);
+  if (!color) return;
+  state.disabledColorCodes.delete(code);
+  state.allowedColorCodes.add(code);
+  if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
+  else state.lockedColorCodes.add(code);
+  if (activateColor) activatePaintColor(color, { addToAllowed: true, announce: false });
+  elements.cellInfo.textContent = state.lockedColorCodes.has(code)
+    ? `${code} 已锁定${activateColor ? "。" : "，不会被自动优化修改。"}`
+    : `${code} 已解锁。`;
+  if (state.colorMode === "fixedPalette") applyConstraintChange();
+  else {
+    renderConstraintPalette();
+    renderStats();
+    markProjectDirty();
+  }
+}
+
+function handleConstraintPaletteDoubleClick(event) {
+  const button = constraintButtonFromEvent(event);
+  if (!button) return;
+  event.preventDefault();
+  toggleConstraintPaletteLock(button, true);
+}
+
+function handleConstraintPaletteContextMenu(event) {
+  const button = constraintButtonFromEvent(event);
+  if (!button) return;
+  event.preventDefault();
+  toggleConstraintPaletteLock(button, false);
 }
 
 function updateSelectedColorUi() {
   if (!effectiveAllowedPalette().some((item) => item.code === state.selectedColor.code)) {
     state.selectedColor = nearestPaletteColor(state.selectedColor, effectiveAllowedPalette());
   }
+  const selectedColorLabel =
+    state.selectedColor.name && state.selectedColor.name !== state.selectedColor.code
+      ? `${state.selectedColor.code} ${state.selectedColor.name}`
+      : state.selectedColor.code;
   elements.currentColorSwatch.style.background = state.selectedColor.hex;
-  elements.currentColorName.textContent = `${state.selectedColor.code} ${state.selectedColor.name}`;
+  elements.currentColorName.textContent = selectedColorLabel;
+  const panelSwatch = document.querySelector("#toolPanelColorSwatch");
+  const panelName = document.querySelector("#toolPanelColorName");
+  if (panelSwatch) panelSwatch.style.background = state.selectedColor.hex;
+  if (panelName) panelName.textContent = selectedColorLabel;
 }
 
 function handleCanvasMove(event) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前显示的是参数预览。点击左侧“生成并应用”后即可编辑。";
+    elements.cellInfo.textContent = "当前显示的是转图预览；请先确认应用再进入编辑。";
     return;
   }
   if (state.gridLocked) {
@@ -7129,15 +7297,19 @@ function handleCanvasMove(event) {
   const cell = getCellFromPointer(event);
   if (!cell || !state.pattern.length) {
     if (state.brushHoverCell) {
+      const previousPreviewCells = brushPreviewCellsForCell(state.brushHoverCell);
       state.brushHoverCell = null;
-      requestPatternRender();
+      requestPatternRender(previousPreviewCells);
     }
     elements.cellInfo.textContent = state.editing ? "点选右侧颜色，再点图纸格子改色" : "编辑已关闭";
     return;
   }
   if (!state.brushHoverCell || state.brushHoverCell.x !== cell.x || state.brushHoverCell.y !== cell.y) {
+    const previousPreviewCells = brushPreviewCellsForCell(state.brushHoverCell);
     state.brushHoverCell = cell;
-    if (["brush", "eraser", "line"].includes(state.activeTool)) requestPatternRender();
+    if (["brush", "eraser", "line"].includes(state.activeTool)) {
+      requestPatternRender([...previousPreviewCells, ...brushPreviewCellsForCell(cell)]);
+    }
   }
   const item = state.pattern[cell.y * state.gridSize + cell.x];
   elements.cellInfo.textContent = `${cell.x + 1}, ${cell.y + 1} / 当前 ${item.code}，点击改成 ${state.selectedColor.code}`;
@@ -7157,7 +7329,7 @@ function handleCanvasClick(event) {
     elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。颜色诊断请按住 Alt 点击格子。";
   }
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可编辑。";
+    elements.cellInfo.textContent = "当前是转图预览；请先确认应用再进入编辑。";
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
@@ -7248,7 +7420,7 @@ function handleCanvasPointerDown(event) {
   }
   if (tryStartTraceReferenceDrag(event)) return;
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可编辑。";
+    elements.cellInfo.textContent = "当前是转图预览；请先确认应用再进入编辑。";
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
@@ -7368,6 +7540,7 @@ function paintBrushCell(cell, snapLine = false) {
   const constrainedColor = manualPaintColor(state.selectedColor);
   const targetCell = snapLine && state.lastBrushCell ? snapLineEnd(state.lastBrushCell, cell) : cell;
   const cells = state.lastBrushCell ? interpolateCells(state.lastBrushCell, targetCell) : [targetCell];
+  const dirtyCells = state.selectedCell ? [state.selectedCell] : [];
   for (const point of cells) {
     for (const symmetricPoint of symmetryPointsFor(point)) {
       for (const brushCell of brushCellsForPoint(symmetricPoint)) {
@@ -7377,17 +7550,20 @@ function paintBrushCell(cell, snapLine = false) {
         state.manualEditedCells.add(index);
         state.strokeVisited.add(index);
         state.lastBrushIndex = index;
+        dirtyCells.push(brushCell);
       }
     }
   }
   state.lastBrushCell = targetCell;
   state.selectedCell = targetCell;
-  requestPatternRender();
+  dirtyCells.push(targetCell);
+  requestPatternRender(dirtyCells);
 }
 
 function eraseBrushCell(cell) {
   const fill = eraserFillColor();
   const cells = state.lastEraseCell ? interpolateCells(state.lastEraseCell, cell) : [cell];
+  const dirtyCells = state.selectedCell ? [state.selectedCell] : [];
   for (const point of cells) {
     for (const symmetricPoint of symmetryPointsFor(point)) {
       for (const brushCell of brushCellsForPoint(symmetricPoint)) {
@@ -7397,12 +7573,14 @@ function eraseBrushCell(cell) {
         state.manualEditedCells.add(index);
         state.strokeVisited.add(index);
         state.lastEraseIndex = index;
+        dirtyCells.push(brushCell);
       }
     }
   }
   state.lastEraseCell = cell;
   state.selectedCell = cell;
-  requestPatternRender();
+  dirtyCells.push(cell);
+  requestPatternRender(dirtyCells);
 }
 
 function eraseCurrentSelection() {
@@ -7757,7 +7935,7 @@ function handleCanvasDrop(event) {
   event.preventDefault();
   document.querySelector("#canvasWrap")?.classList.remove("is-drag-target");
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可拖拽填色。";
+    elements.cellInfo.textContent = "当前是转图预览；切换到编辑模式后即可拖拽填色。";
     return;
   }
   if (state.gridLocked) return;
@@ -7934,6 +8112,7 @@ function setActiveTool(tool) {
   document.querySelectorAll(".canvas-tool").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.tool === tool);
   });
+  if (elements.editToolPanel) elements.editToolPanel.dataset.activeTool = tool;
   syncTraceReferenceControls();
   updateCanvasCursor();
   elements.cellInfo.textContent = toolHint(tool);
@@ -8081,7 +8260,7 @@ function pasteSelectionPixels() {
     return;
   }
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览，请先生成并应用，再粘贴选区。";
+    elements.cellInfo.textContent = "当前是转图预览；切换到编辑模式后再粘贴选区。";
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
@@ -8156,8 +8335,8 @@ function restorePattern(snapshot) {
     state.gridHeight = Number(snapshot.height) || snapshot.size;
     state.gridSize = Math.max(snapshot.size, state.gridWidth, state.gridHeight);
     elements.sizeLabel.textContent = gridDimensionsLabel();
-    elements.customWidth.value = state.gridWidth;
-    elements.customHeight.value = state.gridHeight;
+    elements.customSizeInput.value = state.gridWidth;
+    elements.customHeightInput.value = state.gridHeight;
     document.querySelectorAll(".seg-option").forEach((button) => {
       button.classList.toggle(
         "is-active",
@@ -8180,13 +8359,7 @@ function restorePattern(snapshot) {
   state.patternSize = state.gridSize;
   state.counts = buildCounts(state.pattern);
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
-  state.previewPattern = [];
-  state.previewCounts = new Map();
-  state.previewQualityMetrics = null;
-  state.previewBackgroundMask = null;
-  state.previewPreservesManualEdits = false;
-  state.isPreviewDirty = false;
-  updatePreviewButtons();
+  clearPreviewState();
   updateSelectedColorUi();
   renderConstraintPalette();
   state.selection.clear();
@@ -8215,8 +8388,11 @@ function clearHistory() {
 
 function undoEdit() {
   if (!state.undoStack.length) return;
-  state.redoStack.push(snapshotPattern());
-  restorePattern(state.undoStack.pop());
+  const previousSnapshot = state.undoStack[state.undoStack.length - 1];
+  const currentSnapshot = snapshotPattern();
+  restorePattern(previousSnapshot);
+  state.undoStack.pop();
+  state.redoStack.push(currentSnapshot);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已撤回一步";
   markProjectDirty();
@@ -8224,8 +8400,11 @@ function undoEdit() {
 
 function redoEdit() {
   if (!state.redoStack.length) return;
-  state.undoStack.push(snapshotPattern());
-  restorePattern(state.redoStack.pop());
+  const nextSnapshot = state.redoStack[state.redoStack.length - 1];
+  const currentSnapshot = snapshotPattern();
+  restorePattern(nextSnapshot);
+  state.redoStack.pop();
+  state.undoStack.push(currentSnapshot);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已重做一步";
   markProjectDirty();
@@ -8434,7 +8613,7 @@ function fillSelectionWithCurrentColor() {
 
 function fillSelectionWithColor(color) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可填充选区。";
+    elements.cellInfo.textContent = "当前是转图预览；切换到编辑模式后即可填充选区。";
     return;
   }
   if (state.gridLocked) return;
@@ -8445,7 +8624,7 @@ function fillSelectionWithColor(color) {
 
 function selectAllMatchingColor(color) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可选择同色格。";
+    elements.cellInfo.textContent = "当前是转图预览；切换到编辑模式后即可选择同色格。";
     return;
   }
   state.selection = new Set();
@@ -8457,34 +8636,6 @@ function selectAllMatchingColor(color) {
   renderPattern();
 }
 
-function applyColorToIndicesLegacy(indices, color, recordHistory = true) {
-  if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可修改。";
-    return;
-  }
-  if (state.gridLocked && recordHistory) return;
-  if (recordHistory) pushHistory();
-  const constrainedColor = color.empty ? EMPTY_CELL : nearestPaletteColor(color, effectiveAllowedPalette());
-  if (!color.empty && state.colorMode === "fixedPalette" && constrainedColor.code !== color.code) {
-    elements.cellInfo.textContent = `${color.code} 不在当前固定色板中，已改用 ${constrainedColor.code}。`;
-  }
-  rememberPaletteColor(constrainedColor);
-  for (const index of indices) {
-    if (isColorLocked(state.pattern[index])) continue;
-    state.pattern[index] = constrainedColor;
-  }
-  state.pattern = validateColorConstraints(state.pattern);
-  state.counts = buildCounts(state.pattern);
-  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
-  state.hasConfirmedGrid = true;
-  state.manualEditCount += 1;
-  state.editGridVersion += 1;
-  updateSelectionLabel();
-  renderPattern();
-  renderStats();
-  markProjectDirty();
-}
-
 function rememberPaletteColor(color) {
   if (color.empty) return;
   if (!state.projectPalette.some((item) => item.code === color.code)) {
@@ -8494,7 +8645,7 @@ function rememberPaletteColor(color) {
 
 function applyColorToIndices(indices, color, recordHistory = true) {
   if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前是参数预览。点击左侧“生成并应用”后即可修改。";
+    elements.cellInfo.textContent = "当前是转图预览；切换到编辑模式后即可修改。";
     return;
   }
   if (state.gridLocked && recordHistory) return;
@@ -8646,11 +8797,8 @@ function fitCanvasToScreen() {
 }
 
 function exportPattern() {
+  if (!canLeaveTransformWithCurrentPreview("export")) return;
   if (!state.pattern.length) return;
-  if (state.isPreviewDirty) {
-    elements.cellInfo.textContent = "当前有未应用的预览。请先应用或取消预览，再导出正式图纸。";
-    return;
-  }
   if (elements.exportFormat?.value === "pdf") {
     exportPatternPdf();
     return;
@@ -9010,14 +9158,10 @@ function resetApp() {
   state.accurateMatch = true;
   state.localPreprocessSettings.enabled = true;
   state.pattern = [];
-  state.previewPattern = [];
-  state.previewCounts = new Map();
-  state.previewQualityMetrics = null;
-  state.previewBackgroundMask = null;
+  clearPreviewState();
   state.backgroundMask = null;
   clearColorDiagnostics();
   invalidateOptimizedBaseImage();
-  state.isPreviewDirty = false;
   state.hasConfirmedGrid = false;
   state.editGridVersion = 0;
   state.previewGridVersion = 0;
@@ -9044,7 +9188,7 @@ function resetApp() {
     enabled: true,
     visible: true,
     opacity: 0.35,
-    zMode: "belowGrid",
+    zMode: "aboveGrid",
     scale: 1,
     x: null,
     y: null,
@@ -9078,16 +9222,16 @@ function resetApp() {
   syncDiagnosticControls();
   syncLocalPreprocessControls();
   updateBackgroundHint();
-  updatePreviewButtons();
   updateProjectSaveStatus("未保存");
   renderPattern();
   renderStats();
 }
 
 function init() {
-  moveAdvancedSettingsBeforeGeneration();
+  organizeWorkbenchSidebar();
   elevateToolboxLayer();
   setupWorkbenchLayout();
+  setupWorkbenchModes();
   moveQuickTogglesToToolbar();
   setupEvents();
   syncLocalPreprocessControls();

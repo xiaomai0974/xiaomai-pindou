@@ -2571,6 +2571,10 @@ body.stats-panel-collapsed .app-shell {
   padding: 6px;
 }
 
+.workspace > .edit-tool-panel.is-properties-open {
+  z-index: 2050;
+}
+
 .workspace > .edit-tool-panel > .group-title {
   display: none;
 }
@@ -3136,4 +3140,901 @@ body.stats-panel-collapsed .app-shell {
 
 #referenceFloatPanel {
   display: none !important;
+}
+
+/* 2026-07-18 mode-based workbench: 转图 / 编辑 / 导出. */
+body {
+  min-width: 760px;
+  overflow: hidden;
+  background: #f4f5f6;
+}
+
+.workbench-mode-header {
+  position: relative;
+  z-index: 3000;
+  display: grid;
+  height: 72px;
+  grid-template-columns: minmax(210px, 1fr) auto minmax(360px, 1fr);
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.98);
+  padding: 0 18px;
+}
+
+.mode-header-brand,
+.mode-header-project,
+.workbench-mode-tabs {
+  display: flex;
+  align-items: center;
+}
+
+.mode-header-brand {
+  gap: 11px;
+  font-size: 18px;
+}
+
+.mode-header-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.workbench-mode-tabs {
+  min-width: 360px;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.workbench-mode-button {
+  min-width: 118px;
+  min-height: 42px;
+  border: 0;
+  border-right: 1px solid #e2e2e2;
+  border-radius: 0;
+  background: transparent;
+  color: #303030;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.workbench-mode-button:last-child {
+  border-right: 0;
+}
+
+.workbench-mode-button:hover {
+  background: #fff3f6;
+}
+
+.workbench-mode-button.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mode-header-project {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.pending-preview-bar {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #f1a9ba;
+  border-radius: 8px;
+  background: #fff4f7;
+  padding: 5px 6px 5px 10px;
+  color: #8f1838;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.pending-preview-bar[hidden],
+.reference-toolbar[hidden] {
+  display: none !important;
+}
+
+.pending-preview-bar button {
+  min-height: 30px;
+  border: 1px solid #d9a2af;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 9px;
+  color: #6e2437;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.pending-preview-bar button.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.pending-preview-bar button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.preview-confirmation-pending .mode-header-project .mode-project-copy {
+  display: none;
+}
+
+.workbench-mode-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.mode-header-project .mode-project-copy {
+  margin-right: 2px;
+}
+
+.mode-project-copy {
+  display: grid;
+  justify-items: end;
+  padding-right: 10px;
+}
+
+.mode-project-copy strong {
+  max-width: 160px;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-project-copy span {
+  color: #2f8b57;
+  font-size: 10px;
+}
+
+.mode-project-copy span.is-dirty {
+  color: #bc274b;
+}
+
+.mode-header-action {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #d6d6d6;
+  border-radius: 7px;
+  background: #fff;
+  padding: 0 12px;
+  color: #333;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mode-header-action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.mode-header-action.primary {
+  min-width: 92px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.app-shell,
+body.stats-panel-collapsed .app-shell {
+  height: calc(100vh - 72px);
+  min-height: 0;
+  gap: 0;
+  padding: 0;
+}
+
+.control-panel,
+.workspace,
+.stats-panel {
+  top: 0;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.workspace {
+  min-height: 0;
+}
+
+.workspace > .sheet-chrome {
+  padding: 0;
+}
+
+.sheet-title {
+  display: none;
+}
+
+.sheet-chrome {
+  grid-template-rows: 56px minmax(0, 1fr) 76px;
+  gap: 0;
+  overflow: hidden;
+}
+
+.editor-toolbar {
+  min-height: 56px;
+  flex: 0 0 56px;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  padding: 7px 12px;
+}
+
+body[data-workbench-mode="edit"] .sheet-chrome {
+  grid-template-rows: 48px minmax(0, 1fr) 70px;
+}
+
+body[data-workbench-mode="edit"] .editor-toolbar {
+  min-height: 48px;
+  flex-basis: 48px;
+  gap: 5px;
+  padding: 5px 8px;
+}
+
+body[data-workbench-mode="edit"] .toolbar-history {
+  gap: 2px;
+  padding-right: 5px;
+}
+
+body[data-workbench-mode="edit"] .toolbar-history button,
+body[data-workbench-mode="edit"] .editor-toolbar .icon-button,
+body[data-workbench-mode="edit"] .editor-toolbar .tool-toggle,
+body[data-workbench-mode="edit"] .editor-toolbar .zoom-tools button,
+body[data-workbench-mode="edit"] .editor-toolbar .view-tools button {
+  min-height: 30px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+body[data-workbench-mode="edit"] .editor-toolbar .zoom-tools output {
+  min-width: 46px;
+  padding: 5px 6px;
+  font-size: 11px;
+}
+
+body[data-workbench-mode="edit"] .top-parameter-toggles {
+  padding-left: 5px;
+}
+
+body[data-workbench-mode="edit"] .top-parameter-toggles .toggle {
+  min-height: 30px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+body[data-workbench-mode="edit"] .editor-toolbar .current-color {
+  min-height: 30px;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+body[data-workbench-mode="edit"] .editor-toolbar #cellInfo {
+  display: none;
+}
+
+body[data-workbench-mode="edit"] .trace-reference-toolbar {
+  gap: 4px;
+}
+
+body[data-workbench-mode="edit"] .trace-reference-toolbar button,
+body[data-workbench-mode="edit"] .trace-reference-toolbar select,
+body[data-workbench-mode="edit"] .trace-reference-toolbar label {
+  min-height: 30px;
+  font-size: 10px;
+}
+
+.toolbar-history,
+.zoom-tools,
+.top-parameter-toggles {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.toolbar-history {
+  border-right: 1px solid var(--line);
+  padding-right: 9px;
+}
+
+.toolbar-history button,
+.editor-toolbar .icon-button,
+.editor-toolbar .tool-toggle,
+.editor-toolbar .zoom-tools button,
+.editor-toolbar .view-tools button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 8px;
+  color: #444;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.toolbar-history button:hover,
+.editor-toolbar .tool-toggle:hover,
+.editor-toolbar .zoom-tools button:hover,
+.editor-toolbar .view-tools button:hover {
+  border-color: #d8d8d8;
+  background: #fafafa;
+}
+
+.toolbar-history button svg,
+.editor-toolbar .tool-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.editor-toolbar .zoom-tools output {
+  min-width: 54px;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  background: #fff;
+  padding: 7px 8px;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.top-parameter-toggles {
+  border-left: 1px solid var(--line);
+  padding-left: 9px;
+}
+
+.top-parameter-toggles .toggle {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.top-parameter-toggles .toggle:hover {
+  border-color: #d8d8d8;
+  background: #fafafa;
+}
+
+.top-parameter-toggles .switch {
+  display: none;
+}
+
+.top-parameter-toggles .toggle:has(input:checked) {
+  border-color: var(--accent);
+  background: #fff0f4;
+  color: #b51f46;
+}
+
+.editor-toolbar .current-color {
+  min-height: 34px;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px 8px;
+}
+
+.editor-toolbar .current-color #currentColorSwatch {
+  border-color: #c7c7c7;
+}
+
+.trace-reference-toolbar.is-unavailable {
+  display: none !important;
+}
+
+.trace-reference-upload {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.trace-reference-upload svg {
+  width: 15px;
+  height: 15px;
+}
+
+#traceReferenceClearButton.danger {
+  color: #b4233f;
+}
+
+.editor-toolbar #cellInfo {
+  min-width: 120px;
+  flex: 1;
+  overflow: hidden;
+  color: #777;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-wrap {
+  border: 0;
+  background: #f5f6f7;
+}
+
+.sheet-legend {
+  min-height: 76px;
+  max-height: 76px;
+  flex: 0 0 76px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  padding: 8px 12px;
+}
+
+.legend-chip {
+  min-width: 58px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 3px;
+}
+
+.legend-chip.is-selected {
+  border-color: var(--accent);
+  background: #fff3f6;
+  box-shadow: none;
+}
+
+body[data-workbench-mode="transform"] .app-shell {
+  grid-template-columns: 82px minmax(0, 1fr);
+}
+
+body[data-workbench-mode="transform"] .control-panel {
+  display: flex;
+  grid-column: 1;
+  border-right: 1px solid var(--line);
+}
+
+body[data-workbench-mode="transform"] .workspace {
+  grid-column: 2;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-workbench-mode="transform"] .workspace > .sheet-chrome {
+  grid-column: 1;
+}
+
+body[data-workbench-mode="transform"] .workspace > .edit-tool-panel,
+body[data-workbench-mode="transform"] .stats-panel {
+  display: none;
+}
+
+body[data-workbench-mode="transform"] .control-panel > .workbench-drawer-panel.is-sidebar-open {
+  top: 80px;
+  bottom: 8px;
+  left: 82px;
+  max-height: calc(100vh - 88px);
+  border: 1px solid #d7d7d7;
+  border-radius: 0 8px 8px 0;
+  box-shadow: 10px 8px 22px rgba(0, 0, 0, 0.13);
+}
+
+.matching-settings {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.matching-settings .group-title {
+  margin: 0;
+}
+
+.matching-accurate-toggle {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d7d7d7;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.matching-accurate-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.matching-view-options {
+  grid-template-columns: 1fr 1fr;
+}
+
+.matching-view-options button {
+  min-height: 36px;
+}
+
+.matching-view-options button.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+body[data-workbench-mode="edit"] .app-shell {
+  display: block;
+}
+
+body[data-workbench-mode="edit"] .control-panel,
+body[data-workbench-mode="edit"] .stats-panel {
+  display: none;
+}
+
+body[data-workbench-mode="edit"] .workspace {
+  width: 100%;
+  grid-template-columns: 72px minmax(0, 1fr) 268px;
+}
+
+body[data-workbench-mode="edit"] .workspace:not(:has(> .edit-tool-panel.is-properties-open)) {
+  grid-template-columns: 72px minmax(0, 1fr) 0;
+}
+
+body[data-workbench-mode="edit"] .workspace > .sheet-chrome {
+  grid-column: 2;
+}
+
+body[data-workbench-mode="edit"] .workspace > .edit-tool-panel {
+  width: 72px;
+  border-right: 1px solid var(--line);
+  background: #fff;
+  padding: 14px 8px 8px;
+}
+
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button,
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button {
+  width: 55px;
+  min-height: 62px;
+  gap: 5px;
+  border-radius: 8px;
+  font-size: 10px;
+}
+
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button svg,
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button svg {
+  width: 21px;
+  height: 21px;
+}
+
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button.is-active,
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button[aria-expanded="true"] {
+  border-color: #f0aabd;
+  background: #fff2f6;
+  color: var(--accent);
+}
+
+body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
+  position: fixed;
+  z-index: 1200;
+  top: 72px;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  width: 268px;
+  max-height: none;
+  overflow: auto;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: #fff;
+  box-shadow: none;
+  padding: 18px 16px;
+}
+
+.tool-properties-heading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+}
+
+.tool-properties-heading strong {
+  font-size: 15px;
+}
+
+.tool-properties-heading .icon-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.tool-panel-current-color {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+
+#toolPanelColorSwatch {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border: 1px solid #c8c8c8;
+  border-radius: 6px;
+  background: #111;
+}
+
+.tool-panel-current-color div {
+  display: grid;
+  gap: 2px;
+}
+
+.tool-panel-current-color small {
+  color: #777;
+  font-size: 10px;
+}
+
+.tool-panel-current-color strong {
+  font-size: 13px;
+}
+
+body[data-workbench-mode="edit"] .tool-properties-popover .brush-options,
+body[data-workbench-mode="edit"] .tool-properties-popover .symmetry-options {
+  gap: 10px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+
+body[data-workbench-mode="edit"] .tool-properties-popover label {
+  gap: 6px;
+  color: #444;
+  font-size: 11px;
+}
+
+body[data-workbench-mode="edit"] .tool-properties-popover input,
+body[data-workbench-mode="edit"] .tool-properties-popover select,
+body[data-workbench-mode="edit"] .tool-properties-popover button {
+  min-height: 36px;
+  border: 1px solid #d6d6d6;
+  border-radius: 6px;
+  background: #fff;
+}
+
+body[data-workbench-mode="edit"] .brush-size-presets {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+body[data-workbench-mode="edit"] .brush-size-presets button.is-active {
+  border-color: var(--accent);
+  background: #fff2f6;
+  color: var(--accent);
+}
+
+.tool-advanced-actions {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 0 0 14px;
+}
+
+.tool-advanced-actions summary {
+  min-height: 36px;
+  color: #555;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tool-advanced-actions .mirror-actions,
+.tool-advanced-actions .tool-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+body[data-workbench-mode="export"] .app-shell {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+body[data-workbench-mode="export"] .control-panel {
+  display: none;
+}
+
+body[data-workbench-mode="export"] .workspace {
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body[data-workbench-mode="export"] .workspace > .sheet-chrome {
+  grid-column: 1;
+}
+
+body[data-workbench-mode="export"] .workspace > .edit-tool-panel {
+  display: none;
+}
+
+body[data-workbench-mode="export"] .stats-panel {
+  display: flex;
+  grid-column: 2;
+  border-left: 1px solid var(--line);
+  background: #fff;
+  padding: 12px;
+}
+
+.mode-export-actions {
+  display: none;
+  flex: 0 0 auto;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+body[data-workbench-mode="export"] .mode-export-actions {
+  display: grid;
+}
+
+.mode-export-actions .export-format {
+  display: grid;
+  gap: 5px;
+  color: #555;
+  font-size: 10px;
+}
+
+.mode-export-actions select,
+.mode-export-actions button {
+  min-height: 38px;
+  border: 1px solid #d5d5d5;
+  border-radius: 6px;
+}
+
+.mode-export-actions #exportButton {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .app-shell,
+body[data-workbench-mode="edit"].focus-canvas-mode.stats-panel-collapsed .app-shell {
+  display: block;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .control-panel,
+body[data-workbench-mode="edit"].focus-canvas-mode .stats-panel {
+  display: none !important;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .workspace {
+  width: 100%;
+  grid-template-columns: 72px minmax(0, 1fr) 0 !important;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .workspace:has(> .edit-tool-panel.is-properties-open) {
+  grid-template-columns: 72px minmax(0, 1fr) 268px !important;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .workspace > .edit-tool-panel {
+  display: flex !important;
+}
+
+body[data-workbench-mode="edit"].focus-canvas-mode .workspace > .sheet-chrome {
+  grid-column: 2;
+}
+
+@media (max-width: 1100px) {
+  .workbench-mode-header {
+    grid-template-columns: 64px auto minmax(210px, 1fr);
+    padding: 0 10px;
+  }
+
+  .mode-header-brand strong,
+  .mode-project-copy {
+    display: none;
+  }
+
+  .workbench-mode-tabs {
+    min-width: 300px;
+  }
+
+  .workbench-mode-button {
+    min-width: 98px;
+  }
+
+  body[data-workbench-mode="edit"] .workspace {
+    grid-template-columns: 64px minmax(0, 1fr) 250px;
+  }
+
+  body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
+    width: 250px;
+  }
+
+  .editor-toolbar #cellInfo,
+  .editor-toolbar .view-tools {
+    display: none;
+  }
+}
+
+@media (max-width: 1320px) {
+  .editor-toolbar #cellInfo,
+  .editor-toolbar .view-tools {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .workbench-mode-header {
+    grid-template-columns: auto 1fr auto;
+    height: 62px;
+  }
+
+  .mode-header-mark {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+
+  .workbench-mode-tabs {
+    min-width: 0;
+    margin: 0 8px;
+  }
+
+  .workbench-mode-button {
+    min-width: 74px;
+    min-height: 38px;
+    font-size: 13px;
+  }
+
+  .mode-header-action span {
+    display: none;
+  }
+
+  .mode-header-action {
+    width: 38px;
+    padding: 0;
+  }
+
+  .app-shell,
+  body.stats-panel-collapsed .app-shell {
+    height: calc(100vh - 62px);
+  }
+
+  body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
+    top: 62px;
+  }
 }

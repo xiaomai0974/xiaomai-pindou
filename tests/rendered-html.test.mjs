@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import vm from "node:vm";
 
 const clientRoot = new URL("../dist/client/", import.meta.url);
 
@@ -47,17 +48,101 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
   assert.match(html, /id="pasteSelectionButton"/);
+  assert.match(html, /class="workbench-mode-header"/);
+  assert.match(html, /data-workbench-mode="transform"/);
+  assert.match(html, /data-workbench-mode="edit"/);
+  assert.match(html, /data-workbench-mode="export"/);
+  assert.match(html, /id="toolPropertiesCloseButton"/);
+  assert.doesNotMatch(html, /id="topExportModeButton"/);
+  assert.doesNotMatch(html, /data-sidebar-target="export"/);
+  assert.doesNotMatch(html, /id="smartOptimizeButton"/);
+  assert.doesNotMatch(html, /data-sidebar-target="generate"/);
+  assert.doesNotMatch(html, /id="generateButton"/);
+  assert.doesNotMatch(html, /id="traceReferenceSnapToggle"/);
+  assert.doesNotMatch(html, /id="traceReferenceZMode"/);
+  assert.match(html, /id="pendingPreviewBar"/);
+  assert.match(html, /id="confirmPreviewButton"/);
+  assert.match(html, /id="discardPreviewButton"/);
+  assert.match(html, /id="traceReferenceClearButton"/);
+  assert.match(html, /原图显示/);
+  assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
+  assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
+  assert.match(html, /<button id="showRawGridButton" class="is-active"/);
 });
 
-test("serves the current application script and stylesheet", async () => {
-  const [scriptResponse, styleResponse] = await Promise.all([
+test("serves the current application script, worker, and stylesheet", async () => {
+  const [scriptResponse, workerResponse, styleResponse] = await Promise.all([
     fetchFromWorker("/app.js"),
+    fetchFromWorker("/palette-worker.js"),
     fetchFromWorker("/styles.css"),
   ]);
   assert.equal(scriptResponse.status, 200);
+  assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
   const script = await scriptResponse.text();
-  assert.match(script, /function renderPattern\(\)/);
+  assert.match(script, /function renderPattern\(options = \{\}\)/);
+  assert.match(script, /render\.canvas\.partial/);
+  assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
+  assert.match(script, /codeVisibilityVersion: 2/);
+  assert.match(script, /new Worker\("palette-worker\.js/);
   assert.match(script, /function copySelectionPixels\(\)/);
-  assert.match(await styleResponse.text(), /\.canvas-wrap/);
+  assert.match(script, /function setupWorkbenchModes\(\)/);
+  assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
+  assert.match(script, /function confirmPendingPreview\(\)/);
+  assert.match(script, /function discardPendingPreview\(\)/);
+  assert.match(script, /function clearPreviewState\(options = \{\}\)/);
+  assert.match(script, /function setPendingPreview\(pattern, options = \{\}\)/);
+  assert.match(script, /function renderPendingPreview\(\)/);
+  assert.match(script, /layer === "aboveGrid"/);
+  assert.match(script, /state\.traceReference\.opacity = Number\(elements\.traceReferenceOpacity\.value\) \/ 100/);
+  assert.match(script, /drawPatternCellCodes\(dirtyBounds\);[\s\S]+drawReferenceLayer\(\);[\s\S]+drawSelectionOverlay\(dirtyBounds\);/);
+  assert.doesNotMatch(script, /applyPendingPreviewBeforeLeavingTransform/);
+  assert.match(script, /elements\.customSizeInput\.value = state\.gridWidth/);
+  assert.match(script, /elements\.customHeightInput\.value = state\.gridHeight/);
+  assert.doesNotMatch(script, /elements\.customWidth\.value/);
+  assert.match(await workerResponse.text(), /function mapPaletteIndices\(/);
+  const style = await styleResponse.text();
+  assert.match(style, /\.canvas-wrap/);
+  assert.match(style, /\.workbench-mode-header/);
+  assert.match(style, /\.pending-preview-bar/);
+  assert.match(style, /body\[data-workbench-mode="edit"\]/);
+});
+
+test("palette worker maps colors and preserves empty cells", async () => {
+  const source = await readFile(new URL("../public/palette-worker.js", import.meta.url), "utf8");
+  const messages = [];
+  let messageHandler = null;
+  const self = {
+    addEventListener(type, handler) {
+      if (type === "message") messageHandler = handler;
+    },
+    postMessage(message) {
+      messages.push(message);
+    },
+  };
+  vm.runInNewContext(source, { self, Math, Number, Boolean, Array, Int16Array, Error });
+  assert.equal(typeof messageHandler, "function");
+
+  messageHandler({
+    data: {
+      type: "mapPalette",
+      requestId: 7,
+      size: 2,
+      dither: false,
+      pixels: [
+        { r: 8, g: 8, b: 8, empty: false },
+        { r: 250, g: 250, b: 250, empty: false },
+        { r: 32, g: 30, b: 28, empty: false },
+        { r: 255, g: 255, b: 255, empty: true },
+      ],
+      palette: [
+        { rgb: { r: 0, g: 0, b: 0 } },
+        { rgb: { r: 255, g: 255, b: 255 } },
+      ],
+    },
+  });
+
+  assert.equal(messages[0].type, "mapped");
+  assert.equal(messages[0].requestId, 7);
+  assert.deepEqual(Array.from(messages[0].indices), [0, 1, 0, -1]);
 });

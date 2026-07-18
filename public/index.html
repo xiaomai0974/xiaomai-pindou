@@ -4,12 +4,38 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20260718-10" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
-    <script src="app.js" defer></script>
+    <script src="app.js?v=20260718-10" defer></script>
   </head>
   <body>
+    <header class="workbench-mode-header" aria-label="拼豆工作模式">
+      <div class="mode-header-brand">
+        <span class="mode-header-mark" aria-hidden="true">拼</span>
+        <strong>拼豆图案设计</strong>
+      </div>
+      <nav class="workbench-mode-tabs" role="tablist" aria-label="工作流程">
+        <button class="workbench-mode-button" data-workbench-mode="transform" role="tab" aria-selected="false" type="button">转图</button>
+        <button class="workbench-mode-button is-active" data-workbench-mode="edit" role="tab" aria-selected="true" type="button">编辑</button>
+        <button class="workbench-mode-button" data-workbench-mode="export" role="tab" aria-selected="false" type="button">导出</button>
+      </nav>
+      <div class="mode-header-project">
+        <div id="pendingPreviewBar" class="pending-preview-bar" role="status" hidden>
+          <span>参数已调整，当前是预览</span>
+          <button id="discardPreviewButton" type="button">放弃更改</button>
+          <button id="confirmPreviewButton" class="primary" type="button">确认应用</button>
+        </div>
+        <div class="mode-project-copy">
+          <strong id="topProjectName">小麦拼豆</strong>
+          <span id="topProjectStatus">未保存</span>
+        </div>
+        <button id="topSaveProjectButton" class="mode-header-action" type="button">
+          <i data-lucide="save" aria-hidden="true"></i>
+          <span>保存项目</span>
+        </button>
+      </div>
+    </header>
     <main class="app-shell">
       <aside class="panel control-panel simplified-sidebar" aria-label="拼豆生成设置">
         <div class="brand">
@@ -39,18 +65,10 @@
             <i data-lucide="sliders-horizontal" aria-hidden="true"></i>
             <span>图像设置</span>
           </button>
-          <button class="sidebar-rail-button rail-generate-button" data-sidebar-target="generate" type="button" title="生成图纸">
-            <i data-lucide="sparkles" aria-hidden="true"></i>
-            <span>生成</span>
-          </button>
           <span class="rail-spacer" aria-hidden="true"></span>
           <button class="sidebar-rail-button" data-sidebar-target="project" type="button" title="打开或保存项目">
             <i data-lucide="folder-open" aria-hidden="true"></i>
             <span>项目</span>
-          </button>
-          <button class="sidebar-rail-button" data-sidebar-target="export" type="button" title="导出图纸">
-            <i data-lucide="download" aria-hidden="true"></i>
-            <span>导出</span>
           </button>
         </nav>
 
@@ -229,29 +247,21 @@
               <option value="strong">强</option>
             </select>
           </label>
-        </section>
-
-        <section class="control-group sidebar-card generation-card">
-          <div class="group-title">
-            <span><b class="workflow-step">5</b>生成</span>
-            <small>一次完成</small>
+          <div class="matching-settings" aria-label="颜色匹配设置">
+            <div class="group-title">
+              <span>颜色匹配</span>
+              <small>默认使用原始匹配</small>
+            </div>
+            <label class="mini-check matching-accurate-toggle">
+              <input id="accurateMatchToggle" type="checkbox" checked />
+              <span>精准匹配</span>
+            </label>
+            <div class="segmented matching-view-options" role="group" aria-label="匹配结果视图">
+              <button id="showRawGridButton" class="is-active" type="button">原始匹配</button>
+              <button id="showFinalGridButton" type="button">最终效果</button>
+            </div>
+            <small class="setting-hint">原始匹配保留色板直配结果；最终效果包含减色和清理。</small>
           </div>
-          <button id="generateButton" class="primary" type="button">
-            <i data-lucide="sparkles" aria-hidden="true"></i>
-            生成并应用
-          </button>
-          <button id="applyPreviewButton" type="button" disabled hidden>
-            <i data-lucide="check" aria-hidden="true"></i>
-            确认应用
-          </button>
-          <button id="cancelPreviewButton" type="button" disabled hidden>
-            <i data-lucide="x" aria-hidden="true"></i>
-            取消预览
-          </button>
-          <button id="smartOptimizeButton" type="button">
-            <i data-lucide="wand-sparkles" aria-hidden="true"></i>
-            重新生成 / 智能优化
-          </button>
         </section>
 
         <details class="control-group sidebar-card advanced-settings">
@@ -410,6 +420,16 @@
             <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span>
           </button>
           <div class="tool-properties-popover">
+          <div class="tool-properties-heading">
+            <strong>画笔设置</strong>
+            <button id="toolPropertiesCloseButton" class="icon-button" type="button" title="收起画笔设置">
+              <i data-lucide="panel-right-close" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="tool-panel-current-color">
+            <span id="toolPanelColorSwatch" aria-hidden="true"></span>
+            <div><small>当前颜色</small><strong id="toolPanelColorName">H7 黑色</strong></div>
+          </div>
           <div class="brush-options">
             <label>
               画笔大小
@@ -426,6 +446,7 @@
               <button class="brush-size-preset is-active" data-brush-size="1" type="button">1</button>
               <button class="brush-size-preset" data-brush-size="2" type="button">2</button>
               <button class="brush-size-preset" data-brush-size="3" type="button">3</button>
+              <button class="brush-size-preset" data-brush-size="4" type="button">4</button>
               <button class="brush-size-preset" data-brush-size="5" type="button">5</button>
             </div>
             <label class="mini-check">
@@ -444,20 +465,23 @@
                 <option value="both">四向对称</option>
               </select>
             </label>
+          </div>
+          <details class="tool-advanced-actions">
+            <summary>选区与整图操作</summary>
             <div class="mirror-actions" role="group" aria-label="整图镜像">
               <button id="mirrorHorizontalButton" type="button">左右镜像</button>
               <button id="mirrorVerticalButton" type="button">上下镜像</button>
             </div>
-          </div>
-          <div class="tool-actions">
-            <button id="undoButton" type="button">撤回</button>
-            <button id="redoButton" type="button">重做</button>
-            <button id="fillSelectionButton" type="button">选区上色</button>
-            <button id="finishPenButton" type="button" hidden>完成钢笔</button>
-            <button id="copySelectionButton" type="button" disabled>复制选区</button>
-            <button id="pasteSelectionButton" type="button" disabled>粘贴选区</button>
-            <button id="clearSelectionButton" type="button">清空选区</button>
-          </div>
+            <div class="tool-actions">
+              <button id="undoButton" type="button">撤回</button>
+              <button id="redoButton" type="button">重做</button>
+              <button id="fillSelectionButton" type="button">选区上色</button>
+              <button id="finishPenButton" type="button" hidden>完成钢笔</button>
+              <button id="copySelectionButton" type="button" disabled>复制选区</button>
+              <button id="pasteSelectionButton" type="button" disabled>粘贴选区</button>
+              <button id="clearSelectionButton" type="button">清空选区</button>
+            </div>
+          </details>
           </div>
         </section>
 
@@ -520,6 +544,7 @@
           </div>
 
           <div class="editor-toolbar" aria-label="图纸编辑工具">
+            <div class="toolbar-history" aria-label="历史操作"></div>
             <div class="zoom-tools">
               <button id="zoomOutButton" class="icon-button" type="button" title="缩小">
                 <i data-lucide="minus" aria-hidden="true"></i>
@@ -531,6 +556,7 @@
               <button id="zoomResetButton" type="button">100%</button>
               <button id="fitButton" type="button">适配</button>
             </div>
+            <div class="top-parameter-toggles" aria-label="画布显示"></div>
             <div class="view-tools" role="group" aria-label="编辑视图">
               <button class="editor-view-option is-active" data-editor-view="grid" type="button">格子编辑</button>
               <button class="editor-view-option" data-editor-view="sheet" type="button">整张图纸</button>
@@ -548,7 +574,7 @@
               <strong id="currentColorName">H7 黑色</strong>
             </div>
             <span id="cellInfo">点选右侧颜色，再点图纸格子改色</span>
-            <div class="reference-toolbar" id="referenceToolbar">
+            <div class="reference-toolbar" id="referenceToolbar" hidden>
               <button id="referenceMenuButton" class="reference-menu-button" type="button" aria-expanded="false" aria-controls="referenceMenu">
                 <i data-lucide="image" aria-hidden="true"></i>
                 <span>参考图</span>
@@ -582,21 +608,25 @@
                 </label>
               </div>
             </div>
+            <button id="focusCanvasButton" class="tool-toggle" type="button">
+              <i data-lucide="maximize-2" aria-hidden="true"></i>
+              专注模式
+            </button>
             <div class="trace-reference-toolbar" id="traceReferenceToolbar" aria-label="画布描图参考">
+              <label class="trace-reference-upload" for="referenceInput" title="更换参考原图">
+                <i data-lucide="image-up" aria-hidden="true"></i>
+                <span>参考原图</span>
+              </label>
               <label class="trace-reference-toggle">
                 <input id="traceReferenceToggle" type="checkbox" checked />
-                <span>画布描图</span>
+                <span>显示</span>
               </label>
               <button id="traceReferenceAdjustButton" class="trace-adjust-button" type="button">调整参考图</button>
               <button id="traceReferenceLockButton" class="icon-button" type="button" title="锁定 / 解锁画布参考图">
                 <i data-lucide="lock" aria-hidden="true"></i>
               </button>
-              <select id="traceReferenceZMode" aria-label="画布参考图层级">
-                <option value="belowGrid" selected>格子下面</option>
-                <option value="aboveGrid">格子上面</option>
-              </select>
               <label class="trace-opacity-control">
-                <span>透明度</span>
+                <span>原图显示</span>
                 <input id="traceReferenceOpacity" type="range" min="0" max="100" value="35" step="5" />
                 <output id="traceReferenceOpacityLabel">35%</output>
               </label>
@@ -608,10 +638,9 @@
               </button>
               <button id="traceReferenceFitButton" type="button">适配</button>
               <button id="traceReferenceCenterButton" type="button">居中</button>
-              <label class="trace-snap-toggle">
-                <input id="traceReferenceSnapToggle" type="checkbox" />
-                <span>吸附格子</span>
-              </label>
+              <button id="traceReferenceClearButton" class="icon-button danger" type="button" title="清除参考原图">
+                <i data-lucide="trash-2" aria-hidden="true"></i>
+              </button>
             </div>
           </div>
 
@@ -691,17 +720,9 @@
           </section>
           <div class="color-diagnostic-tools" aria-label="颜色识别验证">
             <label class="mini-check">
-              <input id="accurateMatchToggle" type="checkbox" checked />
-              <span>准确匹配</span>
-            </label>
-            <label class="mini-check">
               <input id="colorDebugToggle" type="checkbox" />
               <span>颜色诊断</span>
             </label>
-            <div class="segmented mini-segmented" role="group" aria-label="Raw Final 对比">
-              <button id="showFinalGridButton" class="is-active" type="button">最终</button>
-              <button id="showRawGridButton" type="button">原始匹配</button>
-            </div>
             <small id="colorDebugInfo">开启后按住 Alt 点击格子，查看采样 RGB、LAB、候选 MARD 色号和后处理变化。</small>
           </div>
         </div>
