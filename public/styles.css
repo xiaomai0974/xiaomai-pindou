@@ -213,6 +213,133 @@ h2 {
   background: #fff !important;
 }
 
+.library-save-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 2px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 950;
+}
+
+.library-save-button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.library-local-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.project-library-list {
+  display: grid;
+  max-height: min(48vh, 480px);
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.project-library-empty {
+  margin: 0;
+  border: 1px dashed var(--line);
+  background: #fafafa;
+  padding: 18px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.project-library-item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 7px;
+}
+
+.project-library-item.is-current {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.project-library-thumbnail {
+  width: 76px;
+  height: 72px;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  object-fit: contain;
+}
+
+.project-library-content {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.project-library-content strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-library-content > span,
+.project-library-content time {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.project-library-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.project-library-actions button {
+  min-height: 25px;
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 2px 4px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.project-library-actions button.primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.project-library-actions button.danger {
+  color: #b4233d;
+}
+
+.project-file-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 2px;
+  padding-top: 9px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.project-file-heading small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .simplified-sidebar .project-file-toolbar {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3915,6 +4042,26 @@ body[data-workbench-mode="export"] .mode-export-actions {
   gap: 5px;
   color: #555;
   font-size: 10px;
+}
+
+.mode-export-actions .export-watermark-toggle {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d5d5d5;
+  border-radius: 6px;
+  background: #fff;
+  padding: 7px 9px;
+  color: #333;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mode-export-actions .export-watermark-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .mode-export-actions select,

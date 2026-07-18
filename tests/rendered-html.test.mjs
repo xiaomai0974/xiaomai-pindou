@@ -68,6 +68,12 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
   assert.match(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.match(html, /id="saveToLibraryButton"/);
+  assert.match(html, /id="projectLibraryList"/);
+  assert.match(html, /id="projectLibraryCount"/);
+  assert.match(html, /我做过的图纸/);
+  assert.match(html, /<input id="exportWatermarkToggle" type="checkbox" checked/);
+  assert.match(html, /添加“小麦拼豆”水印/);
 });
 
 test("serves the current application script, worker, and stylesheet", async () => {
@@ -100,6 +106,25 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /elements\.customSizeInput\.value = state\.gridWidth/);
   assert.match(script, /elements\.customHeightInput\.value = state\.gridHeight/);
   assert.doesNotMatch(script, /elements\.customWidth\.value/);
+  assert.match(script, /const PROJECT_DB_VERSION = 2/);
+  assert.match(script, /const LIBRARY_META_STORE_NAME = "libraryMeta"/);
+  assert.match(script, /const LIBRARY_DATA_STORE_NAME = "libraryData"/);
+  assert.match(script, /function saveLibraryProject\(/);
+  assert.match(script, /function renderProjectLibrary\(/);
+  assert.match(script, /function clearAutosaveProject\(/);
+  assert.match(script, /dirty: options\.dirty \?\? state\.projectDirty/);
+  const autosaveSource = script.slice(script.indexOf("async function autoSaveProject"), script.indexOf("function openProjectDb"));
+  assert.doesNotMatch(autosaveSource, /saveLibraryProject/);
+  assert.match(script, /state\.manualEditCount = state\.manualEditedCells\.size/);
+  assert.match(script, /\["auto", "max", "fixedPalette"\]\.includes\(paletteState\.colorConstraintMode\)/);
+  assert.match(script, /function drawReadableExportWatermark\(/);
+  assert.match(script, /const includeWatermark = options\.includeWatermark !== false/);
+  assert.match(script, /const maxLegendRows = 45/);
+  assert.match(script, /function capturePreviewCanvasSnapshot\(/);
+  assert.match(script, /function restorePreviewCanvasSnapshot\(/);
+  assert.match(script, /state\.fitMode === "center"/);
+  assert.match(script, /const codesVisibleBefore/);
+  assert.doesNotMatch(script, /function openAutosaveDb\(/);
   assert.match(await workerResponse.text(), /function mapPaletteIndices\(/);
   const style = await styleResponse.text();
   assert.match(style, /\.canvas-wrap/);

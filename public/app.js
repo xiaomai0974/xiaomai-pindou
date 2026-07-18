@@ -96,6 +96,9 @@ const PROJECT_FILE_EXTENSION = "xiaomai";
 const AUTOSAVE_DB_NAME = "xiaomai-pindou-projects";
 const AUTOSAVE_STORE_NAME = "projects";
 const AUTOSAVE_KEY = "latest";
+const PROJECT_DB_VERSION = 2;
+const LIBRARY_META_STORE_NAME = "libraryMeta";
+const LIBRARY_DATA_STORE_NAME = "libraryData";
 
 const state = {
   image: null,
@@ -120,7 +123,7 @@ const state = {
   showSelectedColorsOnly: false,
   dither: false,
   showGrid: true,
-  fitMode: "contain",
+  fitMode: "subject",
   removeTransparent: true,
   lineBoost: true,
   outlineMode: "light",
@@ -189,6 +192,7 @@ const state = {
   previewQualityMetrics: null,
   previewBackgroundMask: null,
   previewPreservesManualEdits: false,
+  previewCanvasSnapshot: null,
   rawMappedGrid: [],
   rawSampleData: [],
   rawDebugCandidates: [],
@@ -260,6 +264,7 @@ const state = {
   projectDirty: false,
   projectSavedAt: null,
   projectCreatedAt: null,
+  libraryProjectId: null,
   projectRestoring: false,
   autosaveTimer: null,
   autosaveStatusTimer: null,
@@ -269,6 +274,7 @@ const state = {
   toolboxDrag: null,
   toolboxMoveActive: false,
   toolboxLocked: false,
+  exportWatermarkEnabled: true,
   pendingOptimizePlans: [],
 };
 
@@ -308,6 +314,9 @@ const elements = {
   saveProjectButton: document.querySelector("#saveProjectButton"),
   projectFileInput: document.querySelector("#projectFileInput"),
   projectSaveStatus: document.querySelector("#projectSaveStatus"),
+  saveToLibraryButton: document.querySelector("#saveToLibraryButton"),
+  projectLibraryCount: document.querySelector("#projectLibraryCount"),
+  projectLibraryList: document.querySelector("#projectLibraryList"),
   sizeLabel: document.querySelector("#sizeLabel"),
   colorLabel: document.querySelector("#colorLabel"),
   fitModeLabel: document.querySelector("#fitModeLabel"),
@@ -375,6 +384,7 @@ const elements = {
   discardPreviewButton: document.querySelector("#discardPreviewButton"),
   exportButton: document.querySelector("#exportButton"),
   exportFormat: document.querySelector("#exportFormat"),
+  exportWatermarkToggle: document.querySelector("#exportWatermarkToggle"),
   coverButton: document.querySelector("#coverButton"),
   resetButton: document.querySelector("#resetButton"),
   copyListButton: document.querySelector("#copyListButton"),
@@ -1019,6 +1029,8 @@ function setupEvents() {
   setupPaletteEventDelegation();
   elements.openProjectButton.addEventListener("click", () => elements.projectFileInput.click());
   elements.saveProjectButton.addEventListener("click", saveProjectFile);
+  elements.saveToLibraryButton.addEventListener("click", saveCurrentProjectToLibrary);
+  elements.projectLibraryList.addEventListener("click", handleProjectLibraryAction);
   elements.projectFileInput.addEventListener("change", handleProjectFileOpen);
   elements.imageInput.addEventListener("change", handleImageUpload);
   elements.recropButton.addEventListener("click", openCurrentImageCropper);
@@ -1049,7 +1061,9 @@ function setupEvents() {
   elements.appModeOptions.forEach((button) => {
     button.addEventListener("click", () => setAppMode(button.dataset.appMode));
   });
-  elements.newBlankCanvasButton.addEventListener("click", () => createBlankCanvas({ confirmReplace: true }));
+  elements.newBlankCanvasButton.addEventListener("click", () =>
+    createBlankCanvas({ confirmReplace: true, resetLibraryIdentity: true }),
+  );
   elements.brushSizeInput.addEventListener("input", () => setBrushSize(Number(elements.brushSizeInput.value)));
   document.querySelectorAll(".brush-size-preset").forEach((button) => {
     button.addEventListener("click", () => setBrushSize(Number(button.dataset.brushSize)));
@@ -1392,8 +1406,14 @@ function setupEvents() {
     renderConstraintPalette();
   });
   elements.exportButton.addEventListener("click", exportPattern);
+  elements.exportWatermarkToggle.addEventListener("change", () => {
+    state.exportWatermarkEnabled = elements.exportWatermarkToggle.checked;
+    markProjectDirty();
+  });
   elements.coverButton.addEventListener("click", exportPattern);
-  elements.resetButton.addEventListener("click", resetApp);
+  elements.resetButton.addEventListener("click", () => {
+    if (confirmReplaceCurrentProject("重置")) resetApp();
+  });
   elements.copyListButton.addEventListener("click", copyBeadList);
   elements.zoomInButton.addEventListener("click", () => setZoom(state.zoom + state.zoomState.step));
   elements.zoomOutButton.addEventListener("click", () => setZoom(state.zoom - state.zoomState.step));
@@ -1480,7 +1500,7 @@ function setupEvents() {
       document.querySelectorAll(".fit-option").forEach((option) => option.classList.remove("is-active"));
       button.classList.add("is-active");
       state.fitMode = button.dataset.fit;
-      elements.fitModeLabel.textContent = state.fitMode === "subject" ? "主体放大" : "居中裁剪";
+      elements.fitModeLabel.textContent = state.fitMode === "subject" ? "主体完整" : "居中裁剪";
       requestPreviewUpdate();
     });
   });
@@ -1635,6 +1655,7 @@ function setupWorkbenchLayout() {
     const button = railButtons.find((item) => item.dataset.sidebarTarget === key);
     button?.classList.add("is-active");
     button?.setAttribute("aria-expanded", "true");
+    if (key === "project") renderProjectLibrary();
   };
 
   railButtons.forEach((button) => {
@@ -1874,6 +1895,14 @@ function applyCustomSize() {
     elements.customHeightInput.value = activeGridHeight();
     return;
   }
+  if (state.appMode !== "draw" && state.pattern.length) {
+    capturePreviewCanvasSnapshot();
+    if (!state.image) {
+      restorePreviewCanvasSnapshot();
+      elements.cellInfo.textContent = "当前项目没有原图，不能重新计算尺寸；图纸已保持不变。";
+      return;
+    }
+  }
   state.gridWidth = clampRange(width, 16, 160);
   state.gridHeight = clampRange(height, 16, 160);
   state.gridSize = Math.max(state.gridWidth, state.gridHeight);
@@ -1933,6 +1962,8 @@ function syncColorLimitControls() {
 }
 
 function setPatternMode(mode) {
+  const preserveConfirmedDimensions = state.pattern.length && !state.image;
+  if (state.pattern.length && state.image) capturePreviewCanvasSnapshot();
   state.patternMode = mode;
   elements.pixelModeOptions.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.patternMode === mode);
@@ -1941,7 +1972,7 @@ function setPatternMode(mode) {
   elements.patternModeLabel.textContent = mode === "pixelPattern" ? "像素图纸" : "普通图纸";
 
   if (mode === "pixelPattern") {
-    if (![30, 32, 34, 40, 48, 64].includes(state.gridSize)) {
+    if (!preserveConfirmedDimensions && ![30, 32, 34, 40, 48, 64].includes(state.gridSize)) {
       state.gridSize = 32;
       state.gridWidth = 32;
       state.gridHeight = 32;
@@ -1956,7 +1987,7 @@ function setPatternMode(mode) {
     state.viewMode = "pixel";
     applyPixelSizeDefaults(true);
   } else {
-    if (state.gridSize < 48) {
+    if (!preserveConfirmedDimensions && state.gridSize < 48) {
       state.gridSize = 48;
       state.gridWidth = Math.max(48, activeGridWidth());
       state.gridHeight = Math.max(48, activeGridHeight());
@@ -1966,7 +1997,10 @@ function setPatternMode(mode) {
 
   syncControlsFromState();
   if (state.image) requestPreviewUpdate("图纸模式预览已更新，请确认应用。");
-  else renderPattern();
+  else {
+    renderPattern();
+    if (preserveConfirmedDimensions) elements.cellInfo.textContent = "当前没有原图，已切换显示模式并保留原图纸尺寸。";
+  }
 }
 
 function setAppMode(mode) {
@@ -2009,6 +2043,11 @@ function createBlankCanvas(options = {}) {
     return;
   }
   if (state.pattern.length && !state.suspendHistory) pushHistory();
+  if (options.resetLibraryIdentity) {
+    state.libraryProjectId = null;
+    state.projectCreatedAt = null;
+    state.fileName = "手绘图纸";
+  }
   const fill = state.pixelBackground === "white" ? whiteBeadColor() : EMPTY_CELL;
   state.pattern = Array.from({ length: state.gridSize * state.gridSize }, (_, index) => {
     const x = index % state.gridSize;
@@ -2173,6 +2212,10 @@ function syncControlsFromState() {
   document.querySelectorAll(".view-option").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.view === state.viewMode);
   });
+  document.querySelectorAll(".fit-option").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.fit === state.fitMode);
+  });
+  elements.fitModeLabel.textContent = state.fitMode === "center" ? "居中裁剪" : "主体完整";
   document.querySelectorAll(".pixel-bg-option").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.bg === state.pixelBackground);
   });
@@ -2342,9 +2385,16 @@ function serializeGrid(pattern) {
   return Array.isArray(pattern) ? pattern.map((item) => (item?.empty ? "__EMPTY__" : item?.code || "__EMPTY__")) : [];
 }
 
-function deserializeGrid(codes) {
+function deserializeGrid(codes, expectedLength = 0) {
   if (!Array.isArray(codes)) return [];
-  return codes.map((code) => (code === "__EMPTY__" || !code ? EMPTY_CELL : paletteColorByCode(code) || fallbackPaletteColor()));
+  const safeLength = expectedLength > 0 ? Math.min(codes.length, expectedLength) : codes.length;
+  const grid = codes
+    .slice(0, safeLength)
+    .map((code) => (code === "__EMPTY__" || !code ? EMPTY_CELL : paletteColorByCode(code) || fallbackPaletteColor()));
+  if (expectedLength > 0 && grid.length) {
+    while (grid.length < expectedLength) grid.push(EMPTY_CELL);
+  }
+  return grid;
 }
 
 function maskToArray(mask) {
@@ -2377,12 +2427,6 @@ function serializableTraceReference() {
   return trace;
 }
 
-function projectFileName() {
-  const raw = (state.fileName || state.sourceImageState?.fileName || "未标题-1").replace(/\.[^.]+$/, "");
-  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").trim() || "未标题-1";
-  return `${safe}.${PROJECT_FILE_EXTENSION}`;
-}
-
 function buildProjectData() {
   const now = new Date().toISOString();
   if (!state.projectCreatedAt) state.projectCreatedAt = now;
@@ -2401,6 +2445,9 @@ function buildProjectData() {
     createdAt: state.projectCreatedAt,
     updatedAt: now,
     fileName: state.fileName,
+    libraryState: {
+      id: state.libraryProjectId,
+    },
     canvas: {
       width: activeGridWidth(),
       height: activeGridHeight(),
@@ -2471,6 +2518,9 @@ function buildProjectData() {
       editorView: state.editorView,
       viewMode: state.viewMode,
     },
+    exportSettings: {
+      watermarkEnabled: state.exportWatermarkEnabled,
+    },
     referenceImageState: {
       imageData: referenceImageData,
       name: state.referenceName,
@@ -2507,13 +2557,43 @@ function downloadBlob(blob, fileName) {
   window.setTimeout(() => URL.revokeObjectURL(url), 800);
 }
 
+function hasMeaningfulProject() {
+  return Boolean(state.pattern.length || state.image || state.referenceImage);
+}
+
+function confirmReplaceCurrentProject(actionLabel = "继续") {
+  if (!state.projectDirty || !hasMeaningfulProject()) return true;
+  return window.confirm(`当前图纸还有未保存修改。${actionLabel}会替换当前内容，确定继续吗？`);
+}
+
+function projectFileNameForData(projectData) {
+  const raw = (projectData?.fileName || "未标题-1").replace(/\.[^.]+$/, "");
+  const safe = raw.replace(/[\\/:*?"<>|]/g, "_").trim() || "未标题-1";
+  return `${safe}.${PROJECT_FILE_EXTENSION}`;
+}
+
+function downloadProjectData(projectData) {
+  const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: "application/json;charset=utf-8" });
+  downloadBlob(blob, projectFileNameForData(projectData));
+}
+
+async function requestPersistentStorage() {
+  try {
+    await navigator.storage?.persist?.();
+  } catch (error) {
+    console.warn("无法申请持久化存储", error);
+  }
+}
+
 async function saveProjectFile() {
   try {
     const projectData = buildProjectData();
-    const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: "application/json;charset=utf-8" });
-    downloadBlob(blob, projectFileName());
-    markProjectSaved("已保存项目文件");
-    await writeAutosaveProject(projectData);
+    await saveLibraryProject(projectData);
+    await writeAutosaveProject(projectData, { dirty: false });
+    await requestPersistentStorage();
+    downloadProjectData(projectData);
+    markProjectSaved("已下载并保存到图纸库");
+    await renderProjectLibrary();
   } catch (error) {
     console.error("保存项目失败", error);
     updateProjectSaveStatus("保存失败");
@@ -2525,10 +2605,12 @@ async function handleProjectFileOpen(event) {
   const [file] = event.target.files;
   if (!file) return;
   try {
+    if (!confirmReplaceCurrentProject("导入项目")) return;
     const text = await file.text();
     const data = JSON.parse(text);
-    await restoreProjectData(data, { fileName: file.name });
+    await restoreProjectData(data, { fileName: file.name, libraryProjectId: null });
     markProjectSaved("项目已打开");
+    await writeAutosaveProject(buildProjectData(), { dirty: false });
     elements.cellInfo.textContent = `已打开项目：${file.name}，可以继续编辑和导出。`;
   } catch (error) {
     console.error("打开项目失败", error);
@@ -2564,6 +2646,7 @@ async function restoreProjectData(projectData, options = {}) {
     const paletteState = projectData.paletteState || {};
     const settings = projectData.settings || {};
     const display = projectData.displaySettings || {};
+    const exportSettings = projectData.exportSettings || {};
     const reference = projectData.referenceImageState || {};
     const trace = projectData.canvasReferenceLayerState || {};
     const draw = projectData.drawModeState || {};
@@ -2577,6 +2660,9 @@ async function restoreProjectData(projectData, options = {}) {
     state.patternSize = state.gridSize;
     state.fileName = (options.fileName || projectData.fileName || source.fileName || "小麦拼豆项目").replace(/\.(xiaomai|xmbd)$/i, "");
     state.projectCreatedAt = projectData.createdAt || new Date().toISOString();
+    state.libraryProjectId = Object.prototype.hasOwnProperty.call(options, "libraryProjectId")
+      ? options.libraryProjectId
+      : projectData.libraryState?.id || null;
     state.sourceImageState = { ...source };
     state.image = await loadImageFromDataUrl(sourceData);
     if (state.image) {
@@ -2587,17 +2673,25 @@ async function restoreProjectData(projectData, options = {}) {
     }
 
     state.pixelBackground = canvas.backgroundMode || "white";
-    state.pattern = deserializeGrid(gridState.editGrid);
-    state.previewPattern = deserializeGrid(gridState.previewGrid);
-    state.rawMappedGrid = deserializeGrid(gridState.rawMappedGrid);
-    state.finalGrid = deserializeGrid(gridState.finalGrid);
+    const expectedGridLength = state.gridSize * state.gridSize;
+    state.pattern = deserializeGrid(gridState.editGrid, expectedGridLength);
+    state.previewPattern = deserializeGrid(gridState.previewGrid, expectedGridLength);
+    state.rawMappedGrid = deserializeGrid(gridState.rawMappedGrid, expectedGridLength);
+    state.finalGrid = deserializeGrid(gridState.finalGrid, expectedGridLength);
     state.backgroundMask = arrayToMask(gridState.backgroundMask, state.pattern.length);
     state.previewBackgroundMask = arrayToMask(gridState.previewBackgroundMask, state.previewPattern.length);
     state.isPreviewDirty = Boolean(gridState.isPreviewDirty && state.previewPattern.length);
-    state.manualEditedCells = new Set(Array.isArray(gridState.manualEditedCells) ? gridState.manualEditedCells : []);
+    state.manualEditedCells = new Set(
+      (Array.isArray(gridState.manualEditedCells) ? gridState.manualEditedCells : []).filter(
+        (index) => Number.isInteger(index) && index >= 0 && index < expectedGridLength,
+      ),
+    );
+    state.manualEditCount = state.manualEditedCells.size;
 
     state.colorLimit = clampColorLimit(paletteState.maxColors || state.colorLimit);
-    state.colorMode = "max";
+    state.colorMode = ["auto", "max", "fixedPalette"].includes(paletteState.colorConstraintMode)
+      ? paletteState.colorConstraintMode
+      : "max";
     state.allowedColorCodes = new Set(paletteState.allowedPalette || []);
     state.lockedColorCodes = new Set(paletteState.lockedColors || []);
     state.disabledColorCodes = new Set(paletteState.disabledColors || []);
@@ -2628,6 +2722,7 @@ async function restoreProjectData(projectData, options = {}) {
     state.dither = Boolean(settings.ditherEnabled);
     state.removeTransparent = settings.removeTransparent !== false;
     state.fitMode = settings.fitMode || "subject";
+    if (state.fitMode === "contain") state.fitMode = "subject";
     state.patternMode = settings.patternMode || state.patternMode || "illustration";
     state.processingProfile = settings.processingProfile || recommendedProcessingProfile(state.gridSize);
     state.minRegionSize = Number(settings.minRegionSize || state.minRegionSize || 4);
@@ -2643,6 +2738,8 @@ async function restoreProjectData(projectData, options = {}) {
     state.viewMode = display.viewMode || "pixel";
     state.editorView = display.editorView || "grid";
     state.zoom = Number(display.zoom || 1);
+    state.exportWatermarkEnabled = exportSettings.watermarkEnabled !== false;
+    elements.exportWatermarkToggle.checked = state.exportWatermarkEnabled;
 
     state.referenceImage = await loadImageFromDataUrl(referenceData);
     state.referenceImageUrl = referenceData;
@@ -2743,10 +2840,11 @@ function scheduleProjectAutoSave(delay = 2000) {
 
 async function autoSaveProject() {
   if (state.projectRestoring) return;
-  if (!state.pattern.length && !state.image && !state.referenceImage) return;
+  if (!hasMeaningfulProject()) return;
   try {
     updateProjectSaveStatus("自动保存中");
-    await writeAutosaveProject(buildProjectData());
+    const projectData = buildProjectData();
+    await writeAutosaveProject(projectData, { dirty: state.projectDirty });
     updateProjectSaveStatus(state.projectDirty ? "自动保存成功 / 未保存" : "已保存");
     window.clearTimeout(state.autosaveStatusTimer);
     state.autosaveStatusTimer = window.setTimeout(() => {
@@ -2758,61 +2856,370 @@ async function autoSaveProject() {
   }
 }
 
-function openAutosaveDb() {
+function openProjectDb() {
   return new Promise((resolve, reject) => {
     if (!("indexedDB" in window)) {
       reject(new Error("当前环境不支持 IndexedDB。"));
       return;
     }
-    const request = indexedDB.open(AUTOSAVE_DB_NAME, 1);
+    const request = indexedDB.open(AUTOSAVE_DB_NAME, PROJECT_DB_VERSION);
     request.onupgradeneeded = () => {
-      request.result.createObjectStore(AUTOSAVE_STORE_NAME);
+      const db = request.result;
+      if (!db.objectStoreNames.contains(AUTOSAVE_STORE_NAME)) db.createObjectStore(AUTOSAVE_STORE_NAME);
+      const metaStore = db.objectStoreNames.contains(LIBRARY_META_STORE_NAME)
+        ? request.transaction.objectStore(LIBRARY_META_STORE_NAME)
+        : db.createObjectStore(LIBRARY_META_STORE_NAME, { keyPath: "id" });
+      if (!metaStore.indexNames.contains("updatedAt")) metaStore.createIndex("updatedAt", "updatedAt");
+      if (!db.objectStoreNames.contains(LIBRARY_DATA_STORE_NAME)) {
+        db.createObjectStore(LIBRARY_DATA_STORE_NAME, { keyPath: "id" });
+      }
     };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error("图纸库正在被其他页面使用，请关闭旧页面后重试。"));
+  });
+}
+
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
 }
 
-async function writeAutosaveProject(data) {
-  const db = await openAutosaveDb();
+function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readwrite");
-    transaction.objectStore(AUTOSAVE_STORE_NAME).put(data, AUTOSAVE_KEY);
-    transaction.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    transaction.onerror = () => {
-      db.close();
-      reject(transaction.error);
-    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("本地存储事务失败。"));
+    transaction.onabort = () => reject(transaction.error || new Error("本地存储事务已取消。"));
   });
 }
 
+async function writeAutosaveProject(data, options = {}) {
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readwrite");
+    transaction.objectStore(AUTOSAVE_STORE_NAME).put(
+      {
+        schemaVersion: 2,
+        dirty: options.dirty ?? state.projectDirty,
+        projectId: state.libraryProjectId,
+        updatedAt: data.updatedAt || new Date().toISOString(),
+        payload: data,
+      },
+      AUTOSAVE_KEY,
+    );
+    await transactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
+
 async function readAutosaveProject() {
-  const db = await openAutosaveDb();
-  return new Promise((resolve, reject) => {
+  const db = await openProjectDb();
+  try {
     const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readonly");
-    const request = transaction.objectStore(AUTOSAVE_STORE_NAME).get(AUTOSAVE_KEY);
-    request.onsuccess = () => {
-      db.close();
-      resolve(request.result || null);
+    const raw = await idbRequest(transaction.objectStore(AUTOSAVE_STORE_NAME).get(AUTOSAVE_KEY));
+    await transactionDone(transaction);
+    if (!raw) return null;
+    if (raw.payload) return raw;
+    return {
+      schemaVersion: 1,
+      dirty: true,
+      projectId: raw.libraryState?.id || null,
+      updatedAt: raw.updatedAt,
+      payload: raw,
     };
-    request.onerror = () => {
-      db.close();
-      reject(request.error);
-    };
-  });
+  } finally {
+    db.close();
+  }
+}
+
+async function clearAutosaveProject() {
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readwrite");
+    transaction.objectStore(AUTOSAVE_STORE_NAME).delete(AUTOSAVE_KEY);
+    await transactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
+
+function createLibraryProjectId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `pattern-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function projectDataHasContent(projectData) {
+  return Boolean(
+    projectData?.gridState?.editGrid?.length ||
+      projectData?.sourceImageState?.croppedImageData ||
+      projectData?.sourceImageState?.originalImageData ||
+      projectData?.referenceImageState?.imageData,
+  );
+}
+
+function compactProjectDataForLibrary(projectData) {
+  const compact = typeof structuredClone === "function" ? structuredClone(projectData) : JSON.parse(JSON.stringify(projectData));
+  const source = compact.sourceImageState || {};
+  if (source.originalImageData && source.originalImageData === source.croppedImageData) source.originalImageData = "";
+  if (compact.canvasReferenceLayerState && compact.referenceImageState?.imageData) {
+    compact.canvasReferenceLayerState.imageData = "";
+  }
+  return compact;
+}
+
+function createProjectThumbnail() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 240;
+  canvas.height = 180;
+  const thumbnailCtx = canvas.getContext("2d");
+  thumbnailCtx.fillStyle = "#fffdf8";
+  thumbnailCtx.fillRect(0, 0, canvas.width, canvas.height);
+  const widthCells = activeGridWidth();
+  const heightCells = activeGridHeight();
+  const cell = Math.max(1, Math.min(216 / widthCells, 144 / heightCells));
+  const plotWidth = widthCells * cell;
+  const plotHeight = heightCells * cell;
+  const startX = (canvas.width - plotWidth) / 2;
+  const startY = 24 + (144 - plotHeight) / 2;
+  thumbnailCtx.fillStyle = "#fff";
+  thumbnailCtx.fillRect(startX, startY, plotWidth, plotHeight);
+  for (let y = 0; y < heightCells; y += 1) {
+    for (let x = 0; x < widthCells; x += 1) {
+      const item = state.pattern[y * state.gridSize + x];
+      if (!item || item.empty) continue;
+      thumbnailCtx.fillStyle = item.hex;
+      thumbnailCtx.fillRect(startX + x * cell, startY + y * cell, Math.ceil(cell), Math.ceil(cell));
+    }
+  }
+  thumbnailCtx.fillStyle = "#111";
+  thumbnailCtx.font = "700 12px Microsoft YaHei, sans-serif";
+  thumbnailCtx.fillText(state.fileName || "未命名图纸", 12, 16);
+  return canvas.toDataURL("image/webp", 0.82);
+}
+
+async function saveLibraryProject(projectData = buildProjectData()) {
+  if (!projectDataHasContent(projectData)) throw new Error("当前还没有可以保存的图纸。请先上传图片或新建画布。");
+  const previousId = state.libraryProjectId;
+  const id = previousId || createLibraryProjectId();
+  const savedAt = new Date().toISOString();
+  state.libraryProjectId = id;
+  projectData.libraryState = { id };
+  const payload = compactProjectDataForLibrary(projectData);
+  const meta = {
+    id,
+    name: projectData.fileName || "未命名图纸",
+    nameLower: (projectData.fileName || "未命名图纸").toLocaleLowerCase(),
+    createdAt: projectData.createdAt || savedAt,
+    updatedAt: projectData.updatedAt || savedAt,
+    savedAt,
+    width: Number(projectData.canvas?.width || activeGridWidth()),
+    height: Number(projectData.canvas?.height || activeGridHeight()),
+    beadCount: totalBeadCount(),
+    colorCount: state.counts.size,
+    thumbnail: createProjectThumbnail(),
+    projectFileVersion: projectData.version || PROJECT_FILE_VERSION,
+  };
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction([LIBRARY_META_STORE_NAME, LIBRARY_DATA_STORE_NAME], "readwrite");
+    transaction.objectStore(LIBRARY_META_STORE_NAME).put(meta);
+    transaction.objectStore(LIBRARY_DATA_STORE_NAME).put({ id, payload });
+    await transactionDone(transaction);
+    return id;
+  } catch (error) {
+    state.libraryProjectId = previousId;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
+async function listLibraryProjectMeta() {
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction(LIBRARY_META_STORE_NAME, "readonly");
+    const records = await idbRequest(transaction.objectStore(LIBRARY_META_STORE_NAME).getAll());
+    await transactionDone(transaction);
+    return records.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+  } finally {
+    db.close();
+  }
+}
+
+async function readLibraryProject(id) {
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction(LIBRARY_DATA_STORE_NAME, "readonly");
+    const record = await idbRequest(transaction.objectStore(LIBRARY_DATA_STORE_NAME).get(id));
+    await transactionDone(transaction);
+    return record?.payload || null;
+  } finally {
+    db.close();
+  }
+}
+
+async function removeLibraryProject(id) {
+  const db = await openProjectDb();
+  try {
+    const transaction = db.transaction([LIBRARY_META_STORE_NAME, LIBRARY_DATA_STORE_NAME], "readwrite");
+    transaction.objectStore(LIBRARY_META_STORE_NAME).delete(id);
+    transaction.objectStore(LIBRARY_DATA_STORE_NAME).delete(id);
+    await transactionDone(transaction);
+  } finally {
+    db.close();
+  }
+}
+
+function appendLibraryAction(actions, label, action, id, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.dataset.libraryAction = action;
+  button.dataset.libraryId = id;
+  if (className) button.className = className;
+  actions.appendChild(button);
+}
+
+async function renderProjectLibrary() {
+  if (!elements.projectLibraryList) return;
+  elements.projectLibraryList.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "project-library-empty";
+  loading.textContent = "正在读取图纸库…";
+  elements.projectLibraryList.appendChild(loading);
+  try {
+    const records = await listLibraryProjectMeta();
+    elements.projectLibraryCount.textContent = `${records.length} 张`;
+    elements.projectLibraryList.replaceChildren();
+    if (!records.length) {
+      const empty = document.createElement("p");
+      empty.className = "project-library-empty";
+      empty.textContent = "还没有保存过的图纸。";
+      elements.projectLibraryList.appendChild(empty);
+      return;
+    }
+    records.forEach((record) => {
+      const card = document.createElement("article");
+      card.className = "project-library-item";
+      if (record.id === state.libraryProjectId) card.classList.add("is-current");
+      const image = document.createElement("img");
+      image.className = "project-library-thumbnail";
+      image.alt = "";
+      image.loading = "lazy";
+      image.src = record.thumbnail || "";
+      const content = document.createElement("div");
+      content.className = "project-library-content";
+      const title = document.createElement("strong");
+      title.textContent = record.name || "未命名图纸";
+      const meta = document.createElement("span");
+      meta.textContent = `${record.width}×${record.height} · ${record.beadCount || 0}颗 · ${record.colorCount || 0}色`;
+      const date = document.createElement("time");
+      date.dateTime = record.updatedAt || "";
+      date.textContent = record.updatedAt ? new Date(record.updatedAt).toLocaleString("zh-CN", { dateStyle: "short", timeStyle: "short" }) : "";
+      const actions = document.createElement("div");
+      actions.className = "project-library-actions";
+      appendLibraryAction(actions, "打开", "open", record.id, "primary");
+      appendLibraryAction(actions, "下载", "download", record.id);
+      appendLibraryAction(actions, "删除", "delete", record.id, "danger");
+      content.append(title, meta, date, actions);
+      card.append(image, content);
+      elements.projectLibraryList.appendChild(card);
+    });
+  } catch (error) {
+    console.error("读取图纸库失败", error);
+    elements.projectLibraryCount.textContent = "读取失败";
+    const failure = document.createElement("p");
+    failure.className = "project-library-empty";
+    failure.textContent = `图纸库读取失败：${error.message || error}`;
+    elements.projectLibraryList.replaceChildren(failure);
+  }
+}
+
+async function saveCurrentProjectToLibrary() {
+  try {
+    const projectData = buildProjectData();
+    await saveLibraryProject(projectData);
+    await writeAutosaveProject(projectData, { dirty: false });
+    await requestPersistentStorage();
+    markProjectSaved("已保存到图纸库");
+    elements.cellInfo.textContent = "当前图纸已保存到“我做过的图纸”，以后可直接打开。";
+    await renderProjectLibrary();
+  } catch (error) {
+    console.error("保存到图纸库失败", error);
+    updateProjectSaveStatus("图纸库保存失败");
+    elements.cellInfo.textContent = `保存到图纸库失败：${error.message || error}`;
+  }
+}
+
+async function openLibraryProject(id) {
+  if (!confirmReplaceCurrentProject("打开其他图纸")) return;
+  try {
+    const projectData = await readLibraryProject(id);
+    if (!projectData) throw new Error("这张图纸已经不存在。" );
+    await restoreProjectData(projectData, { fileName: projectData.fileName, libraryProjectId: id });
+    markProjectSaved("已打开图纸库项目");
+    await writeAutosaveProject(buildProjectData(), { dirty: false });
+    elements.cellInfo.textContent = `已从图纸库打开：${projectData.fileName || "未命名图纸"}`;
+    await renderProjectLibrary();
+  } catch (error) {
+    console.error("打开图纸库项目失败", error);
+    elements.cellInfo.textContent = `打开图纸失败：${error.message || error}`;
+  }
+}
+
+async function downloadLibraryProject(id) {
+  try {
+    const projectData = await readLibraryProject(id);
+    if (!projectData) throw new Error("这张图纸已经不存在。" );
+    downloadProjectData(projectData);
+  } catch (error) {
+    elements.cellInfo.textContent = `下载图纸失败：${error.message || error}`;
+  }
+}
+
+async function deleteLibraryProject(id) {
+  const actionButton = [...elements.projectLibraryList.querySelectorAll("button[data-library-id]")].find(
+    (button) => button.dataset.libraryId === id,
+  );
+  const metaTitle = actionButton?.closest(".project-library-item")?.querySelector("strong")?.textContent;
+  if (!window.confirm(`确定从图纸库删除“${metaTitle || "这张图纸"}”吗？此操作无法撤销。`)) return;
+  try {
+    if (id === state.libraryProjectId) {
+      window.clearTimeout(state.autosaveTimer);
+      state.libraryProjectId = null;
+    }
+    await removeLibraryProject(id);
+    elements.cellInfo.textContent = "已从图纸库删除。当前画布内容仍然保留。";
+    await renderProjectLibrary();
+  } catch (error) {
+    elements.cellInfo.textContent = `删除图纸失败：${error.message || error}`;
+  }
+}
+
+function handleProjectLibraryAction(event) {
+  const button = event.target.closest("button[data-library-action]");
+  if (!button) return;
+  const { libraryAction, libraryId } = button.dataset;
+  if (libraryAction === "open") openLibraryProject(libraryId);
+  if (libraryAction === "download") downloadLibraryProject(libraryId);
+  if (libraryAction === "delete") deleteLibraryProject(libraryId);
 }
 
 async function checkAutosaveRecovery() {
   try {
     if (state.pattern.length || state.image) return;
-    const data = await readAutosaveProject();
-    if (!data?.gridState?.editGrid?.length) return;
-    const updatedAt = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : "上次";
-    if (!window.confirm(`检测到未保存项目（${updatedAt}），是否恢复？`)) return;
-    await restoreProjectData(data, { fileName: data.fileName || "自动保存项目" });
+    const record = await readAutosaveProject();
+    const data = record?.payload;
+    if (!record?.dirty || !projectDataHasContent(data)) return;
+    const updatedAt = record.updatedAt ? new Date(record.updatedAt).toLocaleString() : "上次";
+    if (!window.confirm(`检测到未保存项目（${updatedAt}），是否恢复？`)) {
+      await clearAutosaveProject();
+      return;
+    }
+    await restoreProjectData(data, { fileName: data.fileName || "自动保存项目", libraryProjectId: record.projectId || null });
     markProjectDirty("已恢复自动保存 / 未保存");
     elements.cellInfo.textContent = "已从自动保存恢复项目。请点击“保存项目”导出 .xiaomai 文件。";
   } catch (error) {
@@ -2822,6 +3229,10 @@ async function checkAutosaveRecovery() {
 
 function handleImageUpload(event) {
   const [file] = event.target.files;
+  if (file && !confirmReplaceCurrentProject("上传新图片")) {
+    event.target.value = "";
+    return;
+  }
   elements.projectMeta.textContent = file ? `已选择图片：${file.name}，正在读取...` : "没有读取到图片文件，请重新选择";
   elements.cellInfo.textContent = file ? "正在读取图片..." : "没有读取到图片文件，请重新选择";
   loadImageFile(file);
@@ -2843,6 +3254,7 @@ function handleDrop(event) {
   event.preventDefault();
   elements.uploadZone.classList.remove("is-dragging");
   const [file] = event.dataTransfer.files;
+  if (file && !confirmReplaceCurrentProject("上传新图片")) return;
   loadImageFile(file);
 }
 
@@ -2859,6 +3271,8 @@ function loadImageFile(file) {
     elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，正在适配 ${gridDimensionsLabel()} 画布`;
     elements.cellInfo.textContent = "图片会完整适配当前画布，不会强制裁成正方形。";
     URL.revokeObjectURL(image.src);
+    state.libraryProjectId = null;
+    state.projectCreatedAt = null;
     acceptSourceImage(image, file, {
       skipped: true,
       originalWidth: image.width,
@@ -4051,7 +4465,37 @@ function isPreprocessNearBackground(r, g, b, alpha) {
   return (r > 232 && g > 232 && b > 224 && saturation < 36) || (Math.max(r, g, b) > 238 && saturation < 22);
 }
 
+function capturePreviewCanvasSnapshot() {
+  if (state.previewCanvasSnapshot || !state.pattern.length) return;
+  state.previewCanvasSnapshot = {
+    gridWidth: state.gridWidth,
+    gridHeight: state.gridHeight,
+    gridSize: state.gridSize,
+    patternSize: state.patternSize,
+    traceX: state.traceReference.x,
+    traceY: state.traceReference.y,
+    traceScale: state.traceReference.scale,
+  };
+}
+
+function restorePreviewCanvasSnapshot() {
+  const snapshot = state.previewCanvasSnapshot;
+  if (!snapshot) return false;
+  state.gridWidth = snapshot.gridWidth;
+  state.gridHeight = snapshot.gridHeight;
+  state.gridSize = snapshot.gridSize;
+  state.patternSize = snapshot.patternSize;
+  state.traceReference.x = snapshot.traceX;
+  state.traceReference.y = snapshot.traceY;
+  state.traceReference.scale = snapshot.traceScale;
+  state.previewCanvasSnapshot = null;
+  syncControlsFromState();
+  return true;
+}
+
 function clearPreviewState(options = {}) {
+  if (options.restoreCanvas) restorePreviewCanvasSnapshot();
+  else state.previewCanvasSnapshot = null;
   state.previewPattern = [];
   state.previewCounts = new Map();
   state.previewQualityMetrics = null;
@@ -4104,6 +4548,7 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
     if (requestVersion !== previewUpdateVersion) return false;
 
     if (!result) {
+      clearPreviewState({ restoreCanvas: true });
       elements.cellInfo.textContent = "请先上传图片，再生成预览。";
       renderPattern();
       return false;
@@ -4122,6 +4567,7 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
   } catch (error) {
     if (requestVersion !== previewUpdateVersion) return false;
     console.error("生成预览失败", error);
+    clearPreviewState({ restoreCanvas: true });
     elements.cellInfo.textContent = `生成预览失败：${error.message || error}`;
     return false;
   } finally {
@@ -4175,7 +4621,7 @@ function confirmPendingPreview() {
 
 function discardPendingPreview() {
   if (state.isProcessingPattern) return false;
-  clearPreviewState();
+  clearPreviewState({ restoreCanvas: true });
   renderPendingPreview();
   if (state.pattern.length) {
     const bounds = state.usedBounds || calculateUsedBounds(state.pattern, state.gridSize);
@@ -4236,9 +4682,11 @@ function buildPixelSamplesNow(image, size) {
   sourceCtx.clearRect(0, 0, sampleSize, sampleSize);
   sourceCtx.imageSmoothingEnabled = state.patternMode !== "pixelPattern";
   sourceCtx.imageSmoothingQuality = state.patternMode === "pixelPattern" ? "low" : "high";
-  const containScale = Math.min(activeSampleWidth / image.width, activeSampleHeight / image.height);
-  const drawWidth = Math.max(1, Math.round(image.width * containScale));
-  const drawHeight = Math.max(1, Math.round(image.height * containScale));
+  const scale = state.fitMode === "center"
+    ? Math.max(activeSampleWidth / image.width, activeSampleHeight / image.height)
+    : Math.min(activeSampleWidth / image.width, activeSampleHeight / image.height);
+  const drawWidth = Math.max(1, Math.round(image.width * scale));
+  const drawHeight = Math.max(1, Math.round(image.height * scale));
   const drawX = Math.round((activeSampleWidth - drawWidth) / 2);
   const drawY = Math.round((activeSampleHeight - drawHeight) / 2);
   sourceCtx.drawImage(image, 0, 0, image.width, image.height, drawX, drawY, drawWidth, drawHeight);
@@ -8763,6 +9211,7 @@ function setZoom(value, options = {}) {
   const oldScrollHeight = Math.max(1, wrap.scrollHeight - wrap.clientHeight);
   const centerRatioX = oldScrollWidth ? (wrap.scrollLeft + wrap.clientWidth / 2) / Math.max(1, wrap.scrollWidth) : 0.5;
   const centerRatioY = oldScrollHeight ? (wrap.scrollTop + wrap.clientHeight / 2) / Math.max(1, wrap.scrollHeight) : 0.5;
+  const codesVisibleBefore = state.pattern.length && state.showCellCodes ? cellCodesFitCurrentZoom(activePlotMetrics().cell) : null;
 
   state.zoom = nextZoom;
   const base = baseCanvasCssSize();
@@ -8771,6 +9220,12 @@ function setZoom(value, options = {}) {
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 
   requestAnimationFrame(() => {
+    if (
+      codesVisibleBefore !== null &&
+      codesVisibleBefore !== cellCodesFitCurrentZoom(activePlotMetrics().cell)
+    ) {
+      requestPatternRender();
+    }
     if (options.center) {
       wrap.scrollLeft = Math.max(0, (wrap.scrollWidth - wrap.clientWidth) / 2);
       wrap.scrollTop = Math.max(0, (wrap.scrollHeight - wrap.clientHeight) / 2);
@@ -8799,15 +9254,18 @@ function fitCanvasToScreen() {
 function exportPattern() {
   if (!canLeaveTransformWithCurrentPreview("export")) return;
   if (!state.pattern.length) return;
+  const includeWatermark = elements.exportWatermarkToggle?.checked ?? state.exportWatermarkEnabled;
+  state.exportWatermarkEnabled = includeWatermark;
   if (elements.exportFormat?.value === "pdf") {
-    exportPatternPdf();
+    exportPatternPdf({ includeWatermark });
     return;
   }
-  const readableCanvas = renderReadableExportCanvas();
+  const readableCanvas = renderReadableExportCanvas({ includeWatermark });
   downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
 }
 
-function renderReadableExportCanvas() {
+function renderReadableExportCanvas(options = {}) {
+  const includeWatermark = options.includeWatermark !== false;
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
   const largestSide = Math.max(widthCells, heightCells);
@@ -8827,7 +9285,7 @@ function renderReadableExportCanvas() {
   exportCtx.fillRect(0, 0, canvas.width, canvas.height);
   exportCtx.fillStyle = "#111";
   exportCtx.font = `900 ${Math.max(54, Math.round(cellSize * 1.25))}px Microsoft YaHei, sans-serif`;
-  exportCtx.fillText("小麦拼豆", margin, 76);
+  exportCtx.fillText(includeWatermark ? "小麦拼豆" : "拼豆图纸", margin, 76);
   exportCtx.font = `500 ${Math.max(34, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
   exportCtx.textAlign = "right";
   exportCtx.fillText(`${state.fileName || "pattern"}   ${gridDimensionsLabel()} / ${totalBeadCount()}颗 / ${state.counts.size}色`, canvas.width - margin, 76);
@@ -8835,8 +9293,33 @@ function renderReadableExportCanvas() {
 
   drawReadableCells(exportCtx, margin, top, cellSize);
   drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2);
+  if (includeWatermark) drawReadableExportWatermark(exportCtx, canvas, top, top + plotHeight);
 
   return canvas;
+}
+
+function drawReadableExportWatermark(exportCtx, canvas, startY, endY) {
+  const size = Math.max(52, Math.round(Math.min(canvas.width, canvas.height) * 0.055));
+  const stepX = Math.max(300, size * 4.6);
+  const stepY = Math.max(220, size * 2.8);
+  exportCtx.save();
+  exportCtx.beginPath();
+  exportCtx.rect(0, startY, canvas.width, Math.max(0, endY - startY));
+  exportCtx.clip();
+  exportCtx.globalAlpha = 0.065;
+  exportCtx.fillStyle = "#d92f62";
+  exportCtx.font = `900 ${size}px Microsoft YaHei, sans-serif`;
+  exportCtx.textAlign = "center";
+  exportCtx.textBaseline = "middle";
+  exportCtx.translate(canvas.width / 2, (startY + endY) / 2);
+  exportCtx.rotate(-Math.PI / 7);
+  for (let y = -canvas.height; y <= canvas.height; y += stepY) {
+    const rowOffset = Math.round(y / stepY) % 2 ? stepX / 2 : 0;
+    for (let x = -canvas.width; x <= canvas.width; x += stepX) {
+      exportCtx.fillText("小麦拼豆", x + rowOffset, y);
+    }
+  }
+  exportCtx.restore();
 }
 
 function drawReadableCells(exportCtx, startX, startY, cellSize) {
@@ -8955,8 +9438,8 @@ function downloadCanvas(canvas, fileName) {
   link.click();
 }
 
-function exportPatternPdf() {
-  const pdfBytes = buildVectorPdf();
+function exportPatternPdf(options = {}) {
+  const pdfBytes = buildVectorPdf(options);
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -8966,7 +9449,8 @@ function exportPatternPdf() {
   window.setTimeout(() => URL.revokeObjectURL(url), 800);
 }
 
-function buildVectorPdf() {
+function buildVectorPdf(options = {}) {
+  const includeWatermark = options.includeWatermark !== false;
   const page = { width: 842, height: 595 };
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
@@ -9003,7 +9487,7 @@ function buildVectorPdf() {
   };
 
   rect(0, 0, page.width, page.height, "#fffdf8");
-  text("小麦拼豆", margin, titleY, 16);
+  text(includeWatermark ? "小麦拼豆" : "拼豆图纸", margin, titleY, 16);
   text(`${gridDimensionsLabel()} / ${totalBeadCount()} beads / ${state.counts.size} colors / MARD ${palette.length}`, page.width - margin, titleY, 10, "right");
   text(state.fileName || "pattern", margin, titleY + 18, 9);
 
@@ -9054,18 +9538,34 @@ function buildVectorPdf() {
 
   text("Color List", legendX, 74, 13);
   const rows = sortedCounts();
-  const rowH = 16;
+  const maxLegendRows = 45;
+  const columns = Math.max(1, Math.ceil(rows.length / maxLegendRows));
+  const rowsPerColumn = Math.max(1, Math.ceil(rows.length / columns));
+  const columnWidth = legendWidth / columns;
+  const rowH = Math.min(16, (page.height - 112) / rowsPerColumn);
   rows.forEach((item, index) => {
-    const y = 92 + index * rowH;
-    if (y > page.height - 28) return;
-    rect(legendX, y - 10, 10, 10, item.hex);
-    strokeLine(legendX, y - 10, legendX + 10, y - 10, "#111111", 0.25);
-    strokeLine(legendX, y, legendX + 10, y, "#111111", 0.25);
-    strokeLine(legendX, y - 10, legendX, y, "#111111", 0.25);
-    strokeLine(legendX + 10, y - 10, legendX + 10, y, "#111111", 0.25);
-    text(`${item.code}  x${item.count}`, legendX + 16, y - 1, 8);
-    if (legendWidth > 150) text(item.name || item.code, legendX + 78, y - 1, 7);
+    const column = Math.floor(index / rowsPerColumn);
+    const row = index % rowsPerColumn;
+    const x = legendX + column * columnWidth;
+    const y = 92 + row * rowH;
+    const swatch = Math.max(5, Math.min(10, rowH - 2));
+    const fontSize = Math.max(4.5, Math.min(8, rowH * 0.56));
+    rect(x, y - swatch, swatch, swatch, item.hex);
+    strokeLine(x, y - swatch, x + swatch, y - swatch, "#111111", 0.25);
+    strokeLine(x, y, x + swatch, y, "#111111", 0.25);
+    strokeLine(x, y - swatch, x, y, "#111111", 0.25);
+    strokeLine(x + swatch, y - swatch, x + swatch, y, "#111111", 0.25);
+    text(`${item.code} x${item.count}`, x + swatch + 3, y - 1, fontSize);
+    if (columns === 1 && columnWidth > 150) text(item.name || item.code, x + 78, y - 1, 7);
   });
+
+  if (includeWatermark) {
+    for (let y = startY + 48; y < startY + plotHeight; y += 92) {
+      for (let x = startX + 62; x < startX + plotWidth; x += 138) {
+        text("小麦拼豆", x, y, 15, "center", "#f5e8ed");
+      }
+    }
+  }
 
   return createPdf(page.width, page.height, commands.join("\n"));
 }
@@ -9151,6 +9651,7 @@ async function copyBeadList() {
 }
 
 function resetApp() {
+  window.clearTimeout(state.autosaveTimer);
   state.image = null;
   state.sourceImageState = null;
   state.fileName = "";
@@ -9170,7 +9671,7 @@ function resetApp() {
   state.projectDirty = false;
   state.projectSavedAt = null;
   state.projectCreatedAt = null;
-  window.clearTimeout(state.autosaveTimer);
+  state.libraryProjectId = null;
   state.patternSize = state.gridSize;
   state.counts = new Map();
   state.projectPalette = [];
@@ -9225,6 +9726,8 @@ function resetApp() {
   updateProjectSaveStatus("未保存");
   renderPattern();
   renderStats();
+  clearAutosaveProject().catch((error) => console.warn("清理自动恢复点失败", error));
+  renderProjectLibrary();
 }
 
 function init() {
@@ -9249,6 +9752,7 @@ function init() {
   renderPattern();
   renderStats();
   updateProjectSaveStatus("未保存");
+  renderProjectLibrary();
   window.setTimeout(checkAutosaveRecovery, 350);
   if (window.lucide) {
     window.lucide.createIcons();

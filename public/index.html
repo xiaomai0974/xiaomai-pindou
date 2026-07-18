@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
-    <link rel="stylesheet" href="styles.css?v=20260718-10" />
+    <link rel="stylesheet" href="styles.css?v=20260718-11" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
-    <script src="app.js?v=20260718-10" defer></script>
+    <script src="app.js?v=20260718-11" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -66,20 +66,32 @@
             <span>图像设置</span>
           </button>
           <span class="rail-spacer" aria-hidden="true"></span>
-          <button class="sidebar-rail-button" data-sidebar-target="project" type="button" title="打开或保存项目">
-            <i data-lucide="folder-open" aria-hidden="true"></i>
-            <span>项目</span>
+          <button class="sidebar-rail-button" data-sidebar-target="project" type="button" title="图纸库与项目文件">
+            <i data-lucide="library" aria-hidden="true"></i>
+            <span>图纸库</span>
           </button>
         </nav>
 
         <section class="control-group sidebar-card project-card">
           <div class="group-title">
-            <span>项目</span>
+            <span>我做过的图纸</span>
+            <small id="projectLibraryCount">0 张</small>
+          </div>
+          <button id="saveToLibraryButton" class="library-save-button" type="button">
+            <i data-lucide="bookmark-plus" aria-hidden="true"></i>
+            保存当前图纸
+          </button>
+          <p class="library-local-note">保存在当前浏览器；清理浏览器数据前请下载项目文件备份。</p>
+          <div id="projectLibraryList" class="project-library-list" aria-live="polite">
+            <p class="project-library-empty">正在读取图纸库…</p>
+          </div>
+          <div class="project-file-heading">
+            <span>项目文件备份</span>
             <small id="projectSaveStatus">未保存</small>
           </div>
           <div class="project-file-toolbar" id="projectFileToolbar" aria-label="项目文件">
-            <button id="openProjectButton" type="button">打开项目</button>
-            <button id="saveProjectButton" type="button">保存项目</button>
+            <button id="openProjectButton" type="button">导入项目</button>
+            <button id="saveProjectButton" type="button">下载项目</button>
             <input id="projectFileInput" type="file" accept=".xiaomai,.xmbd,application/json" hidden />
           </div>
         </section>
@@ -515,6 +527,10 @@
               <option value="pdf" selected>PDF 清晰图纸</option>
               <option value="png">PNG 高清图片</option>
             </select>
+          </label>
+          <label class="export-watermark-toggle">
+            <input id="exportWatermarkToggle" type="checkbox" checked />
+            <span>添加“小麦拼豆”水印</span>
           </label>
           <button id="exportButton" type="button">
             <i data-lucide="download" aria-hidden="true"></i>
