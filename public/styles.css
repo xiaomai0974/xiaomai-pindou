@@ -3940,6 +3940,131 @@ body[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
   font-size: 13px;
 }
 
+.tool-color-picker {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 14px;
+}
+
+.tool-color-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-color-picker-head strong {
+  font-size: 12px;
+}
+
+.tool-color-picker-head button {
+  min-height: 28px !important;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.tool-color-picker-head button.is-active {
+  border-color: var(--accent) !important;
+  background: #fff2f6 !important;
+  color: var(--accent);
+}
+
+#toolColorSearchInput {
+  min-height: 32px !important;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.tool-color-palette {
+  display: grid;
+  max-height: 230px;
+  gap: 5px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.tool-color-chip {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 34px;
+  align-items: center;
+  min-height: 34px !important;
+  gap: 6px;
+  border: 1px solid #e3e3e3 !important;
+  border-radius: 7px !important;
+  background: #fff !important;
+  padding: 3px 5px !important;
+  text-align: left;
+}
+
+.tool-color-chip:hover {
+  border-color: #cfcfcf !important;
+  background: #fafafa !important;
+}
+
+.tool-color-chip.is-active {
+  border-color: var(--accent) !important;
+  background: #fff2f6 !important;
+}
+
+.tool-color-chip.is-locked {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.tool-color-swatch {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid #bdbdbd;
+  border-radius: 5px;
+  color: #111;
+  font-size: 6px;
+  font-weight: 900;
+  text-shadow: 0 1px rgba(255, 255, 255, 0.6);
+}
+
+.tool-color-meta {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.tool-color-meta b,
+.tool-color-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-color-meta b {
+  font-size: 11px;
+}
+
+.tool-color-meta small {
+  color: #777;
+  font-size: 9px;
+}
+
+.tool-color-replace {
+  color: #8a8a8a;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.tool-color-chip:hover .tool-color-replace,
+.tool-color-chip:focus-visible .tool-color-replace {
+  color: var(--accent);
+}
+
+.tool-color-picker > small {
+  color: #777;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 body[data-workbench-mode="edit"] .tool-properties-popover .brush-options,
 body[data-workbench-mode="edit"] .tool-properties-popover .symmetry-options {
   gap: 10px;

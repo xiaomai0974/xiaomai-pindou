@@ -63,6 +63,7 @@ const palette = paletteSource.slice(0, PALETTE_LIMIT).map((entry) => {
 });
 
 const nearestColorCache = new Map();
+const nearestCandidateCache = new Map();
 
 const sheet = {
   width: 1080,
@@ -120,6 +121,8 @@ const state = {
   lockedColorCodes: new Set(),
   disabledColorCodes: new Set(),
   paletteSearch: "",
+  toolPaletteSearch: "",
+  toolPaletteShowAll: false,
   showSelectedColorsOnly: false,
   dither: false,
   showGrid: true,
@@ -198,9 +201,10 @@ const state = {
   rawDebugCandidates: [],
   finalGrid: [],
   colorTrace: [],
+  colorMatchMetrics: null,
   accurateMatch: true,
   colorDebugEnabled: false,
-  diagnosticViewMode: "raw",
+  diagnosticViewMode: "final",
   baselineGrid: [],
   optimizedGrid: [],
   compareMetrics: null,
@@ -400,6 +404,9 @@ const elements = {
   selectionLabel: document.querySelector("#selectionLabel"),
   undoButton: document.querySelector("#undoButton"),
   redoButton: document.querySelector("#redoButton"),
+  toolColorSearchInput: document.querySelector("#toolColorSearchInput"),
+  toolPaletteAllButton: document.querySelector("#toolPaletteAllButton"),
+  toolColorPalette: document.querySelector("#toolColorPalette"),
   brushSizeInput: document.querySelector("#brushSizeInput"),
   brushShapeSelect: document.querySelector("#brushShapeSelect"),
   symmetryModeSelect: document.querySelector("#symmetryModeSelect"),
@@ -473,6 +480,7 @@ const cropCtx = elements.cropCanvas?.getContext("2d");
 const renderCache = {
   statsSignature: null,
   constraintSignature: null,
+  toolPaletteSignature: null,
 };
 const plotMetricsCache = {
   signature: null,
@@ -609,6 +617,74 @@ function deltaE(a, b) {
   const da = a.a - b.a;
   const db = a.b - b.b;
   return Math.sqrt(dl * dl + da * da + db * db);
+}
+
+// CIEDE2000 is used for source-to-bead matching. Existing grid cleanup keeps
+// the original LAB distance because its thresholds were tuned for that scale.
+function paletteMatchDistance(a, b) {
+  return deltaE2000(a.lab || rgbToLab(a), b.lab || rgbToLab(b));
+}
+
+function deltaE2000(a, b) {
+  const c1 = Math.hypot(a.a, a.b);
+  const c2 = Math.hypot(b.a, b.b);
+  const averageC = (c1 + c2) / 2;
+  const averageC7 = averageC ** 7;
+  const g = 0.5 * (1 - Math.sqrt(averageC7 / (averageC7 + 25 ** 7)));
+  const a1Prime = (1 + g) * a.a;
+  const a2Prime = (1 + g) * b.a;
+  const c1Prime = Math.hypot(a1Prime, a.b);
+  const c2Prime = Math.hypot(a2Prime, b.b);
+  const h1Prime = labHueDegrees(a.b, a1Prime);
+  const h2Prime = labHueDegrees(b.b, a2Prime);
+  const deltaLPrime = b.l - a.l;
+  const deltaCPrime = c2Prime - c1Prime;
+  let deltaHPrime = h2Prime - h1Prime;
+  if (c1Prime * c2Prime === 0) deltaHPrime = 0;
+  else if (deltaHPrime > 180) deltaHPrime -= 360;
+  else if (deltaHPrime < -180) deltaHPrime += 360;
+
+  const deltaBigHPrime = 2 * Math.sqrt(c1Prime * c2Prime) * Math.sin(degreesToRadians(deltaHPrime / 2));
+  const averageLPrime = (a.l + b.l) / 2;
+  const averageCPrime = (c1Prime + c2Prime) / 2;
+  let averageHPrime = h1Prime + h2Prime;
+  if (c1Prime * c2Prime === 0) {
+    averageHPrime = h1Prime + h2Prime;
+  } else if (Math.abs(h1Prime - h2Prime) <= 180) {
+    averageHPrime = (h1Prime + h2Prime) / 2;
+  } else if (h1Prime + h2Prime < 360) {
+    averageHPrime = (h1Prime + h2Prime + 360) / 2;
+  } else {
+    averageHPrime = (h1Prime + h2Prime - 360) / 2;
+  }
+
+  const t =
+    1 -
+    0.17 * Math.cos(degreesToRadians(averageHPrime - 30)) +
+    0.24 * Math.cos(degreesToRadians(2 * averageHPrime)) +
+    0.32 * Math.cos(degreesToRadians(3 * averageHPrime + 6)) -
+    0.2 * Math.cos(degreesToRadians(4 * averageHPrime - 63));
+  const deltaTheta = 30 * Math.exp(-(((averageHPrime - 275) / 25) ** 2));
+  const averageCPrime7 = averageCPrime ** 7;
+  const rC = 2 * Math.sqrt(averageCPrime7 / (averageCPrime7 + 25 ** 7));
+  const sL = 1 + (0.015 * (averageLPrime - 50) ** 2) / Math.sqrt(20 + (averageLPrime - 50) ** 2);
+  const sC = 1 + 0.045 * averageCPrime;
+  const sH = 1 + 0.015 * averageCPrime * t;
+  const rT = -Math.sin(degreesToRadians(2 * deltaTheta)) * rC;
+  const lTerm = deltaLPrime / sL;
+  const cTerm = deltaCPrime / sC;
+  const hTerm = deltaBigHPrime / sH;
+  return Math.sqrt(lTerm ** 2 + cTerm ** 2 + hTerm ** 2 + rT * cTerm * hTerm);
+}
+
+function labHueDegrees(y, x) {
+  if (x === 0 && y === 0) return 0;
+  const degrees = (Math.atan2(y, x) * 180) / Math.PI;
+  return degrees >= 0 ? degrees : degrees + 360;
+}
+
+function degreesToRadians(degrees) {
+  return (degrees * Math.PI) / 180;
 }
 
 function activePalette() {
@@ -839,8 +915,9 @@ function nearestPaletteColor(color, sourcePalette = activePalette()) {
   let best = sourcePalette[0];
   let bestDistance = Infinity;
 
+  const sourceLab = color.lab || rgbToLab(color);
   for (const item of sourcePalette) {
-    const distance = colorDistance(color, item.rgb);
+    const distance = deltaE2000(sourceLab, item.lab || rgbToLab(item.rgb));
     if (distance < bestDistance) {
       best = item;
       bestDistance = distance;
@@ -854,10 +931,19 @@ function nearestPaletteColor(color, sourcePalette = activePalette()) {
 
 function nearestPaletteCandidates(color, sourcePalette = palette, limit = 5) {
   if (!color || color.empty) return [];
-  return sourcePalette
-    .map((item) => ({ ...item, deltaE: colorDistance(color, item) }))
+  const paletteKey = paletteSignature(sourcePalette);
+  const cacheKey = `${paletteKey}:${Math.round(color.r ?? color.rgb?.r ?? 0)},${Math.round(color.g ?? color.rgb?.g ?? 0)},${Math.round(color.b ?? color.rgb?.b ?? 0)}`;
+  const cached = nearestCandidateCache.get(cacheKey);
+  if (cached?.length >= limit) return cached.slice(0, limit);
+  const sourceLab = color.lab || rgbToLab(color);
+  const cachedLimit = Math.max(5, limit);
+  const candidates = sourcePalette
+    .map((item) => ({ ...item, deltaE: deltaE2000(sourceLab, item.lab || rgbToLab(item.rgb)) }))
     .sort((a, b) => a.deltaE - b.deltaE)
-    .slice(0, limit);
+    .slice(0, cachedLimit);
+  if (nearestCandidateCache.size > 50000) nearestCandidateCache.clear();
+  nearestCandidateCache.set(cacheKey, candidates);
+  return candidates.slice(0, limit);
 }
 
 function mapSamplesToPalette(pixels, size, sourcePalette, allowDither = true) {
@@ -911,7 +997,7 @@ function requestPaletteWorkerMapping(pixels, size, sourcePalette, dither) {
 
 function ensurePaletteWorker() {
   if (paletteWorker) return paletteWorker;
-  paletteWorker = new Worker("palette-worker.js?v=20260717-1", { name: "xiaomai-palette-mapper" });
+  paletteWorker = new Worker("palette-worker.js?v=20260720-1", { name: "xiaomai-palette-mapper" });
   paletteWorker.addEventListener("message", handlePaletteWorkerMessage);
   paletteWorker.addEventListener("error", handlePaletteWorkerError);
   return paletteWorker;
@@ -982,6 +1068,7 @@ function recordColorDiagnostics(pixels, rawPattern, finalPattern, changedBy = "p
       changedBy: rawColor?.code === finalColor?.code && rawColor?.empty === finalColor?.empty ? "" : changedBy,
     };
   });
+  state.colorMatchMetrics = calculateColorMatchMetrics(pixels, finalPattern);
   syncDiagnosticControls();
 }
 
@@ -991,7 +1078,8 @@ function clearColorDiagnostics() {
   state.rawDebugCandidates = [];
   state.finalGrid = [];
   state.colorTrace = [];
-  state.diagnosticViewMode = state.accurateMatch ? "raw" : "final";
+  state.colorMatchMetrics = null;
+  state.diagnosticViewMode = "final";
   syncDiagnosticControls();
 }
 
@@ -1006,7 +1094,38 @@ function refreshFinalDiagnosticsFromCurrentPattern(changedBy = "manualEdit") {
       changedBy: rawColor?.code === finalColor?.code && rawColor?.empty === finalColor?.empty ? "" : changedBy,
     };
   });
+  state.colorMatchMetrics = calculateColorMatchMetrics(state.rawSampleData, state.pattern);
   syncDiagnosticControls();
+}
+
+function calculateColorMatchMetrics(pixels, pattern) {
+  if (!pixels?.length || pixels.length !== pattern?.length) return null;
+  const allowed = effectiveAllowedPalette();
+  let compared = 0;
+  let totalDeltaE = 0;
+  let totalScore = 0;
+  let lowConfidenceCellCount = 0;
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const sample = pixels[index];
+    const mapped = pattern[index];
+    if (!sample || sample.empty || sample.background || !mapped || mapped.empty) continue;
+    const candidates = nearestPaletteCandidates(sample, allowed, 2);
+    const mappedDeltaE = paletteMatchDistance(sample, mapped);
+    const ambiguity = candidates.length > 1 ? Math.max(0, 3 - (candidates[1].deltaE - candidates[0].deltaE)) : 0;
+    const cellScore = clampRange(100 - mappedDeltaE * 2.2 - ambiguity * 1.5, 0, 100);
+    totalDeltaE += mappedDeltaE;
+    totalScore += cellScore;
+    compared += 1;
+    if (mappedDeltaE > 8 || cellScore < 75) lowConfidenceCellCount += 1;
+  }
+
+  return {
+    comparedCellCount: compared,
+    averageDeltaE: compared ? Math.round((totalDeltaE / compared) * 100) / 100 : 0,
+    lowConfidenceCellCount,
+    colorMatchScore: compared ? Math.round((totalScore / compared) * 10) / 10 : 0,
+  };
 }
 
 function validateMardPalette() {
@@ -1124,7 +1243,9 @@ function setupEvents() {
   });
   elements.accurateMatchToggle.addEventListener("change", () => {
     state.accurateMatch = elements.accurateMatchToggle.checked;
-    state.diagnosticViewMode = state.accurateMatch ? "raw" : "final";
+    // Accurate matching is a conversion setting. Keep the canvas on the
+    // confirmed/final grid so its counts always match editing and export.
+    state.diagnosticViewMode = "final";
     syncDiagnosticControls();
     requestPreviewUpdate(
       state.accurateMatch
@@ -1398,6 +1519,14 @@ function setupEvents() {
     state.paletteSearch = elements.paletteSearchInput.value.trim().toLowerCase();
     renderConstraintPalette();
     renderStats();
+  });
+  elements.toolColorSearchInput?.addEventListener("input", () => {
+    state.toolPaletteSearch = elements.toolColorSearchInput.value.trim().toLowerCase();
+    renderToolColorPalette();
+  });
+  elements.toolPaletteAllButton?.addEventListener("click", () => {
+    state.toolPaletteShowAll = !state.toolPaletteShowAll;
+    renderToolColorPalette();
   });
   elements.showSelectedColorsButton.addEventListener("click", () => {
     state.showSelectedColorsOnly = !state.showSelectedColorsOnly;
@@ -3870,7 +3999,7 @@ async function generatePattern() {
     }
 
     if (state.accurateMatch) {
-      const accurateResult = finalizeAccurateMatch(pattern, pixels, size);
+      const accurateResult = finalizeAccurateMatch(pattern, pixels, size, limitedPalette);
       state.pattern = accurateResult.pattern;
       recordColorDiagnostics(pixels, pattern, state.pattern, "accurateMatchCleanup");
       state.patternSize = size;
@@ -3947,7 +4076,7 @@ async function buildPatternResultFromImage() {
   }
 
   if (state.accurateMatch) {
-    const accurateResult = finalizeAccurateMatch(pattern, pixels, size);
+    const accurateResult = finalizeAccurateMatch(pattern, pixels, size, limitedPalette);
     recordColorDiagnostics(pixels, pattern, accurateResult.pattern, "accurateMatchCleanup");
     return {
       pattern: accurateResult.pattern,
@@ -3973,12 +4102,13 @@ async function buildPatternResultFromImage() {
   };
 }
 
-function finalizeAccurateMatch(pattern, pixels, size) {
+function finalizeAccurateMatch(pattern, pixels, size, sourcePalette = effectiveAllowedPalette()) {
   const backgroundMask = computeBackgroundMask(pattern, pixels, size, true);
   const maskedPattern = applyBackgroundModeToGrid(pattern, backgroundMask, state.pixelBackground);
-  let processed = postProcessPattern(maskedPattern, size);
+  const refinedPattern = refineAccuratePaletteMatches(maskedPattern, pixels, size, sourcePalette, backgroundMask);
+  let processed = postProcessPattern(refinedPattern, size);
   if (totalBeadCount(processed) === 0 && totalBeadCount(pattern) > 0) {
-    processed = postProcessPattern(pattern, size);
+    processed = postProcessPattern(refineAccuratePaletteMatches(pattern, pixels, size, sourcePalette), size);
   }
   return {
     pattern: validateColorConstraints(processed),
@@ -4476,6 +4606,70 @@ function capturePreviewCanvasSnapshot() {
     traceY: state.traceReference.y,
     traceScale: state.traceReference.scale,
   };
+}
+
+function refineAccuratePaletteMatches(pattern, pixels, size, sourcePalette, backgroundMask = null) {
+  if (!pattern.length || pattern.length !== pixels.length || !sourcePalette?.length) return [...pattern];
+  const sourceLabs = pixels.map((pixel) => (pixel?.empty ? null : pixel.lab || rgbToLab(pixel)));
+  const candidateLimit = size <= 48 ? 3 : size <= 64 ? 4 : 3;
+  const passes = size <= 64 ? 2 : 1;
+  const regionThreshold = size <= 48 ? 11 : size <= 64 ? 9 : 8;
+  const baseCoherenceWeight = size <= 48 ? 0.24 : size <= 64 ? 0.17 : 0.11;
+  const maxSourceLoss = size <= 48 ? 2.8 : size <= 64 ? 1.9 : 1.2;
+  let refined = [...pattern];
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    const next = [...refined];
+    for (let index = 0; index < refined.length; index += 1) {
+      const current = refined[index];
+      const source = pixels[index];
+      if (!current || current.empty || !source || source.empty || backgroundMask?.[index] || isColorLocked(current)) continue;
+      const x = index % size;
+      const y = Math.floor(index / size);
+      const sourceLab = sourceLabs[index];
+      const neighbors = getEightNeighbors(x, y, size).filter((neighbor) => {
+        if (backgroundMask?.[neighbor] || refined[neighbor]?.empty || !sourceLabs[neighbor]) return false;
+        return deltaE2000(sourceLab, sourceLabs[neighbor]) <= regionThreshold;
+      });
+      if (neighbors.length < 2) continue;
+
+      const allSourceNeighbors = getFourNeighbors(x, y, size).filter((neighbor) => sourceLabs[neighbor]);
+      const localContrast = allSourceNeighbors.length
+        ? Math.max(...allSourceNeighbors.map((neighbor) => deltaE2000(sourceLab, sourceLabs[neighbor])))
+        : 0;
+      const edgeFactor = clampRange(localContrast / 24, 0, 1);
+      const coherenceWeight = baseCoherenceWeight * (1 - edgeFactor * 0.78);
+      const candidates = [...nearestPaletteCandidates({ ...source, lab: sourceLab }, sourcePalette, candidateLimit)];
+      if (!candidates.some((candidate) => candidate.code === current.code)) {
+        candidates.push({ ...current, deltaE: deltaE2000(sourceLab, current.lab) });
+      }
+
+      const scored = candidates.map((candidate) => {
+        const sourceError = candidate.deltaE ?? deltaE2000(sourceLab, candidate.lab);
+        const neighborCost = neighbors.reduce(
+          (sum, neighbor) => sum + Math.min(22, paletteMatchDistance(candidate, refined[neighbor])),
+          0,
+        ) / neighbors.length;
+        const exactSupport = neighbors.filter((neighbor) => refined[neighbor].code === candidate.code).length;
+        return {
+          color: paletteColorByCode(candidate.code) || candidate,
+          sourceError,
+          score: sourceError + neighborCost * coherenceWeight - exactSupport * (size <= 48 ? 0.42 : 0.3),
+        };
+      }).sort((a, b) => a.score - b.score || a.sourceError - b.sourceError);
+
+      const currentResult = scored.find((item) => item.color.code === current.code);
+      const best = scored[0];
+      if (!best || !currentResult || best.color.code === current.code) continue;
+      const allowedLoss = maxSourceLoss * (1 - edgeFactor * 0.7);
+      if (best.sourceError > currentResult.sourceError + allowedLoss) continue;
+      if (best.score > currentResult.score - 0.28) continue;
+      next[index] = best.color;
+    }
+    refined = next;
+  }
+
+  return refined;
 }
 
 function restorePreviewCanvasSnapshot() {
@@ -6253,7 +6447,10 @@ function showQualityHint() {
   } else if (metrics.smallRegionCount > state.gridSize) {
     elements.cellInfo.textContent = "碎色块偏多：建议把最小区域调高到 6-8。";
   } else {
-    elements.cellInfo.textContent = `拼豆友好度 ${metrics.beadFriendlinessScore}/10，适合继续手动修边。`;
+    const match = state.colorMatchMetrics;
+    elements.cellInfo.textContent = match
+      ? `颜色匹配评分 ${match.colorMatchScore}%（平均 ΔE00 ${match.averageDeltaE}），拼豆友好度 ${metrics.beadFriendlinessScore}/10。`
+      : `拼豆友好度 ${metrics.beadFriendlinessScore}/10，适合继续手动修边。`;
   }
 }
 
@@ -7398,6 +7595,7 @@ function renderStats() {
 
   try {
     renderStatsNow(sorted, total, listRows, pattern, usedBounds);
+    renderToolColorPalette();
     renderCache.statsSignature = signature;
   } finally {
     recordPerformance("render.stats", performanceNow() - startedAt);
@@ -7580,8 +7778,76 @@ function renderPaletteChoices(rows = currentPaletteRows()) {
     .join("");
 }
 
+function toolPaletteRows() {
+  const query = state.toolPaletteSearch.trim().toLowerCase();
+  const counts = displayCounts();
+  const enrich = (color) => {
+    const sourceColor = paletteColorByCode(color.code) || color;
+    const counted = counts.get(sourceColor.code);
+    return {
+      ...sourceColor,
+      count: counted?.count || 0,
+      isUsed: Boolean(counted?.count),
+      isLocked: state.lockedColorCodes.has(sourceColor.code),
+      isActive: state.selectedColor?.code === sourceColor.code,
+    };
+  };
+
+  const source = query || state.toolPaletteShowAll
+    ? palette.filter((item) => !query || `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query))
+    : currentPaletteRows().filter((item) => item.count > 0 || item.isLocked || item.isActive);
+
+  const rows = source.map(enrich).sort((a, b) => {
+    const rank = (item) => {
+      if (item.isActive) return 0;
+      if (item.isLocked) return 1;
+      if (item.isUsed) return 2;
+      return 3;
+    };
+    return rank(a) - rank(b) || b.count - a.count || palette.findIndex((item) => item.code === a.code) - palette.findIndex((item) => item.code === b.code);
+  });
+
+  return rows.slice(0, query ? 80 : state.toolPaletteShowAll ? 96 : 40);
+}
+
+function renderToolColorPalette() {
+  if (!elements.toolColorPalette) return;
+  const rows = toolPaletteRows();
+  const signature = [
+    state.toolPaletteSearch,
+    Number(state.toolPaletteShowAll),
+    state.selectedColor?.code || "",
+    state.diagnosticViewMode,
+    rows.map((item) => `${item.code}:${item.count}:${Number(item.isActive)}:${Number(item.isLocked)}`).join(","),
+  ].join("|");
+
+  if (renderCache.toolPaletteSignature === signature) return;
+
+  elements.toolPaletteAllButton?.classList.toggle("is-active", state.toolPaletteShowAll);
+  elements.toolPaletteAllButton?.setAttribute("aria-pressed", String(state.toolPaletteShowAll));
+  elements.toolColorPalette.innerHTML = rows.length
+    ? rows.map((item) => `
+      <button
+        class="tool-color-chip${item.isActive ? " is-active" : ""}${item.isLocked ? " is-locked" : ""}"
+        data-code="${item.code}"
+        type="button"
+        draggable="true"
+        title="${item.code} ${item.name}，单击换色，双击选中同色"
+      >
+        <span class="tool-color-swatch" style="background:${item.hex}">${item.code}</span>
+        <span class="tool-color-meta">
+          <b data-edit-code="${item.code}">${item.code}</b>
+          <small>${item.count ? `x${item.count.toLocaleString("zh-CN")}` : item.name}</small>
+        </span>
+        <span class="tool-color-replace" data-replace-code="${item.code}" title="替换 ${item.code}">替换</span>
+      </button>
+    `).join("")
+    : '<div class="empty-list">没有找到颜色</div>';
+  renderCache.toolPaletteSignature = signature;
+}
+
 function setupPaletteEventDelegation() {
-  for (const root of [elements.paletteList, elements.legendStrip]) {
+  for (const root of [elements.paletteList, elements.legendStrip, elements.toolColorPalette].filter(Boolean)) {
     root.addEventListener("dragstart", handlePaletteDragStart);
     root.addEventListener("click", handlePaletteClick);
     root.addEventListener("dblclick", handlePaletteDoubleClick);
@@ -7731,6 +7997,7 @@ function updateSelectedColorUi() {
   const panelName = document.querySelector("#toolPanelColorName");
   if (panelSwatch) panelSwatch.style.background = state.selectedColor.hex;
   if (panelName) panelName.textContent = selectedColorLabel;
+  renderToolColorPalette();
 }
 
 function handleCanvasMove(event) {

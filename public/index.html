@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="styles.css?v=20260718-11" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
@@ -105,7 +106,7 @@
             <input id="imageInput" type="file" accept="image/*" />
             <i data-lucide="image-plus" aria-hidden="true"></i>
             <span>上传图片</span>
-            <small>支持 PNG / JPG，先裁剪再生成</small>
+            <small>支持 PNG / JPG，自动完整适配画布</small>
           </label>
           <button id="recropButton" class="wide-tool-button" type="button">裁剪图片 / 重新裁剪</button>
         </section>
@@ -262,15 +263,15 @@
           <div class="matching-settings" aria-label="颜色匹配设置">
             <div class="group-title">
               <span>颜色匹配</span>
-              <small>默认使用原始匹配</small>
+              <small>默认使用最终效果</small>
             </div>
             <label class="mini-check matching-accurate-toggle">
               <input id="accurateMatchToggle" type="checkbox" checked />
               <span>精准匹配</span>
             </label>
             <div class="segmented matching-view-options" role="group" aria-label="匹配结果视图">
-              <button id="showRawGridButton" class="is-active" type="button">原始匹配</button>
-              <button id="showFinalGridButton" type="button">最终效果</button>
+              <button id="showRawGridButton" type="button">原始匹配</button>
+              <button id="showFinalGridButton" class="is-active" type="button">最终效果</button>
             </div>
             <small class="setting-hint">原始匹配保留色板直配结果；最终效果包含减色和清理。</small>
           </div>
@@ -441,6 +442,15 @@
           <div class="tool-panel-current-color">
             <span id="toolPanelColorSwatch" aria-hidden="true"></span>
             <div><small>当前颜色</small><strong id="toolPanelColorName">H7 黑色</strong></div>
+          </div>
+          <div class="tool-color-picker" aria-label="编辑色板">
+            <div class="tool-color-picker-head">
+              <strong>编辑色板</strong>
+              <button id="toolPaletteAllButton" type="button" aria-pressed="false">全部颜色</button>
+            </div>
+            <input id="toolColorSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索编辑色板颜色" />
+            <div id="toolColorPalette" class="tool-color-palette" aria-label="编辑可用颜色"></div>
+            <small>单击换画笔色，双击选中同色，点“替换”可整图改色。</small>
           </div>
           <div class="brush-options">
             <label>

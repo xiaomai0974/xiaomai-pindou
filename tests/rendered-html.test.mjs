@@ -53,6 +53,9 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /data-workbench-mode="edit"/);
   assert.match(html, /data-workbench-mode="export"/);
   assert.match(html, /id="toolPropertiesCloseButton"/);
+  assert.match(html, /id="toolColorPalette"/);
+  assert.match(html, /id="toolColorSearchInput"/);
+  assert.match(html, /id="toolPaletteAllButton"/);
   assert.doesNotMatch(html, /id="topExportModeButton"/);
   assert.doesNotMatch(html, /data-sidebar-target="export"/);
   assert.doesNotMatch(html, /id="smartOptimizeButton"/);
@@ -67,7 +70,11 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /原图显示/);
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
-  assert.match(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.match(html, /<button id="showFinalGridButton" class="is-active"/);
+  assert.doesNotMatch(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.match(html, /id="customSizeInput"[^>]+type="number"/);
+  assert.match(html, /id="customHeightInput"[^>]+type="number"/);
+  assert.match(html, /支持 PNG \/ JPG，自动完整适配画布/);
   assert.match(html, /id="saveToLibraryButton"/);
   assert.match(html, /id="projectLibraryList"/);
   assert.match(html, /id="projectLibraryCount"/);
@@ -87,6 +94,11 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.equal(styleResponse.status, 200);
   const script = await scriptResponse.text();
   assert.match(script, /function renderPattern\(options = \{\}\)/);
+  assert.match(script, /function activeGridWidth\(\)/);
+  assert.match(script, /function activeGridHeight\(\)/);
+  assert.match(script, /const widthCells = activeGridWidth\(\);/);
+  assert.match(script, /const heightCells = activeGridHeight\(\);/);
+  assert.match(script, /diagnosticViewMode: "final"/);
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
   assert.match(script, /codeVisibilityVersion: 2/);
@@ -94,6 +106,9 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function copySelectionPixels\(\)/);
   assert.match(script, /function setupWorkbenchModes\(\)/);
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
+  assert.match(script, /function renderToolColorPalette\(\)/);
+  assert.match(script, /function toolPaletteRows\(\)/);
+  assert.match(script, /toolPaletteSearch: ""/);
   assert.match(script, /function confirmPendingPreview\(\)/);
   assert.match(script, /function discardPendingPreview\(\)/);
   assert.match(script, /function clearPreviewState\(options = \{\}\)/);
@@ -122,6 +137,9 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /const maxLegendRows = 45/);
   assert.match(script, /function capturePreviewCanvasSnapshot\(/);
   assert.match(script, /function restorePreviewCanvasSnapshot\(/);
+  assert.match(script, /function deltaE2000\(/);
+  assert.match(script, /function refineAccuratePaletteMatches\(/);
+  assert.match(script, /function calculateColorMatchMetrics\(/);
   assert.match(script, /state\.fitMode === "center"/);
   assert.match(script, /const codesVisibleBefore/);
   assert.doesNotMatch(script, /function openAutosaveDb\(/);
@@ -145,8 +163,15 @@ test("palette worker maps colors and preserves empty cells", async () => {
       messages.push(message);
     },
   };
-  vm.runInNewContext(source, { self, Math, Number, Boolean, Array, Int16Array, Error });
+  const context = { self, Math, Number, Boolean, Array, Int16Array, Error, Map };
+  vm.runInNewContext(source, context);
   assert.equal(typeof messageHandler, "function");
+  assert.equal(typeof context.deltaE2000, "function");
+  const referenceDeltaE = context.deltaE2000(
+    { l: 50, a: 2.6772, b: -79.7751 },
+    { l: 50, a: 0, b: -82.7485 },
+  );
+  assert.ok(Math.abs(referenceDeltaE - 2.0425) < 0.0002);
 
   messageHandler({
     data: {
