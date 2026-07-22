@@ -243,6 +243,8 @@ const state = {
   panStartScrollTop: 0,
   previousActiveTool: null,
   strokeVisited: new Set(),
+  strokeHistorySnapshot: null,
+  strokeChanged: false,
   lineStartCell: null,
   brushHoverCell: null,
   selection: new Set(),
@@ -1568,6 +1570,7 @@ function setupEvents() {
   elements.patternCanvas.addEventListener("pointerdown", handleCanvasPointerDown);
   elements.patternCanvas.addEventListener("pointermove", handleCanvasPointerMove);
   elements.patternCanvas.addEventListener("pointerup", handleCanvasPointerUp);
+  elements.patternCanvas.addEventListener("pointercancel", handleCanvasPointerUp);
   elements.patternCanvas.addEventListener("wheel", handleCanvasWheel, { passive: false });
   elements.canvasWrap.addEventListener("pointerdown", handleCanvasPanPointerDown);
   elements.canvasWrap.addEventListener("pointermove", handleCanvasPanPointerMove);
@@ -4919,12 +4922,13 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
       const pg = Math.round(data[index + 1] * alpha + 255 * (1 - alpha));
       const pb = Math.round(data[index + 2] * alpha + 255 * (1 - alpha));
       const luminance = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-      const background = isBackgroundLikePixel(pr, pg, pb, alpha);
+      const transparent = state.removeTransparent && alpha < 0.08;
+      const nearWhite = !transparent && isBackgroundLikePixel(pr, pg, pb, 1);
       const outlineStrength = outlineStrengthForSize();
       const isDarkLine = state.lineBoost && luminance < (outlineStrength >= 3 ? 90 : outlineStrength >= 2 ? 82 : 74);
       const outlineWeight =
         outlineStrength >= 3 ? (state.gridSize <= 48 ? 2.2 : 1.9) : outlineStrength >= 2 ? 1.55 : 1.18;
-      const weight = background ? 0 : isDarkLine ? outlineWeight : 1;
+      const weight = transparent ? 0 : isDarkLine ? outlineWeight : nearWhite ? 0.72 : 1;
       if (weight <= 0) {
         backgroundPixels += 1;
         continue;
@@ -4936,7 +4940,7 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
       bucket.g += pg * weight;
       bucket.b += pb * weight;
       bucket.weight += weight;
-      if (background) bucket.backgroundWeight += weight;
+      if (nearWhite) bucket.backgroundWeight += weight;
       buckets.set(key, bucket);
 
       if (isDarkLine) {
@@ -4957,7 +4961,6 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
     winner = buckets.get(darkBucketKey);
   } else {
     for (const bucket of buckets.values()) {
-      if (usesEmptyBackground() && bucket.backgroundWeight > bucket.weight * 0.7) continue;
       if (!winner || bucket.weight > winner.weight) {
         winner = bucket;
       }
@@ -4973,7 +4976,7 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
     r: winner.r / winner.weight,
     g: winner.g / winner.weight,
     b: winner.b / winner.weight,
-    background: winner.backgroundWeight > winner.weight * 0.55,
+    background: false,
   };
 }
 
@@ -4988,18 +4991,18 @@ function eraserFillColor() {
 function computeBackgroundMask(pattern, pixels, size, force = false) {
   if (!force && !usesEmptyBackground()) return new Uint8Array(pattern.length);
   const edgeBackgroundColors = detectEdgeBackgroundColors(pattern, size);
+  const protectionMask = buildBackgroundProtectionMask(pattern, size);
   const visited = new Uint8Array(pattern.length);
   const queue = [];
   const pushIfBackground = (index) => {
-    if (visited[index]) return;
+    if (visited[index] || protectionMask[index]) return;
     const sample = pixels[index];
     const color = pattern[index];
     const backgroundLike =
       sample?.empty ||
       sample?.background ||
       color.empty ||
-      isLikelyBackgroundColor(color) ||
-      edgeBackgroundColors.some((edgeColor) => colorDistance(color, edgeColor) <= 14);
+      edgeBackgroundColors.some((edgeColor) => colorDistance(color, edgeColor) <= 10);
     if (!backgroundLike) return;
     visited[index] = 1;
     queue.push(index);
@@ -5024,6 +5027,50 @@ function computeBackgroundMask(pattern, pixels, size, force = false) {
   return visited;
 }
 
+function buildBackgroundProtectionMask(pattern, size) {
+  const mask = new Uint8Array(pattern.length);
+  for (let index = 0; index < pattern.length; index += 1) {
+    const color = pattern[index];
+    if (!color || color.empty || !color.lab) continue;
+    const x = index % size;
+    const y = Math.floor(index / size);
+    const neighbors = getEightNeighbors(x, y, size)
+      .map((neighbor) => pattern[neighbor])
+      .filter((item) => item && !item.empty && item.lab);
+    if (neighbors.length < 2) continue;
+    const maxContrast = Math.max(...neighbors.map((neighbor) => colorDistance(color, neighbor)));
+    const similarNeighbors = neighbors.filter((neighbor) => colorDistance(color, neighbor) <= 12).length;
+    const saturation = Math.max(color.rgb.r, color.rgb.g, color.rgb.b) - Math.min(color.rgb.r, color.rgb.g, color.rgb.b);
+    const darkStructure = color.lab.l < 54 && maxContrast >= 24 && similarNeighbors >= 1;
+    const accentStructure = saturation >= 72 && maxContrast >= 32 && similarNeighbors >= 2;
+    if (darkStructure || accentStructure) mask[index] = 1;
+  }
+
+  const protectedWithClosedGaps = new Uint8Array(mask);
+  const directions = [
+    [-1, 0, 1, 0],
+    [0, -1, 0, 1],
+    [-1, -1, 1, 1],
+    [1, -1, -1, 1],
+  ];
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const index = y * size + x;
+      if (mask[index]) continue;
+      const closesGap = directions.some(([ax, ay, bx, by]) => {
+        const x1 = x + ax;
+        const y1 = y + ay;
+        const x2 = x + bx;
+        const y2 = y + by;
+        if (x1 < 0 || y1 < 0 || x1 >= size || y1 >= size || x2 < 0 || y2 < 0 || x2 >= size || y2 >= size) return false;
+        return Boolean(mask[y1 * size + x1] && mask[y2 * size + x2]);
+      });
+      if (closesGap) protectedWithClosedGaps[index] = 1;
+    }
+  }
+  return protectedWithClosedGaps;
+}
+
 function applyBackgroundModeToGrid(pattern, mask, mode = state.pixelBackground) {
   if (!mask || !mask.length) return [...pattern];
   const fill = mode === "white" ? whiteBeadColor() : EMPTY_CELL;
@@ -5031,13 +5078,32 @@ function applyBackgroundModeToGrid(pattern, mask, mode = state.pixelBackground) 
 }
 
 function detectEdgeBackgroundColors(pattern, size) {
-  const border = [];
+  const entries = new Map();
+  const add = (color, side) => {
+    if (!color || color.empty) return;
+    const key = color.code || color.hex;
+    const entry = entries.get(key) || { color, count: 0, sides: new Set() };
+    entry.count += 1;
+    entry.sides.add(side);
+    entries.set(key, entry);
+  };
   for (let i = 0; i < size; i += 1) {
-    border.push(pattern[i], pattern[(size - 1) * size + i], pattern[i * size], pattern[i * size + size - 1]);
+    add(pattern[i], "top");
+    add(pattern[(size - 1) * size + i], "bottom");
+    add(pattern[i * size], "left");
+    add(pattern[i * size + size - 1], "right");
   }
-  return countNeighborColors(border.filter((item) => item && !item.empty))
-    .filter((entry) => entry.count >= Math.max(2, size * 0.08) || isLikelyBackgroundColor(entry.color))
-    .sort((a, b) => b.count - a.count)
+  const borderCellCount = Math.max(1, size * 4 - 4);
+  return [...entries.values()]
+    .filter((entry) => {
+      if (isLikelyBackgroundColor(entry.color)) {
+        return (entry.sides.size >= 2 && entry.count >= 4) || entry.count >= Math.max(8, size * 0.55);
+      }
+      const broadCoverage = entry.sides.size >= 3 && entry.count >= Math.max(6, borderCellCount * 0.035);
+      const dominantCoverage = entry.sides.size >= 2 && entry.count >= Math.max(10, borderCellCount * 0.08);
+      return broadCoverage || dominantCoverage;
+    })
+    .sort((a, b) => b.sides.size - a.sides.size || b.count - a.count)
     .slice(0, 4)
     .map((entry) => entry.color);
 }
@@ -5060,6 +5126,7 @@ function averageSampleCell(data, sampleSize, cellX, cellY, sampleScale) {
   let darkG = 0;
   let darkB = 0;
   let darkCount = 0;
+  let transparentPixels = 0;
 
   for (let yy = 0; yy < sampleScale; yy += 1) {
     for (let xx = 0; xx < sampleScale; xx += 1) {
@@ -5071,8 +5138,10 @@ function averageSampleCell(data, sampleSize, cellX, cellY, sampleScale) {
       const pg = Math.round(data[index + 1] * alpha + 255 * (1 - alpha));
       const pb = Math.round(data[index + 2] * alpha + 255 * (1 - alpha));
       const luminance = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-      const background = isBackgroundLikePixel(pr, pg, pb, alpha);
-      const weight = background ? 0.15 : 1;
+      const transparent = state.removeTransparent && alpha < 0.08;
+      const nearWhite = !transparent && isBackgroundLikePixel(pr, pg, pb, 1);
+      const weight = transparent ? 0.15 : nearWhite ? 0.72 : 1;
+      if (transparent) transparentPixels += 1;
 
       r += pr * weight;
       g += pg * weight;
@@ -5100,7 +5169,7 @@ function averageSampleCell(data, sampleSize, cellX, cellY, sampleScale) {
     r: r / count,
     g: g / count,
     b: b / count,
-    background: isBackgroundLikePixel(r / count, g / count, b / count, 1),
+    background: transparentPixels / Math.max(1, sampleScale * sampleScale) > 0.72,
   };
 }
 
@@ -6877,6 +6946,16 @@ function renderPattern(options = {}) {
   return measurePerformance(dirtyBounds ? "render.canvas.partial" : "render.canvas", () => renderPatternNow(dirtyBounds));
 }
 
+function currentExportSnapshot() {
+  const pattern = [...displayPattern()];
+  const counts = buildCounts(pattern);
+  return {
+    pattern,
+    counts,
+    rows: [...counts.values()].sort((a, b) => b.count - a.count),
+  };
+}
+
 function renderPatternNow(requestedDirtyBounds = null) {
   const canvasResized = configureCanvasForView();
   const pattern = displayPattern();
@@ -8155,7 +8234,8 @@ function handleCanvasPointerDown(event) {
     return;
   }
   if (state.activeTool === "brush") {
-    pushHistory();
+    state.strokeHistorySnapshot = snapshotPattern();
+    state.strokeChanged = false;
     state.isBrushPainting = true;
     state.lastBrushIndex = null;
     state.lastBrushCell = null;
@@ -8166,7 +8246,8 @@ function handleCanvasPointerDown(event) {
   }
   if (state.activeTool === "eraser") {
     if (state.selection.size) return;
-    pushHistory();
+    state.strokeHistorySnapshot = snapshotPattern();
+    state.strokeChanged = false;
     state.isErasing = true;
     state.lastEraseIndex = null;
     state.lastEraseCell = null;
@@ -8215,15 +8296,18 @@ function handleCanvasPointerUp(event) {
     state.lastBrushIndex = null;
     state.lastBrushCell = null;
     state.strokeVisited = new Set();
+    const strokeChanged = commitStrokeHistory();
     state.pattern = validateColorConstraints(state.pattern);
     state.counts = buildCounts(state.pattern);
     state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
     state.hasConfirmedGrid = true;
-    state.manualEditCount += 1;
-    state.editGridVersion += 1;
+    if (strokeChanged) {
+      state.manualEditCount += 1;
+      state.editGridVersion += 1;
+    }
     renderStats();
     renderPattern();
-    markProjectDirty();
+    if (strokeChanged) markProjectDirty();
     return;
   }
   if (state.isErasing) {
@@ -8231,15 +8315,18 @@ function handleCanvasPointerUp(event) {
     state.lastEraseIndex = null;
     state.lastEraseCell = null;
     state.strokeVisited = new Set();
+    const strokeChanged = commitStrokeHistory();
     state.pattern = validateColorConstraints(state.pattern);
     state.counts = buildCounts(state.pattern);
     state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
     state.hasConfirmedGrid = true;
-    state.manualEditCount += 1;
-    state.editGridVersion += 1;
+    if (strokeChanged) {
+      state.manualEditCount += 1;
+      state.editGridVersion += 1;
+    }
     renderStats();
     renderPattern();
-    markProjectDirty();
+    if (strokeChanged) markProjectDirty();
     return;
   }
   if (!state.dragStartCell) return;
@@ -8261,9 +8348,12 @@ function paintBrushCell(cell, snapLine = false) {
       for (const brushCell of brushCellsForPoint(symmetricPoint)) {
         const index = brushCell.y * state.gridSize + brushCell.x;
         if (state.strokeVisited.has(index) || !canEditCell(index)) continue;
+        state.strokeVisited.add(index);
+        const current = state.pattern[index];
+        if (samePatternColor(current, constrainedColor)) continue;
         state.pattern[index] = constrainedColor;
         state.manualEditedCells.add(index);
-        state.strokeVisited.add(index);
+        state.strokeChanged = true;
         state.lastBrushIndex = index;
         dirtyCells.push(brushCell);
       }
@@ -8284,9 +8374,12 @@ function eraseBrushCell(cell) {
       for (const brushCell of brushCellsForPoint(symmetricPoint)) {
         const index = brushCell.y * state.gridSize + brushCell.x;
         if (state.strokeVisited.has(index) || !canEditCell(index)) continue;
+        state.strokeVisited.add(index);
+        const current = state.pattern[index];
+        if (samePatternColor(current, fill)) continue;
         state.pattern[index] = fill;
         state.manualEditedCells.add(index);
-        state.strokeVisited.add(index);
+        state.strokeChanged = true;
         state.lastEraseIndex = index;
         dirtyCells.push(brushCell);
       }
@@ -8296,6 +8389,21 @@ function eraseBrushCell(cell) {
   state.selectedCell = cell;
   dirtyCells.push(cell);
   requestPatternRender(dirtyCells);
+}
+
+function samePatternColor(left, right) {
+  if (!left || !right) return false;
+  return Boolean(left.empty) === Boolean(right.empty) && (left.empty || left.code === right.code);
+}
+
+function commitStrokeHistory() {
+  const snapshot = state.strokeHistorySnapshot;
+  const changed = state.strokeChanged;
+  state.strokeHistorySnapshot = null;
+  state.strokeChanged = false;
+  if (changed && snapshot) pushHistory(snapshot);
+  else updateHistoryButtons();
+  return changed;
 }
 
 function eraseCurrentSelection() {
@@ -9043,6 +9151,34 @@ function snapshotPattern() {
   };
 }
 
+function sameHistoryList(left = [], right = []) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameHistorySet(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  const values = new Set(left);
+  return right.every((value) => values.has(value));
+}
+
+function historySnapshotsEqual(left, right) {
+  if (!left || !right) return false;
+  const a = Array.isArray(left) ? { codes: left } : left;
+  const b = Array.isArray(right) ? { codes: right } : right;
+  return (
+    Number(a.size || 0) === Number(b.size || 0) &&
+    Number(a.width || 0) === Number(b.width || 0) &&
+    Number(a.height || 0) === Number(b.height || 0) &&
+    a.selectedColorCode === b.selectedColorCode &&
+    sameHistoryList(a.codes || [], b.codes || []) &&
+    sameHistorySet(a.manualEditedCells || [], b.manualEditedCells || []) &&
+    sameHistorySet(a.lockedColorCodes || [], b.lockedColorCodes || []) &&
+    sameHistorySet(a.allowedColorCodes || [], b.allowedColorCodes || []) &&
+    sameHistorySet(a.disabledColorCodes || [], b.disabledColorCodes || []) &&
+    sameHistorySet(a.projectPaletteCodes || [], b.projectPaletteCodes || [])
+  );
+}
+
 function restorePattern(snapshot) {
   const codes = Array.isArray(snapshot) ? snapshot : snapshot.codes;
   if (!Array.isArray(snapshot) && snapshot.size) {
@@ -9085,14 +9221,20 @@ function restorePattern(snapshot) {
   markProjectDirty();
 }
 
-function pushHistory() {
-  if (!state.pattern.length) return;
-  state.undoStack.push(snapshotPattern());
+function pushHistory(snapshot = snapshotPattern()) {
+  if (!state.pattern.length || !snapshot) return false;
+  const latest = state.undoStack[state.undoStack.length - 1];
+  if (latest && historySnapshotsEqual(latest, snapshot)) {
+    updateHistoryButtons();
+    return false;
+  }
+  state.undoStack.push(snapshot);
   if (state.undoStack.length > 60) {
     state.undoStack.shift();
   }
   state.redoStack = [];
   updateHistoryButtons();
+  return true;
 }
 
 function clearHistory() {
@@ -9102,11 +9244,17 @@ function clearHistory() {
 }
 
 function undoEdit() {
-  if (!state.undoStack.length) return;
-  const previousSnapshot = state.undoStack[state.undoStack.length - 1];
   const currentSnapshot = snapshotPattern();
+  while (state.undoStack.length && historySnapshotsEqual(state.undoStack[state.undoStack.length - 1], currentSnapshot)) {
+    state.undoStack.pop();
+  }
+  if (!state.undoStack.length) {
+    updateHistoryButtons();
+    elements.cellInfo.textContent = "暂无可撤回的有效修改。";
+    return;
+  }
+  const previousSnapshot = state.undoStack.pop();
   restorePattern(previousSnapshot);
-  state.undoStack.pop();
   state.redoStack.push(currentSnapshot);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已撤回一步";
@@ -9114,11 +9262,17 @@ function undoEdit() {
 }
 
 function redoEdit() {
-  if (!state.redoStack.length) return;
-  const nextSnapshot = state.redoStack[state.redoStack.length - 1];
   const currentSnapshot = snapshotPattern();
+  while (state.redoStack.length && historySnapshotsEqual(state.redoStack[state.redoStack.length - 1], currentSnapshot)) {
+    state.redoStack.pop();
+  }
+  if (!state.redoStack.length) {
+    updateHistoryButtons();
+    elements.cellInfo.textContent = "暂无可重做的有效修改。";
+    return;
+  }
+  const nextSnapshot = state.redoStack.pop();
   restorePattern(nextSnapshot);
-  state.redoStack.pop();
   state.undoStack.push(currentSnapshot);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已重做一步";
@@ -9522,17 +9676,21 @@ function exportPattern() {
   if (!canLeaveTransformWithCurrentPreview("export")) return;
   if (!state.pattern.length) return;
   const includeWatermark = elements.exportWatermarkToggle?.checked ?? state.exportWatermarkEnabled;
+  const snapshot = currentExportSnapshot();
   state.exportWatermarkEnabled = includeWatermark;
   if (elements.exportFormat?.value === "pdf") {
-    exportPatternPdf({ includeWatermark });
+    exportPatternPdf({ includeWatermark, ...snapshot });
     return;
   }
-  const readableCanvas = renderReadableExportCanvas({ includeWatermark });
+  const readableCanvas = renderReadableExportCanvas({ includeWatermark, ...snapshot });
   downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
 }
 
 function renderReadableExportCanvas(options = {}) {
   const includeWatermark = options.includeWatermark !== false;
+  const pattern = options.pattern || displayPattern();
+  const counts = options.counts || buildCounts(pattern);
+  const rows = options.rows || [...counts.values()].sort((a, b) => b.count - a.count);
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
   const largestSide = Math.max(widthCells, heightCells);
@@ -9541,7 +9699,7 @@ function renderReadableExportCanvas(options = {}) {
   const top = Math.max(180, Math.round(cellSize * 4.1));
   const plotWidth = widthCells * cellSize;
   const plotHeight = heightCells * cellSize;
-  const legendRows = Math.ceil(sortedCounts().length / Math.max(1, Math.floor(plotWidth / 188)));
+  const legendRows = Math.ceil(rows.length / Math.max(1, Math.floor(plotWidth / 188)));
   const legendHeight = Math.max(280, 90 + legendRows * 82);
   const canvas = document.createElement("canvas");
   canvas.width = margin * 2 + plotWidth;
@@ -9555,11 +9713,11 @@ function renderReadableExportCanvas(options = {}) {
   exportCtx.fillText(includeWatermark ? "小麦拼豆" : "拼豆图纸", margin, 76);
   exportCtx.font = `500 ${Math.max(34, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
   exportCtx.textAlign = "right";
-  exportCtx.fillText(`${state.fileName || "pattern"}   ${gridDimensionsLabel()} / ${totalBeadCount()}颗 / ${state.counts.size}色`, canvas.width - margin, 76);
+  exportCtx.fillText(`${state.fileName || "pattern"}   ${gridDimensionsLabel()} / ${totalBeadCount(pattern)}颗 / ${counts.size}色`, canvas.width - margin, 76);
   exportCtx.textAlign = "left";
 
-  drawReadableCells(exportCtx, margin, top, cellSize);
-  drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2);
+  drawReadableCells(exportCtx, margin, top, cellSize, pattern);
+  drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2, rows);
   if (includeWatermark) drawReadableExportWatermark(exportCtx, canvas, top, top + plotHeight);
 
   return canvas;
@@ -9589,7 +9747,7 @@ function drawReadableExportWatermark(exportCtx, canvas, startY, endY) {
   exportCtx.restore();
 }
 
-function drawReadableCells(exportCtx, startX, startY, cellSize) {
+function drawReadableCells(exportCtx, startX, startY, cellSize, pattern = displayPattern()) {
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
   const stride = state.gridSize;
@@ -9601,7 +9759,7 @@ function drawReadableCells(exportCtx, startX, startY, cellSize) {
 
   for (let y = 0; y < heightCells; y += 1) {
     for (let x = 0; x < widthCells; x += 1) {
-      const item = state.pattern[y * stride + x];
+      const item = pattern[y * stride + x];
       const cellX = startX + x * cellSize;
       const cellY = startY + y * cellSize;
       if (item.empty) {
@@ -9664,8 +9822,8 @@ function drawReadableCells(exportCtx, startX, startY, cellSize) {
   exportCtx.strokeRect(startX, startY, plotWidth, plotHeight);
 }
 
-function drawReadableLegend(exportCtx, startX, startY, maxWidth) {
-  const sorted = sortedCounts();
+function drawReadableLegend(exportCtx, startX, startY, maxWidth, rows = sortedCounts()) {
+  const sorted = rows;
   const chipWidth = 170;
   const chipHeight = 58;
   const gap = 18;
@@ -9718,6 +9876,9 @@ function exportPatternPdf(options = {}) {
 
 function buildVectorPdf(options = {}) {
   const includeWatermark = options.includeWatermark !== false;
+  const pattern = options.pattern || displayPattern();
+  const counts = options.counts || buildCounts(pattern);
+  const colorRows = options.rows || [...counts.values()].sort((a, b) => b.count - a.count);
   const page = { width: 842, height: 595 };
   const widthCells = activeGridWidth();
   const heightCells = activeGridHeight();
@@ -9755,13 +9916,13 @@ function buildVectorPdf(options = {}) {
 
   rect(0, 0, page.width, page.height, "#fffdf8");
   text(includeWatermark ? "小麦拼豆" : "拼豆图纸", margin, titleY, 16);
-  text(`${gridDimensionsLabel()} / ${totalBeadCount()} beads / ${state.counts.size} colors / MARD ${palette.length}`, page.width - margin, titleY, 10, "right");
+  text(`${gridDimensionsLabel()} / ${totalBeadCount(pattern)} beads / ${counts.size} colors / MARD ${palette.length}`, page.width - margin, titleY, 10, "right");
   text(state.fileName || "pattern", margin, titleY + 18, 9);
 
   rect(startX, startY, plotWidth, plotHeight, "#ffffff");
   for (let y = 0; y < heightCells; y += 1) {
     for (let x = 0; x < widthCells; x += 1) {
-      const item = state.pattern[y * stride + x];
+      const item = pattern[y * stride + x];
       const px = startX + x * cell;
       const py = startY + y * cell;
       if (!item.empty) {
@@ -9804,7 +9965,7 @@ function buildVectorPdf(options = {}) {
   }
 
   text("Color List", legendX, 74, 13);
-  const rows = sortedCounts();
+  const rows = colorRows;
   const maxLegendRows = 45;
   const columns = Math.max(1, Math.ceil(rows.length / maxLegendRows));
   const rowsPerColumn = Math.max(1, Math.ceil(rows.length / columns));

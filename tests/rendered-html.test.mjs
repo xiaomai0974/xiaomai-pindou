@@ -80,6 +80,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="projectLibraryCount"/);
   assert.match(html, /我做过的图纸/);
   assert.match(html, /<input id="exportWatermarkToggle" type="checkbox" checked/);
+  assert.match(html, /id="referenceExportHint"/);
   assert.match(html, /添加“小麦拼豆”水印/);
 });
 
@@ -140,6 +141,21 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function deltaE2000\(/);
   assert.match(script, /function refineAccuratePaletteMatches\(/);
   assert.match(script, /function calculateColorMatchMetrics\(/);
+  assert.match(script, /function buildBackgroundProtectionMask\(/);
+  assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
+  assert.match(script, /function currentExportSnapshot\(/);
+  assert.match(script, /addEventListener\("pointercancel", handleCanvasPointerUp\)/);
+  assert.match(script, /function commitStrokeHistory\(/);
+  assert.match(script, /function historySnapshotsEqual\(/);
+  assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
+  assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
+  assert.match(script, /exportPatternPdf\(\{ includeWatermark, \.\.\.snapshot \}\)/);
+  const exportCellSource = script.slice(script.indexOf("function drawReadableCells"), script.indexOf("function drawReadableLegend"));
+  assert.match(exportCellSource, /const item = pattern\[y \* stride \+ x\]/);
+  assert.doesNotMatch(exportCellSource, /state\.pattern\[y \* stride \+ x\]/);
+  const pdfSource = script.slice(script.indexOf("function buildVectorPdf"), script.indexOf("function pdfColor"));
+  assert.match(pdfSource, /const item = pattern\[y \* stride \+ x\]/);
+  assert.doesNotMatch(pdfSource, /state\.pattern\[y \* stride \+ x\]/);
   assert.match(script, /state\.fitMode === "center"/);
   assert.match(script, /const codesVisibleBefore/);
   assert.doesNotMatch(script, /function openAutosaveDb\(/);
@@ -195,4 +211,29 @@ test("palette worker maps colors and preserves empty cells", async () => {
   assert.equal(messages[0].type, "mapped");
   assert.equal(messages[0].requestId, 7);
   assert.deepEqual(Array.from(messages[0].indices), [0, 1, 0, -1]);
+});
+
+test("edge background detection does not erase a dark subject touching one edge", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const detectionSource = source.slice(
+    source.indexOf("function detectEdgeBackgroundColors"),
+    source.indexOf("function averageSampleCell"),
+  );
+  const context = { Map, Set, Math };
+  vm.runInNewContext(detectionSource, context);
+  const color = (code, rgb, lightness) => ({ code, hex: code, rgb, lab: { l: lightness } });
+  const skin = color("skin", { r: 220, g: 160, b: 135 }, 72);
+  const black = color("black", { r: 15, g: 15, b: 15 }, 5);
+  const white = color("white", { r: 250, g: 250, b: 250 }, 98);
+  const size = 8;
+  const oneEdgeSubject = Array(size * size).fill(skin);
+  for (let x = 1; x < size - 1; x += 1) oneEdgeSubject[x] = black;
+  for (let x = 0; x < size; x += 1) oneEdgeSubject[(size - 1) * size + x] = white;
+  for (let y = 0; y < size; y += 1) oneEdgeSubject[y * size] = white;
+  const detected = context.detectEdgeBackgroundColors(oneEdgeSubject, size).map((item) => item.code);
+  assert.ok(detected.includes("white"));
+  assert.ok(!detected.includes("black"));
+
+  const darkBackground = Array(size * size).fill(black);
+  assert.ok(context.detectEdgeBackgroundColors(darkBackground, size).some((item) => item.code === "black"));
 });

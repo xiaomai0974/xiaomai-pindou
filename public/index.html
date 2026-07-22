@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="styles.css?v=20260718-11" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
-    <script src="app.js?v=20260718-11" defer></script>
+    <script src="app.js?v=20260722-1" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -546,6 +546,7 @@
             <i data-lucide="download" aria-hidden="true"></i>
             导出图纸
           </button>
+          <small id="referenceExportHint" class="setting-hint">导出以当前格子图纸为准，参考图层只用于描图，不会写入 PNG 或 PDF。</small>
           <button id="variantButton" class="hidden-control" type="button" hidden>
             <i data-lucide="layout-grid" aria-hidden="true"></i>
             多方案
