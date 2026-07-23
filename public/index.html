@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="styles.css?v=20260718-11" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
-    <script src="app.js?v=20260723-2" defer></script>
+    <script src="app.js?v=20260723-8" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -114,7 +114,7 @@
         <section class="control-group sidebar-card size-card">
           <div class="group-title">
             <span><b class="workflow-step">1</b>画布尺寸</span>
-            <output id="sizeLabel">48 x 48</output>
+            <output id="sizeLabel">64 x 64</output>
           </div>
           <div class="segmented hidden-presets" role="group" aria-label="拼豆尺寸" hidden>
             <button class="seg-option pixel-size" data-size="30" type="button">30</button>
@@ -122,19 +122,19 @@
             <button class="seg-option" data-size="32" type="button">32</button>
             <button class="seg-option pixel-size" data-size="34" type="button">34</button>
             <button class="seg-option pixel-size" data-size="40" type="button">40</button>
-            <button class="seg-option is-active" data-size="48" type="button">48</button>
-            <button class="seg-option" data-size="64" type="button">64</button>
+            <button class="seg-option" data-size="48" type="button">48</button>
+            <button class="seg-option is-active" data-size="64" type="button">64</button>
             <button class="seg-option" data-size="100" type="button">100</button>
             <button class="seg-option" data-size="120" type="button">120</button>
           </div>
           <div class="size-input-grid">
             <label>
               <span>宽度</span>
-              <input id="customSizeInput" type="number" min="16" max="160" step="1" value="48" />
+              <input id="customSizeInput" type="number" min="16" max="160" step="1" value="64" />
             </label>
             <label>
               <span>高度</span>
-              <input id="customHeightInput" type="number" min="16" max="160" step="1" value="48" />
+              <input id="customHeightInput" type="number" min="16" max="160" step="1" value="64" />
             </label>
           </div>
           <button id="applyCustomSizeButton" class="wide-tool-button" type="button">确认尺寸</button>
@@ -143,22 +143,24 @@
         <section class="control-group sidebar-card palette-settings-card">
           <div class="group-title">
             <span><b class="workflow-step">3</b>颜色数量</span>
-            <output id="colorLabel">16 / 221 色</output>
+            <output id="colorLabel">24 / 221 色</output>
           </div>
           <div class="palette-name-row">
             <span>色板</span>
             <strong>MARD 221</strong>
           </div>
-          <input id="colorLimit" class="hidden-control" type="range" min="1" max="221" value="16" step="1" />
-          <div class="custom-size-row">
-            <label for="customColorLimitInput">最大颜色</label>
-            <input id="customColorLimitInput" type="number" min="1" max="221" step="1" value="16" />
-            <button id="applyCustomColorLimitButton" type="button">确认</button>
+          <div class="color-limit-slider">
+            <input id="colorLimit" type="range" min="4" max="221" value="24" step="1" aria-label="最大颜色数" />
+            <output id="colorLimitValue" for="colorLimit">24 色</output>
+          </div>
+          <div class="color-limit-scale" aria-hidden="true">
+            <span>少颜色</span>
+            <span>更多细节</span>
           </div>
           <div class="mini-presets color-clean-presets" role="group" aria-label="颜色丰富度">
             <button class="color-preset" data-colors="12" type="button"><strong>简洁</strong><span>12 色</span></button>
-            <button class="color-preset is-active" data-colors="16" type="button"><strong>平衡</strong><span>16 色</span></button>
-            <button class="color-preset" data-colors="24" type="button"><strong>细节</strong><span>24 色</span></button>
+            <button class="color-preset" data-colors="16" type="button"><strong>平衡</strong><span>16 色</span></button>
+            <button class="color-preset is-active" data-colors="24" type="button"><strong>细节</strong><span>24 色</span></button>
           </div>
           <small class="setting-hint">MARD 221 全色板仍可搜索；这里控制一张图最多使用多少种颜色。</small>
         </section>
@@ -219,17 +221,17 @@
                 <span>去噪</span>
               </label>
               <label class="toggle">
-                <input id="materialTextureCleanupToggle" type="checkbox" />
+                <input id="materialTextureCleanupToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>材质去纹理</span>
               </label>
               <label class="toggle">
-                <input id="backgroundCleanupToggle" type="checkbox" />
+                <input id="backgroundCleanupToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>背景整理</span>
               </label>
               <label class="toggle">
-                <input id="regionColorStabilizationToggle" type="checkbox" />
+                <input id="regionColorStabilizationToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>色块整理</span>
               </label>
@@ -270,8 +272,8 @@
               <span>精准匹配</span>
             </label>
             <div class="segmented matching-view-options" role="group" aria-label="匹配结果视图">
-              <button id="showRawGridButton" class="is-active" type="button">原始匹配</button>
-              <button id="showFinalGridButton" type="button">最终效果</button>
+              <button id="showRawGridButton" type="button">原始匹配</button>
+              <button id="showFinalGridButton" class="is-active" type="button">最终效果</button>
             </div>
             <small class="setting-hint">原始匹配保留色板直配结果；最终效果包含减色和清理。</small>
           </div>
@@ -375,7 +377,7 @@
             </div>
             <div class="advanced-parameter-toggles">
               <label class="toggle">
-                <input id="transparentToggle" type="checkbox" />
+                <input id="transparentToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>去透明边</span>
               </label>
@@ -385,17 +387,17 @@
                 <span>保留轮廓</span>
               </label>
               <label class="toggle">
-                <input id="dominantSamplingToggle" type="checkbox" />
+                <input id="dominantSamplingToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>主导色采样</span>
               </label>
               <label class="toggle">
-                <input id="mergeSimilarToggle" type="checkbox" />
+                <input id="mergeSimilarToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>合并相近颜色</span>
               </label>
               <label class="toggle">
-                <input id="cleanSmallRegionsToggle" type="checkbox" />
+                <input id="cleanSmallRegionsToggle" type="checkbox" checked />
                 <span class="switch" aria-hidden="true"></span>
                 <span>清理孤立像素</span>
               </label>

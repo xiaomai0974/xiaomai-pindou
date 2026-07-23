@@ -39,16 +39,16 @@ const fallbackPaletteData = [
 
 const PALETTE_NAME = "MARD 221";
 const PALETTE_LIMIT = 221;
-const DEFAULT_COLOR_LIMIT = 16;
+const DEFAULT_COLOR_LIMIT = 24;
 const DEFAULT_LOCAL_PREPROCESS_SETTINGS = Object.freeze({
   enabled: true,
   flatColorSimplification: false,
   antiAliasCleanup: false,
   outlinePreserve: false,
   noiseReduction: false,
-  materialTextureCleanup: false,
-  backgroundCleanup: false,
-  regionColorStabilization: false,
+  materialTextureCleanup: true,
+  backgroundCleanup: true,
+  regionColorStabilization: true,
   regionToneCompression: false,
   outlineColorConvergence: false,
 });
@@ -58,16 +58,16 @@ const DEFAULT_GENERATION_SETTINGS = Object.freeze({
   processingProfile: "detail64",
   pixelBackground: "empty",
   dither: false,
-  removeTransparent: false,
+  removeTransparent: true,
   lineBoost: false,
   outlineMode: "light",
-  dominantSampling: false,
-  mergeSimilarColors: false,
-  cleanSmallRegions: false,
+  dominantSampling: true,
+  mergeSimilarColors: true,
+  cleanSmallRegions: true,
   animeMode: false,
   minRegionSize: 2,
   accurateMatch: true,
-  diagnosticViewMode: "raw",
+  diagnosticViewMode: "final",
 });
 
 const paletteSource = Array.isArray(window.MARD_221_PALETTE) && window.MARD_221_PALETTE.length
@@ -139,9 +139,9 @@ const state = {
   appMode: DEFAULT_GENERATION_SETTINGS.appMode,
   patternMode: DEFAULT_GENERATION_SETTINGS.patternMode,
   processingProfile: DEFAULT_GENERATION_SETTINGS.processingProfile,
-  gridSize: 48,
-  gridWidth: 48,
-  gridHeight: 48,
+  gridSize: 64,
+  gridWidth: 64,
+  gridHeight: 64,
   colorLimit: DEFAULT_COLOR_LIMIT,
   pixelBackground: DEFAULT_GENERATION_SETTINGS.pixelBackground,
   showCellCodes: true,
@@ -235,7 +235,7 @@ const state = {
   previewGridVersion: 0,
   manualEditCount: 0,
   manualEditedCells: new Set(),
-  patternSize: 48,
+  patternSize: 64,
   counts: new Map(),
   projectPalette: [],
   qualityMetrics: null,
@@ -347,8 +347,7 @@ const elements = {
   colorLabel: document.querySelector("#colorLabel"),
   fitModeLabel: document.querySelector("#fitModeLabel"),
   colorLimit: document.querySelector("#colorLimit"),
-  customColorLimitInput: document.querySelector("#customColorLimitInput"),
-  applyCustomColorLimitButton: document.querySelector("#applyCustomColorLimitButton"),
+  colorLimitValue: document.querySelector("#colorLimitValue"),
   customSizeInput: document.querySelector("#customSizeInput"),
   customHeightInput: document.querySelector("#customHeightInput"),
   applyCustomSizeButton: document.querySelector("#applyCustomSizeButton"),
@@ -516,6 +515,7 @@ let paletteWorker = null;
 let paletteWorkerDisabled = false;
 let paletteWorkerRequestId = 0;
 let previewUpdateVersion = 0;
+let colorLimitPreviewTimer = null;
 const pendingPaletteWorkerRequests = new Map();
 
 function performanceNow() {
@@ -763,7 +763,6 @@ function effectiveAllowedPalette() {
 
 function targetColorLimit() {
   const lockedCount = state.lockedColorCodes.size;
-  if (state.colorMode === "auto") return palette.length;
   if (state.colorMode === "fixedPalette") {
     return Math.min(effectiveAllowedPalette().length, Math.max(state.colorLimit, lockedCount));
   }
@@ -1179,10 +1178,7 @@ function setupEvents() {
   elements.uploadZone.addEventListener("dragleave", handleDragLeave);
   elements.uploadZone.addEventListener("drop", handleDrop);
   elements.colorLimit.addEventListener("input", handleColorLimitChange);
-  elements.applyCustomColorLimitButton.addEventListener("click", applyCustomColorLimit);
-  elements.customColorLimitInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") applyCustomColorLimit();
-  });
+  elements.colorLimit.addEventListener("change", flushColorLimitPreview);
   elements.applyCustomSizeButton.addEventListener("click", applyCustomSize);
   elements.customSizeInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") applyCustomSize();
@@ -1694,7 +1690,6 @@ function setupEvents() {
 function setupProjectDirtyTracking() {
   const selectors = [
     "#colorLimit",
-    "#customColorLimitInput",
     "#customSizeInput",
     "#customHeightInput",
     "#ditherToggle",
@@ -1947,6 +1942,12 @@ function canLeaveTransformWithCurrentPreview(mode) {
 function setWorkbenchMode(mode, options = {}) {
   if (!["transform", "edit", "export"].includes(mode)) mode = "edit";
   if (!canLeaveTransformWithCurrentPreview(mode)) return false;
+  if (mode !== "transform" && state.diagnosticViewMode === "raw") {
+    state.diagnosticViewMode = "final";
+    syncDiagnosticControls();
+    renderPattern();
+    renderStats();
+  }
   if (mode !== "edit" && document.body.classList.contains("focus-canvas-mode")) {
     setFocusCanvasMode(false, { fit: false });
   }
@@ -2030,11 +2031,22 @@ function setupWorkbenchModes() {
 }
 
 function handleColorLimitChange() {
-  setColorLimit(Number(elements.colorLimit.value), true);
+  setColorLimit(Number(elements.colorLimit.value), false);
+  scheduleColorLimitPreview();
 }
 
-function applyCustomColorLimit() {
-  setColorLimit(Number(elements.customColorLimitInput.value), true);
+function scheduleColorLimitPreview() {
+  window.clearTimeout(colorLimitPreviewTimer);
+  colorLimitPreviewTimer = window.setTimeout(() => {
+    colorLimitPreviewTimer = null;
+    requestPreviewUpdate("颜色数量预览已更新，请确认应用。");
+  }, 140);
+}
+
+function flushColorLimitPreview() {
+  window.clearTimeout(colorLimitPreviewTimer);
+  colorLimitPreviewTimer = null;
+  requestPreviewUpdate("颜色数量预览已更新，请确认应用。");
 }
 
 function applyCustomSize() {
@@ -2104,9 +2116,8 @@ function setColorLimit(value, regenerate = true) {
 function syncColorLimitControls() {
   const max = palette.length;
   elements.colorLimit.max = max;
-  elements.customColorLimitInput.max = max;
   elements.colorLimit.value = state.colorLimit;
-  elements.customColorLimitInput.value = state.colorLimit;
+  elements.colorLimitValue.textContent = `${state.colorLimit} 色`;
   elements.colorLabel.textContent = `${state.colorLimit} / ${max} 色`;
   document.querySelectorAll(".color-preset").forEach((button) => {
     button.classList.toggle("is-active", Number(button.dataset.colors) === state.colorLimit);
@@ -2842,9 +2853,7 @@ async function restoreProjectData(projectData, options = {}) {
     state.manualEditCount = state.manualEditedCells.size;
 
     state.colorLimit = clampColorLimit(paletteState.maxColors || state.colorLimit);
-    state.colorMode = ["auto", "max", "fixedPalette"].includes(paletteState.colorConstraintMode)
-      ? paletteState.colorConstraintMode
-      : "max";
+    state.colorMode = paletteState.colorConstraintMode === "fixedPalette" ? "fixedPalette" : "max";
     state.allowedColorCodes = new Set(paletteState.allowedPalette || []);
     state.lockedColorCodes = new Set(paletteState.lockedColors || []);
     state.disabledColorCodes = new Set(paletteState.disabledColors || []);
@@ -4168,6 +4177,7 @@ function finalizePhotoColorMatch(pattern, pixels, size) {
     processed = convergeOutlineColors(processed, size);
   }
   processed = repairOutlines(processed, size, outlineStrengthForSize());
+  processed = forceMaxColors(processed, size, targetColorLimit());
   return {
     pattern: validateColorConstraints(processed),
     backgroundMask,
@@ -4227,8 +4237,8 @@ function optimizedBaseImage() {
     imageData = cleanupAntiAliasPixels(imageData, outlineMask);
   }
   const detailProfile = state.processingProfile === "detail64";
-  if (state.localPreprocessSettings.materialTextureCleanup && !detailProfile) {
-    imageData = cleanupMaterialTexture(imageData, outlineMask);
+  if (state.localPreprocessSettings.materialTextureCleanup) {
+    imageData = cleanupMaterialTexture(imageData, outlineMask, detailProfile ? "light" : "standard");
   }
   if (state.localPreprocessSettings.noiseReduction && !detailProfile) {
     imageData = reduceBaseImageNoise(imageData, outlineMask);
@@ -4323,13 +4333,10 @@ function cleanupBaseImageBackground(imageData, outlineMask) {
   const out = output.data;
   const edge = estimatePreprocessEdgeBackground(data, width, height);
   const fill = whiteBeadColor().rgb;
-  for (let index = 0; index < width * height; index += 1) {
-    if (outlineMask[index]) continue;
+  const connectedBackground = buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask);
+  for (let index = 0; index < connectedBackground.length; index += 1) {
+    if (!connectedBackground[index]) continue;
     const offset = index * 4;
-    const alpha = data[offset + 3];
-    const closeToEdge = colorDistanceRgb(data[offset], data[offset + 1], data[offset + 2], edge.r, edge.g, edge.b) < 18;
-    const bgLike = alpha < 48 || closeToEdge || isPreprocessNearBackground(data[offset], data[offset + 1], data[offset + 2], alpha);
-    if (!bgLike) continue;
     if (state.pixelBackground === "white") {
       out[offset] = fill.r;
       out[offset + 1] = fill.g;
@@ -4340,6 +4347,58 @@ function cleanupBaseImageBackground(imageData, outlineMask) {
     }
   }
   return output;
+}
+
+function buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask = null) {
+  const mask = new Uint8Array(width * height);
+  const queue = [];
+  const edgeSaturation = Math.max(edge.r, edge.g, edge.b) - Math.min(edge.r, edge.g, edge.b);
+  const edgeLuminance = 0.299 * edge.r + 0.587 * edge.g + 0.114 * edge.b;
+  const distanceLimit = edgeLuminance >= 215 && edgeSaturation <= 42 ? 34 : 24;
+  const isCandidate = (index) => {
+    if (outlineMask?.[index]) return false;
+    const offset = index * 4;
+    const alpha = data[offset + 3];
+    if (alpha < 48) return true;
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    const dr = r - edge.r;
+    const dg = g - edge.g;
+    const db = b - edge.b;
+    const distance = Math.sqrt(dr * dr + dg * dg + db * db);
+    if (distance <= distanceLimit) return true;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const saturation = max - min;
+    const lightNeutral = r > 226 && g > 226 && b > 216 && saturation < 42;
+    return lightNeutral && distance <= distanceLimit + 10;
+  };
+  const push = (index) => {
+    if (mask[index] || !isCandidate(index)) return;
+    mask[index] = 1;
+    queue.push(index);
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    push(x);
+    push((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    push(y * width);
+    push(y * width + width - 1);
+  }
+
+  for (let head = 0; head < queue.length; head += 1) {
+    const index = queue[head];
+    const x = index % width;
+    const y = Math.floor(index / width);
+    if (x > 0) push(index - 1);
+    if (x < width - 1) push(index + 1);
+    if (y > 0) push(index - width);
+    if (y < height - 1) push(index + width);
+  }
+  return mask;
 }
 
 function cleanupAntiAliasPixels(imageData, outlineMask) {
@@ -4371,12 +4430,12 @@ function cleanupAntiAliasPixels(imageData, outlineMask) {
   return output;
 }
 
-function cleanupMaterialTexture(imageData, outlineMask) {
+function cleanupMaterialTexture(imageData, outlineMask, strength = "standard") {
   const { data, width, height } = imageData;
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
   const out = output.data;
   const bins = new Uint32Array(width * height);
-  const radius = state.processingProfile === "photoColor" ? 1 : state.gridSize <= 64 ? 2 : 1;
+  const radius = strength === "light" || state.processingProfile === "photoColor" ? 1 : state.gridSize <= 64 ? 2 : 1;
 
   for (let index = 0; index < width * height; index += 1) {
     const offset = index * 4;
@@ -4415,7 +4474,7 @@ function cleanupMaterialTexture(imageData, outlineMask) {
       for (let slot = 1; slot < counts.length; slot += 1) {
         if (counts[slot] > counts[winner]) winner = slot;
       }
-      const minimumShare = radius === 2 ? 0.28 : 0.34;
+      const minimumShare = strength === "light" ? 0.42 : radius === 2 ? 0.28 : 0.34;
       const sampleCount = counts.reduce((sum, count) => sum + count, 0);
       if (counts[winner] < Math.ceil(sampleCount * minimumShare)) continue;
 
@@ -4446,7 +4505,8 @@ function cleanupMaterialTexture(imageData, outlineMask) {
         data[offset], data[offset + 1], data[offset + 2],
         data[representativeOffset], data[representativeOffset + 1], data[representativeOffset + 2],
       );
-      if (replacementDistance < 7 || replacementDistance > 46) continue;
+      const maximumReplacementDistance = strength === "light" ? 28 : 46;
+      if (replacementDistance < 7 || replacementDistance > maximumReplacementDistance) continue;
       out[offset] = data[representativeOffset];
       out[offset + 1] = data[representativeOffset + 1];
       out[offset + 2] = data[representativeOffset + 2];
@@ -4748,6 +4808,10 @@ function renderPendingPreview() {
 
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
   const requestVersion = ++previewUpdateVersion;
+  if (state.diagnosticViewMode === "raw") {
+    state.diagnosticViewMode = "final";
+    syncDiagnosticControls();
+  }
   setPatternProcessingBusy(true);
   try {
     let result = null;
@@ -4810,7 +4874,9 @@ function applyPreviewToEditGrid() {
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.backgroundMask = state.previewBackgroundMask;
+  state.diagnosticViewMode = "final";
   refreshFinalDiagnosticsFromCurrentPattern("applyPreview");
+  syncDiagnosticControls();
   clearPreviewState();
   state.hasConfirmedGrid = true;
   state.editGridVersion += 1;
@@ -5251,6 +5317,7 @@ function baselinePipeline(pattern, size) {
     processed = hardEdgePostProcess(processed, size);
   }
   processed = repairOutlines(processed, size, outlineStrengthForSize());
+  processed = forceMaxColors(processed, size, targetColorLimit());
 
   return validateColorConstraints(processed);
 }
@@ -5968,6 +6035,28 @@ function forceMaxColors(pattern, size, maxColors) {
       break;
     }
     if (!source || !target || source.code === target.code) break;
+    processed = processed.map((item) => (item.code === source.code ? target : item));
+    counts = buildCounts(processed);
+  }
+
+  // The first pass protects structural detail, but maxColors is a user-facing
+  // hard limit. If soft protection leaves too many colors, merge the least-used
+  // remaining non-locked color into its closest LAB neighbor.
+  while (counts.size > maxColors && guard < 1000) {
+    guard += 1;
+    const colors = [...counts.values()];
+    const source = colors
+      .filter((item) => !hardProtectedCodes.has(item.code) && !isColorLocked(item))
+      .sort((a, b) => {
+        const pa = softProtectedCodes.has(a.code) ? 1 : 0;
+        const pb = softProtectedCodes.has(b.code) ? 1 : 0;
+        return pa - pb || a.count - b.count || colorLuminance(a) - colorLuminance(b);
+      })[0];
+    if (!source) break;
+    const targets = colors.filter((item) => item.code !== source.code);
+    const sameFamily = targets.filter((item) => colorFamily(item) === colorFamily(source));
+    const target = nearestColorFromList(source, sameFamily.length ? sameFamily : targets);
+    if (!target) break;
     processed = processed.map((item) => (item.code === source.code ? target : item));
     counts = buildCounts(processed);
   }
@@ -6918,13 +7007,15 @@ function buildCounts(pattern) {
 }
 
 function displayPattern() {
+  if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return state.rawMappedGrid;
-  return state.isPreviewDirty && state.previewPattern.length ? state.previewPattern : state.pattern;
+  return state.pattern;
 }
 
 function displayCounts() {
+  if (state.isPreviewDirty && state.previewPattern.length) return state.previewCounts;
   if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return buildCounts(state.rawMappedGrid);
-  return state.isPreviewDirty && state.previewPattern.length ? state.previewCounts : state.counts;
+  return state.counts;
 }
 
 function displayQualityMetrics() {
@@ -6968,7 +7059,8 @@ function renderPattern(options = {}) {
 }
 
 function currentExportSnapshot() {
-  const pattern = [...displayPattern()];
+  const source = state.isPreviewDirty && state.previewPattern.length ? state.previewPattern : state.pattern;
+  const pattern = [...source];
   const counts = buildCounts(pattern);
   return {
     pattern,

@@ -772,6 +772,37 @@ input[type="range"] {
   color: #dfe3e6;
 }
 
+.color-limit-slider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 54px;
+  align-items: center;
+  gap: 10px;
+}
+
+.color-limit-slider input[type="range"] {
+  height: 28px;
+  cursor: ew-resize;
+}
+
+.color-limit-slider output {
+  min-width: 54px;
+  padding: 5px 4px;
+  border: 1px solid var(--ink);
+  background: #fff;
+  font-size: 13px;
+  font-weight: 950;
+  text-align: center;
+}
+
+.color-limit-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: -5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .setting-hint {
   color: var(--muted);
   font-size: 11px;

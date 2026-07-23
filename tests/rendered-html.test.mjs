@@ -70,8 +70,8 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /原图显示/);
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
-  assert.match(html, /<button id="showRawGridButton" class="is-active"/);
-  assert.doesNotMatch(html, /<button id="showFinalGridButton" class="is-active"/);
+  assert.match(html, /<button id="showFinalGridButton" class="is-active"/);
+  assert.doesNotMatch(html, /<button id="showRawGridButton" class="is-active"/);
   assert.match(html, /class="processing-profile-option is-active" data-processing-profile="detail64"/);
   assert.match(html, /<input id="localPreprocessEnabledToggle" type="checkbox" checked/);
   [
@@ -79,23 +79,31 @@ test("serves the Xiaomai bead designer homepage", async () => {
     "antiAliasCleanupToggle",
     "outlinePreservePreprocessToggle",
     "noiseReductionToggle",
-    "materialTextureCleanupToggle",
-    "backgroundCleanupToggle",
-    "regionColorStabilizationToggle",
     "regionToneCompressionToggle",
     "outlineColorConvergenceToggle",
-    "transparentToggle",
     "lineBoostToggle",
-    "dominantSamplingToggle",
-    "mergeSimilarToggle",
-    "cleanSmallRegionsToggle",
     "animeModeToggle",
   ].forEach((id) => {
     assert.match(html, new RegExp(`<input id="${id}" type="checkbox" \\/>`));
   });
+  [
+    "materialTextureCleanupToggle",
+    "backgroundCleanupToggle",
+    "regionColorStabilizationToggle",
+    "transparentToggle",
+    "dominantSamplingToggle",
+    "mergeSimilarToggle",
+    "cleanSmallRegionsToggle",
+  ].forEach((id) => {
+    assert.match(html, new RegExp(`<input id="${id}" type="checkbox" checked \\/>`));
+  });
   assert.match(html, /id="minRegionSize"[^>]+value="2"/);
-  assert.match(html, /id="customSizeInput"[^>]+type="number"/);
-  assert.match(html, /id="customHeightInput"[^>]+type="number"/);
+  assert.match(html, /id="customSizeInput"[^>]+type="number"[^>]+value="64"/);
+  assert.match(html, /id="customHeightInput"[^>]+type="number"[^>]+value="64"/);
+  assert.match(html, /id="colorLimit"[^>]+type="range"[^>]+value="24"/);
+  assert.match(html, /id="colorLimitValue"[^>]*>24 色<\/output>/);
+  assert.doesNotMatch(html, /id="customColorLimitInput"/);
+  assert.doesNotMatch(html, /id="applyCustomColorLimitButton"/);
   assert.match(html, /支持 PNG \/ JPG，自动完整适配画布/);
   assert.match(html, /id="saveToLibraryButton"/);
   assert.match(html, /id="projectLibraryList"/);
@@ -123,13 +131,13 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function activeGridHeight\(\)/);
   assert.match(script, /const widthCells = activeGridWidth\(\);/);
   assert.match(script, /const heightCells = activeGridHeight\(\);/);
-  assert.match(script, /diagnosticViewMode: "raw"/);
+  assert.match(script, /diagnosticViewMode: "final"/);
   assert.match(script, /processingProfile: "detail64"/);
-  assert.match(script, /removeTransparent: false/);
+  assert.match(script, /removeTransparent: true/);
   assert.match(script, /lineBoost: false/);
-  assert.match(script, /dominantSampling: false/);
-  assert.match(script, /mergeSimilarColors: false/);
-  assert.match(script, /cleanSmallRegions: false/);
+  assert.match(script, /dominantSampling: true/);
+  assert.match(script, /mergeSimilarColors: true/);
+  assert.match(script, /cleanSmallRegions: true/);
   assert.match(script, /minRegionSize: 2/);
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
@@ -138,6 +146,10 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function copySelectionPixels\(\)/);
   assert.match(script, /function setupWorkbenchModes\(\)/);
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
+  assert.match(
+    script,
+    /if \(mode !== "transform" && state\.diagnosticViewMode === "raw"\) \{\s*state\.diagnosticViewMode = "final";/,
+  );
   assert.match(script, /function renderToolColorPalette\(\)/);
   assert.match(script, /function toolPaletteRows\(\)/);
   assert.match(script, /toolPaletteSearch: ""/);
@@ -146,6 +158,8 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function clearPreviewState\(options = \{\}\)/);
   assert.match(script, /function setPendingPreview\(pattern, options = \{\}\)/);
   assert.match(script, /function renderPendingPreview\(\)/);
+  assert.match(script, /function scheduleColorLimitPreview\(\)/);
+  assert.match(script, /}, 140\);/);
   assert.match(script, /layer === "aboveGrid"/);
   assert.match(script, /state\.traceReference\.opacity = Number\(elements\.traceReferenceOpacity\.value\) \/ 100/);
   assert.match(script, /drawPatternCellCodes\(dirtyBounds\);[\s\S]+drawReferenceLayer\(\);[\s\S]+drawSelectionOverlay\(dirtyBounds\);/);
@@ -163,7 +177,9 @@ test("serves the current application script, worker, and stylesheet", async () =
   const autosaveSource = script.slice(script.indexOf("async function autoSaveProject"), script.indexOf("function openProjectDb"));
   assert.doesNotMatch(autosaveSource, /saveLibraryProject/);
   assert.match(script, /state\.manualEditCount = state\.manualEditedCells\.size/);
-  assert.match(script, /\["auto", "max", "fixedPalette"\]\.includes\(paletteState\.colorConstraintMode\)/);
+  assert.match(script, /state\.colorMode = paletteState\.colorConstraintMode === "fixedPalette" \? "fixedPalette" : "max"/);
+  const targetLimitSource = script.slice(script.indexOf("function targetColorLimit"), script.indexOf("function isColorLocked"));
+  assert.doesNotMatch(targetLimitSource, /return palette\.length/);
   assert.match(script, /function drawReadableExportWatermark\(/);
   assert.match(script, /const includeWatermark = options\.includeWatermark !== false/);
   assert.match(script, /const maxLegendRows = 45/);
@@ -173,8 +189,22 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function refineAccuratePaletteMatches\(/);
   assert.match(script, /function calculateColorMatchMetrics\(/);
   assert.match(script, /function buildBackgroundProtectionMask\(/);
+  assert.match(script, /function buildConnectedBaseBackgroundMask\(/);
+  assert.match(
+    script,
+    /function displayPattern\(\) \{\s*if \(state\.isPreviewDirty && state\.previewPattern\.length\) return state\.previewPattern;\s*if \(state\.diagnosticViewMode === "raw"/,
+  );
+  assert.match(
+    script,
+    /async function requestPreviewUpdate[\s\S]*?if \(state\.diagnosticViewMode === "raw"\) \{\s*state\.diagnosticViewMode = "final";/,
+  );
   assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);
+  assert.match(script, /maxColors is a user-facing[\s\S]*?while \(counts\.size > maxColors && guard < 1000\)/);
+  assert.match(
+    script,
+    /processed = repairOutlines\(processed, size, outlineStrengthForSize\(\)\);\s*processed = forceMaxColors\(processed, size, targetColorLimit\(\)\);/,
+  );
   assert.match(script, /const EXPORT_AD_IMAGE_URL = "assets\/wechat-custom-order\.png"/);
   assert.match(script, /function loadExportAdImage\(/);
   assert.match(script, /function exportAdImageToJpegData\(/);
@@ -185,6 +215,9 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
   assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
   assert.match(script, /exportPatternPdf\(\{ includeWatermark, exportAdImage, \.\.\.snapshot \}\)/);
+  const exportSnapshotSource = script.slice(script.indexOf("function currentExportSnapshot"), script.indexOf("function renderPatternNow"));
+  assert.match(exportSnapshotSource, /state\.isPreviewDirty && state\.previewPattern\.length/);
+  assert.doesNotMatch(exportSnapshotSource, /displayPattern\(\)/);
   const exportCellSource = script.slice(script.indexOf("function drawReadableCells"), script.indexOf("function drawReadableLegend"));
   assert.match(exportCellSource, /const item = pattern\[y \* stride \+ x\]/);
   assert.doesNotMatch(exportCellSource, /state\.pattern\[y \* stride \+ x\]/);
@@ -246,6 +279,48 @@ test("palette worker maps colors and preserves empty cells", async () => {
   assert.equal(messages[0].type, "mapped");
   assert.equal(messages[0].requestId, 7);
   assert.deepEqual(Array.from(messages[0].indices), [0, 1, 0, -1]);
+});
+
+test("base-image background cleanup only removes edge-connected light pixels", async () => {
+  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const helperSource = source.slice(
+    source.indexOf("function buildConnectedBaseBackgroundMask"),
+    source.indexOf("function cleanupAntiAliasPixels"),
+  );
+  const context = { Uint8Array, Math };
+  vm.runInNewContext(helperSource, context);
+
+  const width = 5;
+  const height = 5;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const setPixel = (x, y, r, g, b, a = 255) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = r;
+    pixels[offset + 1] = g;
+    pixels[offset + 2] = b;
+    pixels[offset + 3] = a;
+  };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) setPixel(x, y, 248, 246, 240);
+  }
+  for (let y = 1; y <= 3; y += 1) {
+    for (let x = 1; x <= 3; x += 1) {
+      if (x === 2 && y === 2) setPixel(x, y, 252, 252, 249);
+      else setPixel(x, y, 185, 52, 78);
+    }
+  }
+  setPixel(0, 2, 232, 229, 221);
+
+  const mask = context.buildConnectedBaseBackgroundMask(
+    pixels,
+    width,
+    height,
+    { r: 248, g: 246, b: 240 },
+  );
+  assert.equal(mask[0], 1);
+  assert.equal(mask[2 * width], 1);
+  assert.equal(mask[2 * width + 2], 0);
+  assert.equal(mask[1 * width + 1], 0);
 });
 
 test("edge background detection does not erase a dark subject touching one edge", async () => {
