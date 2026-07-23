@@ -44,6 +44,8 @@ test("serves the Xiaomai bead designer homepage", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
+  assert.match(html, /history-utils\.js\?v=20260724-1/);
+  assert.match(html, /app\.js\?v=20260724-1/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -114,18 +116,21 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /添加“小麦拼豆”水印/);
 });
 
-test("serves the current application script, worker, and stylesheet", async () => {
-  const [scriptResponse, workerResponse, styleResponse, exportAdResponse] = await Promise.all([
+test("serves the current application script, utilities, worker, and stylesheet", async () => {
+  const [scriptResponse, historyUtilsResponse, workerResponse, styleResponse, exportAdResponse] = await Promise.all([
     fetchFromWorker("/app.js"),
+    fetchFromWorker("/history-utils.js"),
     fetchFromWorker("/palette-worker.js"),
     fetchFromWorker("/styles.css"),
     fetchFromWorker("/assets/wechat-custom-order.png"),
   ]);
   assert.equal(scriptResponse.status, 200);
+  assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
   assert.equal(exportAdResponse.status, 200);
   const script = await scriptResponse.text();
+  const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);
@@ -211,7 +216,9 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /\/XObject << \/Im1 11 0 R >>/);
   assert.match(script, /addEventListener\("pointercancel", handleCanvasPointerUp\)/);
   assert.match(script, /function commitStrokeHistory\(/);
-  assert.match(script, /function historySnapshotsEqual\(/);
+  assert.match(script, /const \{ createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual \} = historyUtils/);
+  assert.match(historyUtils, /function historySnapshotsEqual\(/);
+  assert.match(historyUtils, /global\.XiaomaiHistoryUtils = Object\.freeze/);
   assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
   assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
   assert.match(script, /exportPatternPdf\(\{ includeWatermark, exportAdImage, \.\.\.snapshot \}\)/);
