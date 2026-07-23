@@ -70,8 +70,30 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /原图显示/);
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
-  assert.match(html, /<button id="showFinalGridButton" class="is-active"/);
-  assert.doesNotMatch(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.match(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.doesNotMatch(html, /<button id="showFinalGridButton" class="is-active"/);
+  assert.match(html, /class="processing-profile-option is-active" data-processing-profile="detail64"/);
+  assert.match(html, /<input id="localPreprocessEnabledToggle" type="checkbox" checked/);
+  [
+    "flatColorSimplificationToggle",
+    "antiAliasCleanupToggle",
+    "outlinePreservePreprocessToggle",
+    "noiseReductionToggle",
+    "materialTextureCleanupToggle",
+    "backgroundCleanupToggle",
+    "regionColorStabilizationToggle",
+    "regionToneCompressionToggle",
+    "outlineColorConvergenceToggle",
+    "transparentToggle",
+    "lineBoostToggle",
+    "dominantSamplingToggle",
+    "mergeSimilarToggle",
+    "cleanSmallRegionsToggle",
+    "animeModeToggle",
+  ].forEach((id) => {
+    assert.match(html, new RegExp(`<input id="${id}" type="checkbox" \\/>`));
+  });
+  assert.match(html, /id="minRegionSize"[^>]+value="2"/);
   assert.match(html, /id="customSizeInput"[^>]+type="number"/);
   assert.match(html, /id="customHeightInput"[^>]+type="number"/);
   assert.match(html, /支持 PNG \/ JPG，自动完整适配画布/);
@@ -85,21 +107,30 @@ test("serves the Xiaomai bead designer homepage", async () => {
 });
 
 test("serves the current application script, worker, and stylesheet", async () => {
-  const [scriptResponse, workerResponse, styleResponse] = await Promise.all([
+  const [scriptResponse, workerResponse, styleResponse, exportAdResponse] = await Promise.all([
     fetchFromWorker("/app.js"),
     fetchFromWorker("/palette-worker.js"),
     fetchFromWorker("/styles.css"),
+    fetchFromWorker("/assets/wechat-custom-order.png"),
   ]);
   assert.equal(scriptResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
+  assert.equal(exportAdResponse.status, 200);
   const script = await scriptResponse.text();
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);
   assert.match(script, /const widthCells = activeGridWidth\(\);/);
   assert.match(script, /const heightCells = activeGridHeight\(\);/);
-  assert.match(script, /diagnosticViewMode: "final"/);
+  assert.match(script, /diagnosticViewMode: "raw"/);
+  assert.match(script, /processingProfile: "detail64"/);
+  assert.match(script, /removeTransparent: false/);
+  assert.match(script, /lineBoost: false/);
+  assert.match(script, /dominantSampling: false/);
+  assert.match(script, /mergeSimilarColors: false/);
+  assert.match(script, /cleanSmallRegions: false/);
+  assert.match(script, /minRegionSize: 2/);
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
   assert.match(script, /codeVisibilityVersion: 2/);
@@ -144,12 +175,16 @@ test("serves the current application script, worker, and stylesheet", async () =
   assert.match(script, /function buildBackgroundProtectionMask\(/);
   assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);
+  assert.match(script, /const EXPORT_AD_IMAGE_URL = "assets\/wechat-custom-order\.png"/);
+  assert.match(script, /function loadExportAdImage\(/);
+  assert.match(script, /function exportAdImageToJpegData\(/);
+  assert.match(script, /\/XObject << \/Im1 11 0 R >>/);
   assert.match(script, /addEventListener\("pointercancel", handleCanvasPointerUp\)/);
   assert.match(script, /function commitStrokeHistory\(/);
   assert.match(script, /function historySnapshotsEqual\(/);
   assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
   assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
-  assert.match(script, /exportPatternPdf\(\{ includeWatermark, \.\.\.snapshot \}\)/);
+  assert.match(script, /exportPatternPdf\(\{ includeWatermark, exportAdImage, \.\.\.snapshot \}\)/);
   const exportCellSource = script.slice(script.indexOf("function drawReadableCells"), script.indexOf("function drawReadableLegend"));
   assert.match(exportCellSource, /const item = pattern\[y \* stride \+ x\]/);
   assert.doesNotMatch(exportCellSource, /state\.pattern\[y \* stride \+ x\]/);

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="styles.css?v=20260718-11" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
-    <script src="app.js?v=20260722-1" defer></script>
+    <script src="app.js?v=20260723-2" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -199,47 +199,47 @@
             </button>
             <div id="localPreprocessPanel" class="local-preprocess-panel" hidden>
               <label class="toggle">
-                <input id="flatColorSimplificationToggle" type="checkbox" checked />
+                <input id="flatColorSimplificationToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>平涂化</span>
               </label>
               <label class="toggle">
-                <input id="antiAliasCleanupToggle" type="checkbox" checked />
+                <input id="antiAliasCleanupToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>清理柔边</span>
               </label>
               <label class="toggle">
-                <input id="outlinePreservePreprocessToggle" type="checkbox" checked />
+                <input id="outlinePreservePreprocessToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>线稿保护</span>
               </label>
               <label class="toggle">
-                <input id="noiseReductionToggle" type="checkbox" checked />
+                <input id="noiseReductionToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>去噪</span>
               </label>
               <label class="toggle">
-                <input id="materialTextureCleanupToggle" type="checkbox" checked />
+                <input id="materialTextureCleanupToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>材质去纹理</span>
               </label>
               <label class="toggle">
-                <input id="backgroundCleanupToggle" type="checkbox" checked />
+                <input id="backgroundCleanupToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>背景整理</span>
               </label>
               <label class="toggle">
-                <input id="regionColorStabilizationToggle" type="checkbox" checked />
+                <input id="regionColorStabilizationToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>色块整理</span>
               </label>
               <label class="toggle">
-                <input id="regionToneCompressionToggle" type="checkbox" checked />
+                <input id="regionToneCompressionToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>区域色阶</span>
               </label>
               <label class="toggle">
-                <input id="outlineColorConvergenceToggle" type="checkbox" checked />
+                <input id="outlineColorConvergenceToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>轮廓收色</span>
               </label>
@@ -270,8 +270,8 @@
               <span>精准匹配</span>
             </label>
             <div class="segmented matching-view-options" role="group" aria-label="匹配结果视图">
-              <button id="showRawGridButton" type="button">原始匹配</button>
-              <button id="showFinalGridButton" class="is-active" type="button">最终效果</button>
+              <button id="showRawGridButton" class="is-active" type="button">原始匹配</button>
+              <button id="showFinalGridButton" type="button">最终效果</button>
             </div>
             <small class="setting-hint">原始匹配保留色板直配结果；最终效果包含减色和清理。</small>
           </div>
@@ -308,14 +308,14 @@
           <section class="advanced-section processing-profile-panel">
             <div class="group-title">
               <span>转换策略</span>
-              <output id="processingProfileLabel">48 精简版</output>
+              <output id="processingProfileLabel">64+ 细节版</output>
             </div>
             <div class="segmented processing-profile-options" role="group" aria-label="转换策略">
-              <button class="processing-profile-option is-active" data-processing-profile="compact48" type="button">48 精简</button>
-              <button class="processing-profile-option" data-processing-profile="detail64" type="button">64+ 细节</button>
+              <button class="processing-profile-option" data-processing-profile="compact48" type="button">48 精简</button>
+              <button class="processing-profile-option is-active" data-processing-profile="detail64" type="button">64+ 细节</button>
               <button class="processing-profile-option" data-processing-profile="photoColor" type="button">照片原色</button>
             </div>
-            <small id="processingProfileHint" class="processing-profile-hint">强收敛杂色，突出轮廓与远看识别度。</small>
+            <small id="processingProfileHint" class="processing-profile-hint">轻度清理，保留更多明暗层次、小装饰和结构细节。</small>
           </section>
 
           <section class="advanced-section" hidden>
@@ -375,41 +375,41 @@
             </div>
             <div class="advanced-parameter-toggles">
               <label class="toggle">
-                <input id="transparentToggle" type="checkbox" checked />
+                <input id="transparentToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>去透明边</span>
               </label>
               <label class="toggle">
-                <input id="lineBoostToggle" type="checkbox" checked />
+                <input id="lineBoostToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>保留轮廓</span>
               </label>
               <label class="toggle">
-                <input id="dominantSamplingToggle" type="checkbox" checked />
+                <input id="dominantSamplingToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>主导色采样</span>
               </label>
               <label class="toggle">
-                <input id="mergeSimilarToggle" type="checkbox" checked />
+                <input id="mergeSimilarToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>合并相近颜色</span>
               </label>
               <label class="toggle">
-                <input id="cleanSmallRegionsToggle" type="checkbox" checked />
+                <input id="cleanSmallRegionsToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>清理孤立像素</span>
               </label>
               <label class="toggle">
-                <input id="animeModeToggle" type="checkbox" checked />
+                <input id="animeModeToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>动漫模式</span>
               </label>
             </div>
             <div class="group-title">
               <span>最小区域</span>
-              <output id="minRegionLabel">6 颗</output>
+              <output id="minRegionLabel">2 颗</output>
             </div>
-            <input id="minRegionSize" type="range" min="1" max="12" value="6" step="1" />
+            <input id="minRegionSize" type="range" min="1" max="12" value="2" step="1" />
           </section>
         </details>
 

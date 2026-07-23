@@ -40,6 +40,35 @@ const fallbackPaletteData = [
 const PALETTE_NAME = "MARD 221";
 const PALETTE_LIMIT = 221;
 const DEFAULT_COLOR_LIMIT = 16;
+const DEFAULT_LOCAL_PREPROCESS_SETTINGS = Object.freeze({
+  enabled: true,
+  flatColorSimplification: false,
+  antiAliasCleanup: false,
+  outlinePreserve: false,
+  noiseReduction: false,
+  materialTextureCleanup: false,
+  backgroundCleanup: false,
+  regionColorStabilization: false,
+  regionToneCompression: false,
+  outlineColorConvergence: false,
+});
+const DEFAULT_GENERATION_SETTINGS = Object.freeze({
+  appMode: "auto",
+  patternMode: "illustration",
+  processingProfile: "detail64",
+  pixelBackground: "empty",
+  dither: false,
+  removeTransparent: false,
+  lineBoost: false,
+  outlineMode: "light",
+  dominantSampling: false,
+  mergeSimilarColors: false,
+  cleanSmallRegions: false,
+  animeMode: false,
+  minRegionSize: 2,
+  accurateMatch: true,
+  diagnosticViewMode: "raw",
+});
 
 const paletteSource = Array.isArray(window.MARD_221_PALETTE) && window.MARD_221_PALETTE.length
   ? window.MARD_221_PALETTE
@@ -100,19 +129,21 @@ const AUTOSAVE_KEY = "latest";
 const PROJECT_DB_VERSION = 2;
 const LIBRARY_META_STORE_NAME = "libraryMeta";
 const LIBRARY_DATA_STORE_NAME = "libraryData";
+const EXPORT_AD_IMAGE_URL = "assets/wechat-custom-order.png";
+let exportAdImagePromise = null;
 
 const state = {
   image: null,
   sourceImageState: null,
   fileName: "",
-  appMode: "auto",
-  patternMode: "illustration",
-  processingProfile: "compact48",
+  appMode: DEFAULT_GENERATION_SETTINGS.appMode,
+  patternMode: DEFAULT_GENERATION_SETTINGS.patternMode,
+  processingProfile: DEFAULT_GENERATION_SETTINGS.processingProfile,
   gridSize: 48,
   gridWidth: 48,
   gridHeight: 48,
   colorLimit: DEFAULT_COLOR_LIMIT,
-  pixelBackground: "empty",
+  pixelBackground: DEFAULT_GENERATION_SETTINGS.pixelBackground,
   showCellCodes: true,
   showCoordinates: true,
   guideEvery: 5,
@@ -124,30 +155,19 @@ const state = {
   toolPaletteSearch: "",
   toolPaletteShowAll: false,
   showSelectedColorsOnly: false,
-  dither: false,
+  dither: DEFAULT_GENERATION_SETTINGS.dither,
   showGrid: true,
   fitMode: "subject",
-  removeTransparent: true,
-  lineBoost: true,
-  outlineMode: "light",
-  dominantSampling: true,
-  mergeSimilarColors: true,
-  cleanSmallRegions: true,
-  animeMode: false,
-  minRegionSize: 3,
+  removeTransparent: DEFAULT_GENERATION_SETTINGS.removeTransparent,
+  lineBoost: DEFAULT_GENERATION_SETTINGS.lineBoost,
+  outlineMode: DEFAULT_GENERATION_SETTINGS.outlineMode,
+  dominantSampling: DEFAULT_GENERATION_SETTINGS.dominantSampling,
+  mergeSimilarColors: DEFAULT_GENERATION_SETTINGS.mergeSimilarColors,
+  cleanSmallRegions: DEFAULT_GENERATION_SETTINGS.cleanSmallRegions,
+  animeMode: DEFAULT_GENERATION_SETTINGS.animeMode,
+  minRegionSize: DEFAULT_GENERATION_SETTINGS.minRegionSize,
   mergeBoost: 0,
-  localPreprocessSettings: {
-    enabled: true,
-    flatColorSimplification: true,
-    antiAliasCleanup: true,
-    outlinePreserve: true,
-    noiseReduction: true,
-    materialTextureCleanup: true,
-    backgroundCleanup: true,
-    regionColorStabilization: true,
-    regionToneCompression: true,
-    outlineColorConvergence: true,
-  },
+  localPreprocessSettings: { ...DEFAULT_LOCAL_PREPROCESS_SETTINGS },
   optimizedBaseImage: null,
   optimizedBaseImageSignature: "",
   referenceImage: null,
@@ -202,9 +222,9 @@ const state = {
   finalGrid: [],
   colorTrace: [],
   colorMatchMetrics: null,
-  accurateMatch: true,
+  accurateMatch: DEFAULT_GENERATION_SETTINGS.accurateMatch,
   colorDebugEnabled: false,
-  diagnosticViewMode: "final",
+  diagnosticViewMode: DEFAULT_GENERATION_SETTINGS.diagnosticViewMode,
   baselineGrid: [],
   optimizedGrid: [],
   compareMetrics: null,
@@ -1081,7 +1101,7 @@ function clearColorDiagnostics() {
   state.finalGrid = [];
   state.colorTrace = [];
   state.colorMatchMetrics = null;
-  state.diagnosticViewMode = "final";
+  state.diagnosticViewMode = DEFAULT_GENERATION_SETTINGS.diagnosticViewMode;
   syncDiagnosticControls();
 }
 
@@ -2352,8 +2372,9 @@ function syncControlsFromState() {
     button.classList.toggle("is-active", button.dataset.bg === state.pixelBackground);
   });
   elements.ditherToggle.checked = state.dither;
+  elements.transparentToggle.checked = state.removeTransparent;
   elements.lineBoostToggle.checked = state.lineBoost;
-  elements.outlineModeSelect.value = state.lineBoost ? state.outlineMode : "off";
+  elements.outlineModeSelect.value = state.outlineMode;
   syncLocalPreprocessControls();
   elements.dominantSamplingToggle.checked = state.dominantSampling;
   elements.mergeSimilarToggle.checked = state.mergeSimilarColors;
@@ -9672,22 +9693,29 @@ function fitCanvasToScreen() {
   setZoom(fitZoom, { center: true });
 }
 
-function exportPattern() {
+async function exportPattern() {
   if (!canLeaveTransformWithCurrentPreview("export")) return;
   if (!state.pattern.length) return;
   const includeWatermark = elements.exportWatermarkToggle?.checked ?? state.exportWatermarkEnabled;
   const snapshot = currentExportSnapshot();
   state.exportWatermarkEnabled = includeWatermark;
-  if (elements.exportFormat?.value === "pdf") {
-    exportPatternPdf({ includeWatermark, ...snapshot });
-    return;
+  try {
+    const exportAdImage = await loadExportAdImage();
+    if (elements.exportFormat?.value === "pdf") {
+      await exportPatternPdf({ includeWatermark, exportAdImage, ...snapshot });
+      return;
+    }
+    const readableCanvas = renderReadableExportCanvas({ includeWatermark, exportAdImage, ...snapshot });
+    downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
+  } catch (error) {
+    console.error("导出二维码广告加载失败", error);
+    window.alert("微信二维码加载失败，请刷新页面后重试导出。");
   }
-  const readableCanvas = renderReadableExportCanvas({ includeWatermark, ...snapshot });
-  downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
 }
 
 function renderReadableExportCanvas(options = {}) {
   const includeWatermark = options.includeWatermark !== false;
+  const exportAdImage = options.exportAdImage;
   const pattern = options.pattern || displayPattern();
   const counts = options.counts || buildCounts(pattern);
   const rows = options.rows || [...counts.values()].sort((a, b) => b.count - a.count);
@@ -9701,9 +9729,15 @@ function renderReadableExportCanvas(options = {}) {
   const plotHeight = heightCells * cellSize;
   const legendRows = Math.ceil(rows.length / Math.max(1, Math.floor(plotWidth / 188)));
   const legendHeight = Math.max(280, 90 + legendRows * 82);
+  const adWidth = exportAdImage ? Math.min(exportAdImage.naturalWidth || exportAdImage.width, plotWidth) : 0;
+  const adHeight = exportAdImage
+    ? Math.round(adWidth * (exportAdImage.naturalHeight || exportAdImage.height) / (exportAdImage.naturalWidth || exportAdImage.width))
+    : 0;
+  const adGap = exportAdImage ? 72 : 0;
+  const adBottom = exportAdImage ? 72 : 0;
   const canvas = document.createElement("canvas");
   canvas.width = margin * 2 + plotWidth;
-  canvas.height = top + plotHeight + legendHeight;
+  canvas.height = top + plotHeight + legendHeight + adGap + adHeight + adBottom;
   const exportCtx = canvas.getContext("2d");
 
   exportCtx.fillStyle = "#fffdf8";
@@ -9718,6 +9752,13 @@ function renderReadableExportCanvas(options = {}) {
 
   drawReadableCells(exportCtx, margin, top, cellSize, pattern);
   drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2, rows);
+  if (exportAdImage) {
+    const adX = Math.round((canvas.width - adWidth) / 2);
+    const adY = top + plotHeight + legendHeight + adGap;
+    exportCtx.imageSmoothingEnabled = true;
+    exportCtx.imageSmoothingQuality = "high";
+    exportCtx.drawImage(exportAdImage, adX, adY, adWidth, adHeight);
+  }
   if (includeWatermark) drawReadableExportWatermark(exportCtx, canvas, top, top + plotHeight);
 
   return canvas;
@@ -9863,8 +9904,38 @@ function downloadCanvas(canvas, fileName) {
   link.click();
 }
 
-function exportPatternPdf(options = {}) {
-  const pdfBytes = buildVectorPdf(options);
+function loadExportAdImage() {
+  if (!exportAdImagePromise) {
+    exportAdImagePromise = new Promise((resolve, reject) => {
+      const image = new Image();
+      image.decoding = "async";
+      image.addEventListener("load", () => resolve(image), { once: true });
+      image.addEventListener("error", () => reject(new Error("Unable to load export advertisement image.")), { once: true });
+      image.src = EXPORT_AD_IMAGE_URL;
+    });
+  }
+  return exportAdImagePromise;
+}
+
+function exportAdImageToJpegData(image) {
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const base64 = canvas.toDataURL("image/jpeg", 0.98).split(",")[1];
+  return {
+    width: canvas.width,
+    height: canvas.height,
+    binary: window.atob(base64),
+  };
+}
+
+async function exportPatternPdf(options = {}) {
+  const exportAdImageData = options.exportAdImage ? exportAdImageToJpegData(options.exportAdImage) : null;
+  const pdfBytes = buildVectorPdf({ ...options, exportAdImageData });
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -9995,7 +10066,9 @@ function buildVectorPdf(options = {}) {
     }
   }
 
-  return createPdf(page.width, page.height, commands.join("\n"));
+  return createPdf(page.width, page.height, commands.join("\n"), {
+    adImage: options.exportAdImageData,
+  });
 }
 
 function pdfColor(rgb) {
@@ -10027,10 +10100,12 @@ function pdfUtf16BeHex(value) {
   return hex;
 }
 
-function createPdf(width, height, stream) {
+function createPdf(width, height, stream, options = {}) {
+  const adImage = options.adImage;
+  const pageKids = adImage ? "[3 0 R 9 0 R]" : "[3 0 R]";
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Pages /Kids ${pageKids} /Count ${adImage ? 2 : 1} >>`,
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${roundPdf(width)} ${roundPdf(height)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
@@ -10038,6 +10113,21 @@ function createPdf(width, height, stream) {
     "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R >>",
     "<< /Type /FontDescriptor /FontName /STSong-Light /Flags 6 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>",
   ];
+  if (adImage) {
+    const maxAdWidth = width * 0.56;
+    const maxAdHeight = height * 0.88;
+    const scale = Math.min(maxAdWidth / adImage.width, maxAdHeight / adImage.height);
+    const adWidth = adImage.width * scale;
+    const adHeight = adImage.height * scale;
+    const adX = (width - adWidth) / 2;
+    const adY = (height - adHeight) / 2;
+    const adStream = `q ${roundPdf(adWidth)} 0 0 ${roundPdf(adHeight)} ${roundPdf(adX)} ${roundPdf(adY)} cm /Im1 Do Q`;
+    objects.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${roundPdf(width)} ${roundPdf(height)}] /Resources << /XObject << /Im1 11 0 R >> >> /Contents 10 0 R >>`,
+      `<< /Length ${adStream.length} >>\nstream\n${adStream}\nendstream`,
+      `<< /Type /XObject /Subtype /Image /Width ${adImage.width} /Height ${adImage.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${adImage.binary.length} >>\nstream\n${adImage.binary}\nendstream`,
+    );
+  }
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
   objects.forEach((object, index) => {
@@ -10083,9 +10173,8 @@ function resetApp() {
   state.image = null;
   state.sourceImageState = null;
   state.fileName = "";
-  state.pixelBackground = "empty";
-  state.accurateMatch = true;
-  state.localPreprocessSettings.enabled = true;
+  Object.assign(state, DEFAULT_GENERATION_SETTINGS);
+  state.localPreprocessSettings = { ...DEFAULT_LOCAL_PREPROCESS_SETTINGS };
   state.pattern = [];
   clearPreviewState();
   state.backgroundMask = null;
@@ -10144,12 +10233,7 @@ function resetApp() {
   elements.totalBeads.textContent = "共 0 颗";
   elements.symmetryModeSelect.value = "none";
   setActiveTool("brush");
-  document.querySelectorAll(".pixel-bg-option").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.bg === state.pixelBackground);
-  });
-  updatePixelBackgroundLabel();
-  syncDiagnosticControls();
-  syncLocalPreprocessControls();
+  syncControlsFromState();
   updateBackgroundHint();
   updateProjectSaveStatus("未保存");
   renderPattern();
@@ -10165,8 +10249,7 @@ function init() {
   setupWorkbenchModes();
   moveQuickTogglesToToolbar();
   setupEvents();
-  syncLocalPreprocessControls();
-  syncColorLimitControls();
+  syncControlsFromState();
   updateSelectedColorUi();
   updateHistoryButtons();
   updatePreviewButtons();
