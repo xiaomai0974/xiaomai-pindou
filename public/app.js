@@ -90,6 +90,7 @@ const palette = paletteSource.slice(0, PALETTE_LIMIT).map((entry) => {
     brand: entry.brand || "MARD",
   };
 });
+const paletteIndexByCode = new Map(palette.map((item, index) => [item.code, index]));
 
 const nearestColorCache = new Map();
 const nearestCandidateCache = new Map();
@@ -7729,6 +7730,15 @@ function sortedCounts() {
   return [...displayCounts().values()].sort((a, b) => b.count - a.count);
 }
 
+function paletteRowRank(item) {
+  if (item.isActive) return 0;
+  if (item.isLocked) return 1;
+  if (item.isUsed) return 2;
+  if (item.isAllowed) return 3;
+  if (item.isSearchResult) return 4;
+  return 5;
+}
+
 function currentPaletteRows() {
   const counts = displayCounts();
   const source = visiblePaletteSourceColors();
@@ -7746,15 +7756,12 @@ function currentPaletteRows() {
       isSearchResult: searchCodes.has(color.code),
     };
   }).sort((a, b) => {
-    const rank = (item) => {
-      if (item.isActive) return 0;
-      if (item.isLocked) return 1;
-      if (item.isUsed) return 2;
-      if (item.isAllowed) return 3;
-      if (item.isSearchResult) return 4;
-      return 5;
-    };
-    return rank(a) - rank(b) || b.count - a.count || palette.findIndex((item) => item.code === a.code) - palette.findIndex((item) => item.code === b.code);
+    return (
+      paletteRowRank(a) - paletteRowRank(b) ||
+      b.count - a.count ||
+      (paletteIndexByCode.get(a.code) ?? Number.MAX_SAFE_INTEGER) -
+        (paletteIndexByCode.get(b.code) ?? Number.MAX_SAFE_INTEGER)
+    );
   });
 }
 
