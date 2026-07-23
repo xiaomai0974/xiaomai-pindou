@@ -153,7 +153,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
   assert.match(
     script,
-    /if \(mode !== "transform" && state\.diagnosticViewMode === "raw"\) \{\s*state\.diagnosticViewMode = "final";/,
+    /if \(mode !== "transform" && state\.diagnosticViewMode === "raw"\) \{\s*setDiagnosticViewMode\("final"\);/,
   );
   assert.match(script, /function renderToolColorPalette\(\)/);
   assert.match(script, /function toolPaletteRows\(\)/);
@@ -197,11 +197,12 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function buildConnectedBaseBackgroundMask\(/);
   assert.match(
     script,
-    /function displayPattern\(\) \{\s*if \(state\.isPreviewDirty && state\.previewPattern\.length\) return state\.previewPattern;\s*if \(state\.diagnosticViewMode === "raw"/,
+    /function displayPattern\(\) \{\s*if \(state\.diagnosticViewMode === "raw"[\s\S]*?if \(state\.isPreviewDirty && state\.previewPattern\.length\)/,
   );
+  assert.match(script, /function setDiagnosticViewMode\(mode, options = \{\}\)/);
   assert.match(
     script,
-    /async function requestPreviewUpdate[\s\S]*?if \(state\.diagnosticViewMode === "raw"\) \{\s*state\.diagnosticViewMode = "final";/,
+    /async function requestPreviewUpdate[\s\S]*?if \(state\.diagnosticViewMode === "raw"\) \{\s*setDiagnosticViewMode\("final", \{ render: false \}\);/,
   );
   assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);

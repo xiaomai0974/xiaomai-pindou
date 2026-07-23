@@ -1269,8 +1269,7 @@ function setupEvents() {
     state.accurateMatch = elements.accurateMatchToggle.checked;
     // Accurate matching is a conversion setting. Keep the canvas on the
     // confirmed/final grid so its counts always match editing and export.
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
+    setDiagnosticViewMode("final", { render: false });
     requestPreviewUpdate(
       state.accurateMatch
         ? `准确匹配已生成预览：先做 ${PALETTE_NAME} LAB/DeltaE 精确匹配，再遵守最大颜色、空背景和制作优化。`
@@ -1284,16 +1283,10 @@ function setupEvents() {
       : "颜色诊断已关闭。";
   });
   elements.showFinalGridButton.addEventListener("click", () => {
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
-    renderPattern();
-    renderStats();
+    setDiagnosticViewMode("final");
   });
   elements.showRawGridButton.addEventListener("click", () => {
-    state.diagnosticViewMode = "raw";
-    syncDiagnosticControls();
-    renderPattern();
-    renderStats();
+    setDiagnosticViewMode("raw");
   });
   elements.outlineModeSelect.addEventListener("change", () => {
     state.outlineMode = elements.outlineModeSelect.value;
@@ -1949,10 +1942,7 @@ function setWorkbenchMode(mode, options = {}) {
   if (!["transform", "edit", "export"].includes(mode)) mode = "edit";
   if (!canLeaveTransformWithCurrentPreview(mode)) return false;
   if (mode !== "transform" && state.diagnosticViewMode === "raw") {
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
-    renderPattern();
-    renderStats();
+    setDiagnosticViewMode("final");
   }
   if (mode !== "edit" && document.body.classList.contains("focus-canvas-mode")) {
     setFocusCanvasMode(false, { fit: false });
@@ -2549,6 +2539,17 @@ function syncDiagnosticControls() {
     state.diagnosticViewMode === "raw"
       ? `正在查看原始匹配：只包含采样 + ${PALETTE_NAME} LAB/DeltaE 匹配。`
       : "正在查看最终结果：包含减色、合并、清理等后处理。开启颜色诊断后按住 Alt 点击格子查看变化。";
+}
+
+function setDiagnosticViewMode(mode, options = {}) {
+  const nextMode = mode === "raw" && state.rawMappedGrid.length ? "raw" : "final";
+  state.diagnosticViewMode = nextMode;
+  syncDiagnosticControls();
+  if (options.render !== false) {
+    renderPattern();
+    renderStats();
+  }
+  return nextMode;
 }
 
 function serializeGrid(pattern) {
@@ -4815,8 +4816,7 @@ function renderPendingPreview() {
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
   const requestVersion = ++previewUpdateVersion;
   if (state.diagnosticViewMode === "raw") {
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
+    setDiagnosticViewMode("final", { render: false });
   }
   setPatternProcessingBusy(true);
   try {
@@ -4880,9 +4880,8 @@ function applyPreviewToEditGrid() {
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.backgroundMask = state.previewBackgroundMask;
-  state.diagnosticViewMode = "final";
+  setDiagnosticViewMode("final", { render: false });
   refreshFinalDiagnosticsFromCurrentPattern("applyPreview");
-  syncDiagnosticControls();
   clearPreviewState();
   state.hasConfirmedGrid = true;
   state.editGridVersion += 1;
@@ -7013,14 +7012,14 @@ function buildCounts(pattern) {
 }
 
 function displayPattern() {
-  if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return state.rawMappedGrid;
+  if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   return state.pattern;
 }
 
 function displayCounts() {
-  if (state.isPreviewDirty && state.previewPattern.length) return state.previewCounts;
   if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return buildCounts(state.rawMappedGrid);
+  if (state.isPreviewDirty && state.previewPattern.length) return state.previewCounts;
   return state.counts;
 }
 
@@ -8241,10 +8240,7 @@ function handleCanvasClick(event) {
     return;
   }
   if (state.diagnosticViewMode === "raw") {
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
-    renderPattern();
-    renderStats();
+    setDiagnosticViewMode("final");
     elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。颜色诊断请按住 Alt 点击格子。";
   }
   if (state.isPreviewDirty) {
@@ -8331,10 +8327,7 @@ function handleCanvasPointerDown(event) {
   elements.patternCanvas.focus?.({ preventScroll: true });
   if (beginCanvasPan(event)) return;
   if (state.diagnosticViewMode === "raw") {
-    state.diagnosticViewMode = "final";
-    syncDiagnosticControls();
-    renderPattern();
-    renderStats();
+    setDiagnosticViewMode("final");
     elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。";
   }
   if (tryStartTraceReferenceDrag(event)) return;

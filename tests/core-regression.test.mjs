@@ -185,3 +185,30 @@ test("live color limit preview remains wired to input and confirmation", async (
   );
   assert.match(source, /function scheduleColorLimitPreview\(\)[\s\S]*?}, 140\);/);
 });
+
+test("raw color matching view takes priority over a pending final preview", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function displayPattern", "function displayQualityMetrics");
+  const rawMappedGrid = [{ code: "RAW" }];
+  const previewPattern = [{ code: "PREVIEW" }];
+  const confirmedPattern = [{ code: "FINAL" }];
+  const state = {
+    diagnosticViewMode: "raw",
+    rawMappedGrid,
+    isPreviewDirty: true,
+    previewPattern,
+    previewCounts: new Map([["PREVIEW", { code: "PREVIEW", count: 1 }]]),
+    pattern: confirmedPattern,
+    counts: new Map([["FINAL", { code: "FINAL", count: 1 }]]),
+  };
+  const buildCounts = (pattern) => new Map([[pattern[0].code, { ...pattern[0], count: 1 }]]);
+  const context = { state, buildCounts, Map };
+  vm.runInNewContext(helperSource, context);
+
+  assert.equal(context.displayPattern(), rawMappedGrid);
+  assert.deepEqual(Array.from(context.displayCounts().keys()), ["RAW"]);
+
+  state.diagnosticViewMode = "final";
+  assert.equal(context.displayPattern(), previewPattern);
+  assert.deepEqual(Array.from(context.displayCounts().keys()), ["PREVIEW"]);
+});
