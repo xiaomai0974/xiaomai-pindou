@@ -9256,12 +9256,41 @@ function pasteSelectionPixels() {
   elements.cellInfo.textContent = `已粘贴 ${pastedSelection.size} 个像素，粘贴结果已自动选中。`;
 }
 
+function createHistoryPatternPayload(pattern) {
+  const codebook = [];
+  const codeToIndex = new Map();
+  const wideIndices = new Uint16Array(pattern.length);
+
+  pattern.forEach((item, index) => {
+    const code = item.empty ? "__EMPTY__" : item.code;
+    let codeIndex = codeToIndex.get(code);
+    if (codeIndex === undefined) {
+      codeIndex = codebook.length;
+      codebook.push(code);
+      codeToIndex.set(code, codeIndex);
+    }
+    wideIndices[index] = codeIndex;
+  });
+
+  return {
+    codebook,
+    codeIndices: codebook.length <= 256 ? Uint8Array.from(wideIndices) : wideIndices,
+  };
+}
+
+function historySnapshotCodes(snapshot) {
+  if (Array.isArray(snapshot)) return snapshot;
+  if (Array.isArray(snapshot?.codes)) return snapshot.codes;
+  if (!Array.isArray(snapshot?.codebook) || !ArrayBuffer.isView(snapshot?.codeIndices)) return [];
+  return Array.from(snapshot.codeIndices, (index) => snapshot.codebook[index] || "__EMPTY__");
+}
+
 function snapshotPattern() {
   return {
     size: state.patternSize || state.gridSize,
     width: activeGridWidth(),
     height: activeGridHeight(),
-    codes: state.pattern.map((item) => (item.empty ? "__EMPTY__" : item.code)),
+    ...createHistoryPatternPayload(state.pattern),
     manualEditedCells: [...state.manualEditedCells],
     lockedColorCodes: [...state.lockedColorCodes],
     allowedColorCodes: [...state.allowedColorCodes],
@@ -9281,6 +9310,19 @@ function sameHistorySet(left = [], right = []) {
   return right.every((value) => values.has(value));
 }
 
+function sameHistoryPatternData(left, right) {
+  const leftPacked = Array.isArray(left?.codebook) && ArrayBuffer.isView(left?.codeIndices);
+  const rightPacked = Array.isArray(right?.codebook) && ArrayBuffer.isView(right?.codeIndices);
+  if (!leftPacked || !rightPacked) {
+    return sameHistoryList(historySnapshotCodes(left), historySnapshotCodes(right));
+  }
+  return (
+    sameHistoryList(left.codebook, right.codebook) &&
+    left.codeIndices.length === right.codeIndices.length &&
+    left.codeIndices.every((value, index) => value === right.codeIndices[index])
+  );
+}
+
 function historySnapshotsEqual(left, right) {
   if (!left || !right) return false;
   const a = Array.isArray(left) ? { codes: left } : left;
@@ -9290,7 +9332,7 @@ function historySnapshotsEqual(left, right) {
     Number(a.width || 0) === Number(b.width || 0) &&
     Number(a.height || 0) === Number(b.height || 0) &&
     a.selectedColorCode === b.selectedColorCode &&
-    sameHistoryList(a.codes || [], b.codes || []) &&
+    sameHistoryPatternData(a, b) &&
     sameHistorySet(a.manualEditedCells || [], b.manualEditedCells || []) &&
     sameHistorySet(a.lockedColorCodes || [], b.lockedColorCodes || []) &&
     sameHistorySet(a.allowedColorCodes || [], b.allowedColorCodes || []) &&
@@ -9300,7 +9342,7 @@ function historySnapshotsEqual(left, right) {
 }
 
 function restorePattern(snapshot) {
-  const codes = Array.isArray(snapshot) ? snapshot : snapshot.codes;
+  const codes = historySnapshotCodes(snapshot);
   if (!Array.isArray(snapshot) && snapshot.size) {
     state.gridWidth = Number(snapshot.width) || snapshot.size;
     state.gridHeight = Number(snapshot.height) || snapshot.size;

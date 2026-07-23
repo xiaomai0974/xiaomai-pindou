@@ -19,8 +19,8 @@ function sourceBetween(source, startMarker, endMarker) {
 
 test("history snapshots compare grid content and editor state", async () => {
   const source = await appSource();
-  const helperSource = sourceBetween(source, "function sameHistoryList", "function restorePattern");
-  const context = { Set, Array, Number };
+  const helperSource = sourceBetween(source, "function createHistoryPatternPayload", "function restorePattern");
+  const context = { Set, Map, Array, ArrayBuffer, Number, Uint8Array, Uint16Array };
   vm.runInNewContext(helperSource, context);
 
   const baseline = {
@@ -56,6 +56,58 @@ test("history snapshots compare grid content and editor state", async () => {
     }),
     false,
   );
+
+  const { codes: baselineCodes, ...historyMeta } = baseline;
+  const packedPattern = baselineCodes.map((code) => ({
+    code,
+    empty: code === "__EMPTY__",
+  }));
+  const packedBaseline = {
+    ...historyMeta,
+    ...context.createHistoryPatternPayload(packedPattern),
+  };
+  const packedCopy = {
+    ...historyMeta,
+    ...context.createHistoryPatternPayload(packedPattern),
+  };
+  assert.equal(context.historySnapshotsEqual(packedBaseline, packedCopy), true);
+  packedCopy.codeIndices[1] = packedCopy.codeIndices[0];
+  assert.equal(context.historySnapshotsEqual(packedBaseline, packedCopy), false);
+});
+
+test("history pattern payload round-trips exactly with compact indices", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function createHistoryPatternPayload", "function snapshotPattern");
+  const context = { Map, Array, ArrayBuffer, Uint8Array, Uint16Array };
+  vm.runInNewContext(helperSource, context);
+
+  const pattern = Array.from({ length: 64 * 64 }, (_, index) => {
+    if (index % 11 === 0) return { empty: true };
+    return { code: ["H7", "F1", "B12", "A6"][index % 4], empty: false };
+  });
+  const payload = context.createHistoryPatternPayload(pattern);
+  const restoredCodes = context.historySnapshotCodes(payload);
+  const expectedCodes = pattern.map((item) => (item.empty ? "__EMPTY__" : item.code));
+
+  assert.deepEqual(Array.from(restoredCodes), expectedCodes);
+  assert.equal(payload.codeIndices instanceof Uint8Array, true);
+  assert.equal(payload.codeIndices.byteLength, pattern.length);
+  const estimatedLegacyReferenceBytes = pattern.length * 8;
+  assert.ok(payload.codeIndices.byteLength <= estimatedLegacyReferenceBytes * 0.25);
+});
+
+test("history payload supports more than 256 unique color identifiers", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function createHistoryPatternPayload", "function snapshotPattern");
+  const context = { Map, Array, ArrayBuffer, Uint8Array, Uint16Array };
+  vm.runInNewContext(helperSource, context);
+
+  const pattern = Array.from({ length: 300 }, (_, index) => ({ code: `C${index}`, empty: false }));
+  const payload = context.createHistoryPatternPayload(pattern);
+
+  assert.equal(payload.codeIndices instanceof Uint16Array, true);
+  assert.equal(payload.codebook.length, 300);
+  assert.deepEqual(Array.from(context.historySnapshotCodes(payload)), pattern.map((item) => item.code));
 });
 
 test("exports the visible preview without mutating the saved edit grid", async () => {
