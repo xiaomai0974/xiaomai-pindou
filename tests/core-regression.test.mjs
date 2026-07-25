@@ -212,3 +212,54 @@ test("raw color matching view takes priority over a pending final preview", asyn
   assert.equal(context.displayPattern(), previewPattern);
   assert.deepEqual(Array.from(context.displayCounts().keys()), ["PREVIEW"]);
 });
+
+test("conversion setting changes preserve the selected raw diagnostic view", async () => {
+  const source = await appSource();
+  const accurateHandler = sourceBetween(
+    source,
+    'elements.accurateMatchToggle.addEventListener("change"',
+    'elements.colorDebugToggle.addEventListener("change"',
+  );
+  const previewUpdater = sourceBetween(source, "async function requestPreviewUpdate", "function applyPreviewToEditGrid");
+
+  assert.doesNotMatch(accurateHandler, /setDiagnosticViewMode\("final"/);
+  assert.doesNotMatch(previewUpdater, /setDiagnosticViewMode\("final"/);
+});
+
+test("raw diagnostics sample the original source instead of the optimized base image", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "async function buildRawDiagnosticReference", "function applyColorDiagnostics");
+
+  assert.match(helperSource, /buildPixelSamples\(state\.image,\s*size\)/);
+  assert.doesNotMatch(helperSource, /conversionSourceImage\(\)/);
+  assert.doesNotMatch(helperSource, /optimizedBaseImage\(\)/);
+});
+
+test("light high-contrast structures are protected from connected background removal", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function buildBackgroundProtectionMask", "function applyBackgroundModeToGrid");
+  const light = { code: "F1", rgb: { r: 247, g: 242, b: 232 }, lab: { l: 94 } };
+  const dark = { code: "H7", rgb: { r: 20, g: 20, b: 20 }, lab: { l: 8 } };
+  const pattern = Array(9).fill(light);
+  pattern[1] = dark;
+  const context = {
+    Uint8Array,
+    colorDistance: (a, b) => Math.abs(a.lab.l - b.lab.l),
+    getEightNeighbors: (x, y, size) => {
+      const neighbors = [];
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (!dx && !dy) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && ny >= 0 && nx < size && ny < size) neighbors.push(ny * size + nx);
+        }
+      }
+      return neighbors;
+    },
+  };
+  vm.runInNewContext(helperSource, context);
+
+  const mask = context.buildBackgroundProtectionMask(pattern, 3);
+  assert.equal(mask[4], 1);
+});

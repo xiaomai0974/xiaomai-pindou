@@ -45,7 +45,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /history-utils\.js\?v=20260724-1/);
-  assert.match(html, /app\.js\?v=20260724-1/);
+  assert.match(html, /app\.js\?v=20260726-1/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -200,10 +200,12 @@ test("serves the current application script, utilities, worker, and stylesheet",
     /function displayPattern\(\) \{\s*if \(state\.diagnosticViewMode === "raw"[\s\S]*?if \(state\.isPreviewDirty && state\.previewPattern\.length\)/,
   );
   assert.match(script, /function setDiagnosticViewMode\(mode, options = \{\}\)/);
-  assert.match(
-    script,
-    /async function requestPreviewUpdate[\s\S]*?if \(state\.diagnosticViewMode === "raw"\) \{\s*setDiagnosticViewMode\("final", \{ render: false \}\);/,
+  const previewUpdateSource = script.slice(
+    script.indexOf("async function requestPreviewUpdate"),
+    script.indexOf("function applyPreviewToEditGrid"),
   );
+  assert.doesNotMatch(previewUpdateSource, /setDiagnosticViewMode\("final"/);
+  assert.match(script, /async function buildRawDiagnosticReference[\s\S]*?buildPixelSamples\(state\.image, size\)/);
   assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);
   assert.match(script, /maxColors is a user-facing[\s\S]*?while \(counts\.size > maxColors && guard < 1000\)/);

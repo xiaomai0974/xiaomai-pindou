@@ -224,6 +224,7 @@ const state = {
   previewCanvasSnapshot: null,
   rawMappedGrid: [],
   rawSampleData: [],
+  rawDiagnosticSignature: "",
   rawDebugCandidates: [],
   finalGrid: [],
   colorTrace: [],
@@ -1102,6 +1103,7 @@ function recordColorDiagnostics(pixels, rawPattern, finalPattern, changedBy = "p
 function clearColorDiagnostics() {
   state.rawMappedGrid = [];
   state.rawSampleData = [];
+  state.rawDiagnosticSignature = "";
   state.rawDebugCandidates = [];
   state.finalGrid = [];
   state.colorTrace = [];
@@ -1267,9 +1269,6 @@ function setupEvents() {
   });
   elements.accurateMatchToggle.addEventListener("change", () => {
     state.accurateMatch = elements.accurateMatchToggle.checked;
-    // Accurate matching is a conversion setting. Keep the canvas on the
-    // confirmed/final grid so its counts always match editing and export.
-    setDiagnosticViewMode("final", { render: false });
     requestPreviewUpdate(
       state.accurateMatch
         ? `准确匹配已生成预览：先做 ${PALETTE_NAME} LAB/DeltaE 精确匹配，再遵守最大颜色、空背景和制作优化。`
@@ -4007,9 +4006,10 @@ async function generatePattern() {
     }
 
     const size = state.gridSize;
+    const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
+    const rawDiagnostic = await buildRawDiagnosticReference(size, directPalette);
     const sourceImage = conversionSourceImage();
     const pixels = buildPixelSamples(sourceImage, size);
-    const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
     const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
     const pattern = await mapSamplesToPaletteAsync(
       pixels,
@@ -4021,7 +4021,7 @@ async function generatePattern() {
     if (state.processingProfile === "photoColor") {
       const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
       state.pattern = photoResult.pattern;
-      recordColorDiagnostics(pixels, pattern, state.pattern, "photoColorMatch");
+      applyColorDiagnostics(rawDiagnostic, state.pattern, "photoColorMatch");
       state.patternSize = size;
       state.counts = buildCounts(state.pattern);
       state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => paletteColorByCode(item.code) || item);
@@ -4041,7 +4041,7 @@ async function generatePattern() {
     if (state.accurateMatch) {
       const accurateResult = finalizeAccurateMatch(pattern, pixels, size, limitedPalette);
       state.pattern = accurateResult.pattern;
-      recordColorDiagnostics(pixels, pattern, state.pattern, "accurateMatchCleanup");
+      applyColorDiagnostics(rawDiagnostic, state.pattern, "accurateMatchCleanup");
       state.patternSize = size;
       state.counts = buildCounts(state.pattern);
       state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => paletteColorByCode(item.code) || item);
@@ -4067,7 +4067,7 @@ async function generatePattern() {
       elements.cellInfo.textContent = "背景识别过强，已自动保留原图主体。";
     }
     state.pattern = validateColorConstraints(state.pattern);
-    recordColorDiagnostics(pixels, pattern, state.pattern, "postProcess");
+    applyColorDiagnostics(rawDiagnostic, state.pattern, "postProcess");
     state.patternSize = size;
     state.counts = buildCounts(state.pattern);
     state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => palette.find((color) => color.code === item.code) || item);
@@ -4094,9 +4094,10 @@ async function generatePattern() {
 async function buildPatternResultFromImage() {
   if (!state.image) return null;
   const size = state.gridSize;
+  const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
+  const rawDiagnostic = await buildRawDiagnosticReference(size, directPalette);
   const sourceImage = conversionSourceImage();
   const pixels = buildPixelSamples(sourceImage, size);
-  const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
   const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
   const pattern = await mapSamplesToPaletteAsync(
     pixels,
@@ -4107,21 +4108,21 @@ async function buildPatternResultFromImage() {
 
   if (state.processingProfile === "photoColor") {
     const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
-    recordColorDiagnostics(pixels, pattern, photoResult.pattern, "photoColorMatch");
     return {
       pattern: photoResult.pattern,
       backgroundMask: photoResult.backgroundMask,
       size,
+      diagnostics: { ...rawDiagnostic, changedBy: "photoColorMatch" },
     };
   }
 
   if (state.accurateMatch) {
     const accurateResult = finalizeAccurateMatch(pattern, pixels, size, limitedPalette);
-    recordColorDiagnostics(pixels, pattern, accurateResult.pattern, "accurateMatchCleanup");
     return {
       pattern: accurateResult.pattern,
       backgroundMask: accurateResult.backgroundMask,
       size,
+      diagnostics: { ...rawDiagnostic, changedBy: "accurateMatchCleanup" },
     };
   }
 
@@ -4132,13 +4133,10 @@ async function buildPatternResultFromImage() {
     processed = postProcessPattern(pattern, size);
   }
   return {
-    pattern: (() => {
-      const finalPattern = validateColorConstraints(processed);
-      recordColorDiagnostics(pixels, pattern, finalPattern, "postProcess");
-      return finalPattern;
-    })(),
+    pattern: validateColorConstraints(processed),
     backgroundMask,
     size,
+    diagnostics: { ...rawDiagnostic, changedBy: "postProcess" },
   };
 }
 
@@ -4213,6 +4211,53 @@ function cleanPhotoLowContrastIsolated(pattern, size) {
 function conversionSourceImage() {
   if (!state.localPreprocessSettings.enabled) return state.image;
   return optimizedBaseImage();
+}
+
+function rawDiagnosticCacheSignature(size, sourcePalette) {
+  return JSON.stringify({
+    size,
+    gridWidth: state.gridWidth,
+    gridHeight: state.gridHeight,
+    imageWidth: state.image?.width || 0,
+    imageHeight: state.image?.height || 0,
+    fileName: state.sourceImageState?.fileName || state.fileName || "",
+    patternMode: state.patternMode,
+    processingProfile: state.processingProfile,
+    fitMode: state.fitMode,
+    dominantSampling: state.dominantSampling,
+    animeMode: state.animeMode,
+    lineBoost: state.lineBoost,
+    outlineMode: state.outlineMode,
+    removeTransparent: state.removeTransparent,
+    palette: paletteSignature(sourcePalette),
+  });
+}
+
+async function buildRawDiagnosticReference(size, sourcePalette) {
+  const signature = rawDiagnosticCacheSignature(size, sourcePalette);
+  if (
+    state.rawDiagnosticSignature === signature &&
+    state.rawSampleData.length === size * size &&
+    state.rawMappedGrid.length === size * size
+  ) {
+    return {
+      pixels: state.rawSampleData,
+      pattern: state.rawMappedGrid,
+      signature,
+    };
+  }
+
+  // “原始匹配”始终从裁剪后的原图直接采样，不使用本地底图优化、
+  // 减色、合并或清理，避免它与“最终效果”共享同一条处理链。
+  const pixels = buildPixelSamples(state.image, size);
+  const pattern = await mapSamplesToPaletteAsync(pixels, size, sourcePalette, false);
+  return { pixels, pattern, signature };
+}
+
+function applyColorDiagnostics(diagnostics, finalPattern, changedBy) {
+  if (!diagnostics?.pixels?.length || !diagnostics?.pattern?.length) return;
+  recordColorDiagnostics(diagnostics.pixels, diagnostics.pattern, finalPattern, changedBy);
+  state.rawDiagnosticSignature = diagnostics.signature || "";
 }
 
 function optimizedBaseImage() {
@@ -4374,6 +4419,10 @@ function buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask
     const dg = g - edge.g;
     const db = b - edge.b;
     const distance = Math.sqrt(dr * dr + dg * dg + db * db);
+    const x = index % width;
+    const y = Math.floor(index / width);
+    const isOuterEdge = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+    if (!isOuterEdge && alpha >= 180 && hasStrongLocalImageBoundary(data, index, width, height)) return false;
     if (distance <= distanceLimit) return true;
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
@@ -4408,11 +4457,37 @@ function buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask
   return mask;
 }
 
+function hasStrongLocalImageBoundary(data, index, width, height) {
+  const x = index % width;
+  const y = Math.floor(index / width);
+  const offset = index * 4;
+  const r = data[offset];
+  const g = data[offset + 1];
+  const b = data[offset + 2];
+  const neighbors = [];
+  if (x > 0) neighbors.push(index - 1);
+  if (x < width - 1) neighbors.push(index + 1);
+  if (y > 0) neighbors.push(index - width);
+  if (y < height - 1) neighbors.push(index + width);
+  return neighbors.some((next) => {
+    const neighborOffset = next * 4;
+    if (data[neighborOffset + 3] < 96) return false;
+    const maxChannelDelta = Math.max(
+      Math.abs(r - data[neighborOffset]),
+      Math.abs(g - data[neighborOffset + 1]),
+      Math.abs(b - data[neighborOffset + 2]),
+    );
+    return maxChannelDelta >= 30;
+  });
+}
+
 function cleanupAntiAliasPixels(imageData, outlineMask) {
   const { data, width, height } = imageData;
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
   const out = output.data;
   const fill = whiteBeadColor().rgb;
+  const edge = estimatePreprocessEdgeBackground(data, width, height);
+  const connectedBackground = buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask);
   for (let y = 1; y < height - 1; y += 1) {
     for (let x = 1; x < width - 1; x += 1) {
       const index = y * width + x;
@@ -4422,7 +4497,11 @@ function cleanupAntiAliasPixels(imageData, outlineMask) {
       const lum = preprocessLuminance(data[offset], data[offset + 1], data[offset + 2]);
       const saturation = preprocessSaturation(data[offset], data[offset + 1], data[offset + 2]);
       const hasSolidNeighbor = preprocessFourNeighbors(x, y, width, height).some((next) => data[next * 4 + 3] > 230);
-      if ((alpha > 35 && alpha < 210 && hasSolidNeighbor) || (lum > 218 && saturation < 28)) {
+      const touchesTransparent = preprocessFourNeighbors(x, y, width, height).some((next) => data[next * 4 + 3] < 48);
+      const isConnectedBackground = Boolean(connectedBackground[index]);
+      const shouldCleanPartialEdge = alpha > 35 && alpha < 210 && hasSolidNeighbor && (isConnectedBackground || touchesTransparent);
+      const shouldCleanLightBackground = lum > 218 && saturation < 28 && isConnectedBackground;
+      if (shouldCleanPartialEdge || shouldCleanLightBackground) {
         if (state.pixelBackground === "white") {
           out[offset] = fill.r;
           out[offset + 1] = fill.g;
@@ -4815,9 +4894,6 @@ function renderPendingPreview() {
 
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
   const requestVersion = ++previewUpdateVersion;
-  if (state.diagnosticViewMode === "raw") {
-    setDiagnosticViewMode("final", { render: false });
-  }
   setPatternProcessingBusy(true);
   try {
     let result = null;
@@ -4842,6 +4918,9 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
       return false;
     }
 
+    if (result.diagnostics) {
+      applyColorDiagnostics(result.diagnostics, result.pattern, result.diagnostics.changedBy);
+    }
     setPendingPreview(result.pattern, {
       backgroundMask: result.backgroundMask,
       preservesManualEdits: result.preservesManualEdits,
@@ -5135,7 +5214,12 @@ function buildBackgroundProtectionMask(pattern, size) {
     const saturation = Math.max(color.rgb.r, color.rgb.g, color.rgb.b) - Math.min(color.rgb.r, color.rgb.g, color.rgb.b);
     const darkStructure = color.lab.l < 54 && maxContrast >= 24 && similarNeighbors >= 1;
     const accentStructure = saturation >= 72 && maxContrast >= 32 && similarNeighbors >= 2;
-    if (darkStructure || accentStructure) mask[index] = 1;
+    const lightStructure =
+      color.lab.l >= 76 &&
+      maxContrast >= 20 &&
+      similarNeighbors >= 2 &&
+      neighbors.some((neighbor) => neighbor.lab.l <= color.lab.l - 16);
+    if (darkStructure || accentStructure || lightStructure) mask[index] = 1;
   }
 
   const protectedWithClosedGaps = new Uint8Array(mask);
@@ -5189,7 +5273,10 @@ function detectEdgeBackgroundColors(pattern, size) {
   return [...entries.values()]
     .filter((entry) => {
       if (isLikelyBackgroundColor(entry.color)) {
-        return (entry.sides.size >= 2 && entry.count >= 4) || entry.count >= Math.max(8, size * 0.55);
+        return (
+          (entry.sides.size >= 3 && entry.count >= Math.max(8, size * 0.12)) ||
+          entry.count >= Math.max(10, size * 0.55)
+        );
       }
       const broadCoverage = entry.sides.size >= 3 && entry.count >= Math.max(6, borderCellCount * 0.035);
       const dominantCoverage = entry.sides.size >= 2 && entry.count >= Math.max(10, borderCellCount * 0.08);
