@@ -9,7 +9,7 @@
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="history-utils.js?v=20260724-1" defer></script>
-    <script src="app.js?v=20260726-1" defer></script>
+    <script src="app.js?v=20260728-1" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -263,26 +263,23 @@
               <option value="strong">强</option>
             </select>
           </label>
-          <div class="matching-settings" aria-label="颜色匹配设置">
+        </section>
+
+        <details class="control-group sidebar-card advanced-settings">
+          <summary>更多图像设置</summary>
+          <section class="advanced-section matching-settings" aria-label="颜色匹配设置">
             <div class="group-title">
               <span>颜色匹配</span>
-              <small>默认使用最终效果</small>
+              <small>上传后直接精准匹配</small>
             </div>
             <label class="mini-check matching-accurate-toggle">
               <input id="accurateMatchToggle" type="checkbox" checked />
               <span>精准匹配</span>
             </label>
-            <div class="segmented matching-view-options" role="group" aria-label="匹配结果视图">
-              <button id="showRawGridButton" type="button">原始匹配</button>
-              <button id="showFinalGridButton" class="is-active" type="button">最终效果</button>
-            </div>
-            <small class="setting-hint">原始匹配保留色板直配结果；最终效果包含减色和清理。</small>
-          </div>
-        </section>
+            <small class="setting-hint">以原图直配色彩为基础；图像设置和生成细项只更新当前预览，确认后才应用。</small>
+          </section>
 
-        <details class="control-group sidebar-card advanced-settings">
-          <summary>更多图像设置</summary>
-          <section class="advanced-section app-mode-panel">
+          <section class="advanced-section app-mode-panel" hidden>
             <div class="group-title">
               <span>工作模式</span>
               <output id="appModeLabel">自动转图</output>
@@ -297,7 +294,7 @@
             </div>
           </section>
 
-          <section class="advanced-section preview-mode-panel">
+          <section class="advanced-section preview-mode-panel" hidden>
             <div class="group-title">
               <span>图纸模式</span>
               <output id="patternModeLabel">普通图纸</output>
@@ -378,7 +375,7 @@
             </div>
             <div class="advanced-parameter-toggles">
               <label class="toggle">
-                <input id="transparentToggle" type="checkbox" checked />
+                <input id="transparentToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>去透明边</span>
               </label>
@@ -388,17 +385,17 @@
                 <span>保留轮廓</span>
               </label>
               <label class="toggle">
-                <input id="dominantSamplingToggle" type="checkbox" checked />
+                <input id="dominantSamplingToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>主导色采样</span>
               </label>
               <label class="toggle">
-                <input id="mergeSimilarToggle" type="checkbox" checked />
+                <input id="mergeSimilarToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>合并相近颜色</span>
               </label>
               <label class="toggle">
-                <input id="cleanSmallRegionsToggle" type="checkbox" checked />
+                <input id="cleanSmallRegionsToggle" type="checkbox" />
                 <span class="switch" aria-hidden="true"></span>
                 <span>清理孤立像素</span>
               </label>

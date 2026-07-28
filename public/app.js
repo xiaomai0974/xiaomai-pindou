@@ -58,16 +58,15 @@ const DEFAULT_GENERATION_SETTINGS = Object.freeze({
   processingProfile: "detail64",
   pixelBackground: "empty",
   dither: false,
-  removeTransparent: true,
+  removeTransparent: false,
   lineBoost: false,
   outlineMode: "light",
-  dominantSampling: true,
-  mergeSimilarColors: true,
-  cleanSmallRegions: true,
+  dominantSampling: false,
+  mergeSimilarColors: false,
+  cleanSmallRegions: false,
   animeMode: false,
   minRegionSize: 2,
   accurateMatch: true,
-  diagnosticViewMode: "final",
 });
 
 const paletteSource = Array.isArray(window.MARD_221_PALETTE) && window.MARD_221_PALETTE.length
@@ -135,9 +134,6 @@ const AUTOSAVE_KEY = "latest";
 const PROJECT_DB_VERSION = 2;
 const LIBRARY_META_STORE_NAME = "libraryMeta";
 const LIBRARY_DATA_STORE_NAME = "libraryData";
-const EXPORT_AD_IMAGE_URL = "assets/wechat-custom-order.png";
-let exportAdImagePromise = null;
-
 const state = {
   image: null,
   sourceImageState: null,
@@ -231,7 +227,6 @@ const state = {
   colorMatchMetrics: null,
   accurateMatch: DEFAULT_GENERATION_SETTINGS.accurateMatch,
   colorDebugEnabled: false,
-  diagnosticViewMode: DEFAULT_GENERATION_SETTINGS.diagnosticViewMode,
   baselineGrid: [],
   optimizedGrid: [],
   compareMetrics: null,
@@ -498,8 +493,6 @@ const elements = {
   closeOptimizeButton: document.querySelector("#closeOptimizeButton"),
   accurateMatchToggle: document.querySelector("#accurateMatchToggle"),
   colorDebugToggle: document.querySelector("#colorDebugToggle"),
-  showFinalGridButton: document.querySelector("#showFinalGridButton"),
-  showRawGridButton: document.querySelector("#showRawGridButton"),
   colorDebugInfo: document.querySelector("#colorDebugInfo"),
 };
 
@@ -1108,7 +1101,6 @@ function clearColorDiagnostics() {
   state.finalGrid = [];
   state.colorTrace = [];
   state.colorMatchMetrics = null;
-  state.diagnosticViewMode = DEFAULT_GENERATION_SETTINGS.diagnosticViewMode;
   syncDiagnosticControls();
 }
 
@@ -1280,12 +1272,6 @@ function setupEvents() {
     elements.cellInfo.textContent = state.colorDebugEnabled
       ? "颜色诊断已开启：点击任意格子查看采样、MARD 候选和后处理变化。"
       : "颜色诊断已关闭。";
-  });
-  elements.showFinalGridButton.addEventListener("click", () => {
-    setDiagnosticViewMode("final");
-  });
-  elements.showRawGridButton.addEventListener("click", () => {
-    setDiagnosticViewMode("raw");
   });
   elements.outlineModeSelect.addEventListener("change", () => {
     state.outlineMode = elements.outlineModeSelect.value;
@@ -1940,9 +1926,6 @@ function canLeaveTransformWithCurrentPreview(mode) {
 function setWorkbenchMode(mode, options = {}) {
   if (!["transform", "edit", "export"].includes(mode)) mode = "edit";
   if (!canLeaveTransformWithCurrentPreview(mode)) return false;
-  if (mode !== "transform" && state.diagnosticViewMode === "raw") {
-    setDiagnosticViewMode("final");
-  }
   if (mode !== "edit" && document.body.classList.contains("focus-canvas-mode")) {
     setFocusCanvasMode(false, { fit: false });
   }
@@ -2531,24 +2514,10 @@ function syncDiagnosticControls() {
   if (!elements.accurateMatchToggle) return;
   elements.accurateMatchToggle.checked = state.accurateMatch;
   elements.colorDebugToggle.checked = state.colorDebugEnabled;
-  elements.showFinalGridButton.classList.toggle("is-active", state.diagnosticViewMode !== "raw");
-  elements.showRawGridButton.classList.toggle("is-active", state.diagnosticViewMode === "raw");
-  elements.showRawGridButton.disabled = !state.rawMappedGrid.length;
   elements.colorDebugInfo.textContent =
-    state.diagnosticViewMode === "raw"
-      ? `正在查看原始匹配：只包含采样 + ${PALETTE_NAME} LAB/DeltaE 匹配。`
-      : "正在查看最终结果：包含减色、合并、清理等后处理。开启颜色诊断后按住 Alt 点击格子查看变化。";
-}
-
-function setDiagnosticViewMode(mode, options = {}) {
-  const nextMode = mode === "raw" && state.rawMappedGrid.length ? "raw" : "final";
-  state.diagnosticViewMode = nextMode;
-  syncDiagnosticControls();
-  if (options.render !== false) {
-    renderPattern();
-    renderStats();
-  }
-  return nextMode;
+    state.accurateMatch
+      ? `当前以原图 + ${PALETTE_NAME} LAB/DeltaE 精准匹配为基础；所有设置更新同一张预览。`
+      : "当前使用兼容匹配；所有设置更新同一张预览。";
 }
 
 function serializeGrid(pattern) {
@@ -2891,7 +2860,9 @@ async function restoreProjectData(projectData, options = {}) {
     state.removeTransparent = settings.removeTransparent !== false;
     state.fitMode = settings.fitMode || "subject";
     if (state.fitMode === "contain") state.fitMode = "subject";
-    state.patternMode = settings.patternMode || state.patternMode || "illustration";
+    // The simplified UI uses one automatic conversion flow and the standard
+    // pattern algorithm. Saved edit grids still load unchanged.
+    state.patternMode = "illustration";
     state.processingProfile = settings.processingProfile || recommendedProcessingProfile(state.gridSize);
     state.minRegionSize = Number(settings.minRegionSize || state.minRegionSize || 4);
     if (state.processingProfile === "photoColor" && state.minRegionSize > 3) state.minRegionSize = 2;
@@ -2936,7 +2907,7 @@ async function restoreProjectData(projectData, options = {}) {
       adjustMode: false,
     };
 
-    state.appMode = draw.appMode || (draw.enabled ? "draw" : "auto");
+    state.appMode = "auto";
     state.activeTool = visibleCanvasTool(draw.activeTool) ? draw.activeTool : "brush";
     state.brushSize = Number(draw.brushSize || 1);
     state.brushShape = draw.brushShape || "square";
@@ -4051,7 +4022,7 @@ async function generatePattern() {
       state.hasConfirmedGrid = true;
       state.editGridVersion += 1;
       state.suspendHistory = false;
-      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 准确匹配 + 制作优化`;
+      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 精准匹配`;
       renderPattern();
       renderStats();
       showQualityHint();
@@ -4247,8 +4218,8 @@ async function buildRawDiagnosticReference(size, sourcePalette) {
     };
   }
 
-  // “原始匹配”始终从裁剪后的原图直接采样，不使用本地底图优化、
-  // 减色、合并或清理，避免它与“最终效果”共享同一条处理链。
+  // 保留一份裁剪后原图的直配基准，用于颜色诊断与质量比较。
+  // 用户画布始终显示当前设置生成的单一预览，不再切换诊断图层。
   const pixels = buildPixelSamples(state.image, size);
   const pattern = await mapSamplesToPaletteAsync(pixels, size, sourcePalette, false);
   return { pixels, pattern, signature };
@@ -4959,7 +4930,6 @@ function applyPreviewToEditGrid() {
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.backgroundMask = state.previewBackgroundMask;
-  setDiagnosticViewMode("final", { render: false });
   refreshFinalDiagnosticsFromCurrentPattern("applyPreview");
   clearPreviewState();
   state.hasConfirmedGrid = true;
@@ -7099,13 +7069,11 @@ function buildCounts(pattern) {
 }
 
 function displayPattern() {
-  if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return state.rawMappedGrid;
   if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   return state.pattern;
 }
 
 function displayCounts() {
-  if (state.diagnosticViewMode === "raw" && state.rawMappedGrid.length) return buildCounts(state.rawMappedGrid);
   if (state.isPreviewDirty && state.previewPattern.length) return state.previewCounts;
   return state.counts;
 }
@@ -7868,7 +7836,6 @@ function renderStats() {
     state.patternMode,
     state.colorMode,
     state.paletteSearch,
-    state.diagnosticViewMode,
     `${activeGridWidth()}x${activeGridHeight()}`,
     pattern.length,
     state.projectPalette.length,
@@ -8107,7 +8074,6 @@ function renderToolColorPalette() {
     state.toolPaletteSearch,
     Number(state.toolPaletteShowAll),
     state.selectedColor?.code || "",
-    state.diagnosticViewMode,
     rows.map((item) => `${item.code}:${item.count}:${Number(item.isActive)}:${Number(item.isLocked)}`).join(","),
   ].join("|");
 
@@ -8326,10 +8292,6 @@ function handleCanvasClick(event) {
     if (debugCell) showColorDebugForCell(debugCell);
     return;
   }
-  if (state.diagnosticViewMode === "raw") {
-    setDiagnosticViewMode("final");
-    elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。颜色诊断请按住 Alt 点击格子。";
-  }
   if (state.isPreviewDirty) {
     elements.cellInfo.textContent = "当前是转图预览；请先确认应用再进入编辑。";
     return;
@@ -8398,7 +8360,7 @@ function showColorDebugForCell(cell) {
     `诊断 ${cell.x + 1},${cell.y + 1} ｜原图区域 x${sampleArea.x} y${sampleArea.y} ${sampleArea.w}x${sampleArea.h} ｜` +
     `采样 RGB ${sample ? `${Math.round(sample.r)},${Math.round(sample.g)},${Math.round(sample.b)}` : "无"} ｜` +
     `LAB ${sampleLab ? `${sampleLab.l.toFixed(1)},${sampleLab.a.toFixed(1)},${sampleLab.b.toFixed(1)}` : "无"} ｜` +
-    `raw ${rawColor?.code || "空"} → final ${finalColor?.code || "空"}${changed} ｜候选 ${candidateText}`;
+    `直配 ${rawColor?.code || "空"} → 当前 ${finalColor?.code || "空"}${changed} ｜候选 ${candidateText}`;
   console.table(
     candidates.map((item) => ({
       code: item.code,
@@ -8413,10 +8375,6 @@ function showColorDebugForCell(cell) {
 function handleCanvasPointerDown(event) {
   elements.patternCanvas.focus?.({ preventScroll: true });
   if (beginCanvasPan(event)) return;
-  if (state.diagnosticViewMode === "raw") {
-    setDiagnosticViewMode("final");
-    elements.cellInfo.textContent = "已切回最终图纸，可以继续编辑。";
-  }
   if (tryStartTraceReferenceDrag(event)) return;
   if (state.isPreviewDirty) {
     elements.cellInfo.textContent = "当前是转图预览；请先确认应用再进入编辑。";
@@ -9855,23 +9813,16 @@ async function exportPattern() {
   const includeWatermark = elements.exportWatermarkToggle?.checked ?? state.exportWatermarkEnabled;
   const snapshot = currentExportSnapshot();
   state.exportWatermarkEnabled = includeWatermark;
-  try {
-    const exportAdImage = await loadExportAdImage();
-    if (elements.exportFormat?.value === "pdf") {
-      await exportPatternPdf({ includeWatermark, exportAdImage, ...snapshot });
-      return;
-    }
-    const readableCanvas = renderReadableExportCanvas({ includeWatermark, exportAdImage, ...snapshot });
-    downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
-  } catch (error) {
-    console.error("导出二维码广告加载失败", error);
-    window.alert("微信二维码加载失败，请刷新页面后重试导出。");
+  if (elements.exportFormat?.value === "pdf") {
+    await exportPatternPdf({ includeWatermark, ...snapshot });
+    return;
   }
+  const readableCanvas = renderReadableExportCanvas({ includeWatermark, ...snapshot });
+  downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
 }
 
 function renderReadableExportCanvas(options = {}) {
   const includeWatermark = options.includeWatermark !== false;
-  const exportAdImage = options.exportAdImage;
   const pattern = options.pattern || displayPattern();
   const counts = options.counts || buildCounts(pattern);
   const rows = options.rows || [...counts.values()].sort((a, b) => b.count - a.count);
@@ -9885,15 +9836,9 @@ function renderReadableExportCanvas(options = {}) {
   const plotHeight = heightCells * cellSize;
   const legendRows = Math.ceil(rows.length / Math.max(1, Math.floor(plotWidth / 188)));
   const legendHeight = Math.max(280, 90 + legendRows * 82);
-  const adWidth = exportAdImage ? Math.min(exportAdImage.naturalWidth || exportAdImage.width, plotWidth) : 0;
-  const adHeight = exportAdImage
-    ? Math.round(adWidth * (exportAdImage.naturalHeight || exportAdImage.height) / (exportAdImage.naturalWidth || exportAdImage.width))
-    : 0;
-  const adGap = exportAdImage ? 72 : 0;
-  const adBottom = exportAdImage ? 72 : 0;
   const canvas = document.createElement("canvas");
   canvas.width = margin * 2 + plotWidth;
-  canvas.height = top + plotHeight + legendHeight + adGap + adHeight + adBottom;
+  canvas.height = top + plotHeight + legendHeight;
   const exportCtx = canvas.getContext("2d");
 
   exportCtx.fillStyle = "#fffdf8";
@@ -9908,13 +9853,6 @@ function renderReadableExportCanvas(options = {}) {
 
   drawReadableCells(exportCtx, margin, top, cellSize, pattern);
   drawReadableLegend(exportCtx, margin, top + plotHeight + 80, canvas.width - margin * 2, rows);
-  if (exportAdImage) {
-    const adX = Math.round((canvas.width - adWidth) / 2);
-    const adY = top + plotHeight + legendHeight + adGap;
-    exportCtx.imageSmoothingEnabled = true;
-    exportCtx.imageSmoothingQuality = "high";
-    exportCtx.drawImage(exportAdImage, adX, adY, adWidth, adHeight);
-  }
   if (includeWatermark) drawReadableExportWatermark(exportCtx, canvas, top, top + plotHeight);
 
   return canvas;
@@ -10060,38 +9998,8 @@ function downloadCanvas(canvas, fileName) {
   link.click();
 }
 
-function loadExportAdImage() {
-  if (!exportAdImagePromise) {
-    exportAdImagePromise = new Promise((resolve, reject) => {
-      const image = new Image();
-      image.decoding = "async";
-      image.addEventListener("load", () => resolve(image), { once: true });
-      image.addEventListener("error", () => reject(new Error("Unable to load export advertisement image.")), { once: true });
-      image.src = EXPORT_AD_IMAGE_URL;
-    });
-  }
-  return exportAdImagePromise;
-}
-
-function exportAdImageToJpegData(image) {
-  const canvas = document.createElement("canvas");
-  canvas.width = image.naturalWidth || image.width;
-  canvas.height = image.naturalHeight || image.height;
-  const context = canvas.getContext("2d");
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-  const base64 = canvas.toDataURL("image/jpeg", 0.98).split(",")[1];
-  return {
-    width: canvas.width,
-    height: canvas.height,
-    binary: window.atob(base64),
-  };
-}
-
 async function exportPatternPdf(options = {}) {
-  const exportAdImageData = options.exportAdImage ? exportAdImageToJpegData(options.exportAdImage) : null;
-  const pdfBytes = buildVectorPdf({ ...options, exportAdImageData });
+  const pdfBytes = buildVectorPdf(options);
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -10222,9 +10130,7 @@ function buildVectorPdf(options = {}) {
     }
   }
 
-  return createPdf(page.width, page.height, commands.join("\n"), {
-    adImage: options.exportAdImageData,
-  });
+  return createPdf(page.width, page.height, commands.join("\n"));
 }
 
 function pdfColor(rgb) {
@@ -10256,12 +10162,10 @@ function pdfUtf16BeHex(value) {
   return hex;
 }
 
-function createPdf(width, height, stream, options = {}) {
-  const adImage = options.adImage;
-  const pageKids = adImage ? "[3 0 R 9 0 R]" : "[3 0 R]";
+function createPdf(width, height, stream) {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
-    `<< /Type /Pages /Kids ${pageKids} /Count ${adImage ? 2 : 1} >>`,
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${roundPdf(width)} ${roundPdf(height)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
@@ -10269,21 +10173,6 @@ function createPdf(width, height, stream, options = {}) {
     "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R >>",
     "<< /Type /FontDescriptor /FontName /STSong-Light /Flags 6 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>",
   ];
-  if (adImage) {
-    const maxAdWidth = width * 0.56;
-    const maxAdHeight = height * 0.88;
-    const scale = Math.min(maxAdWidth / adImage.width, maxAdHeight / adImage.height);
-    const adWidth = adImage.width * scale;
-    const adHeight = adImage.height * scale;
-    const adX = (width - adWidth) / 2;
-    const adY = (height - adHeight) / 2;
-    const adStream = `q ${roundPdf(adWidth)} 0 0 ${roundPdf(adHeight)} ${roundPdf(adX)} ${roundPdf(adY)} cm /Im1 Do Q`;
-    objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${roundPdf(width)} ${roundPdf(height)}] /Resources << /XObject << /Im1 11 0 R >> >> /Contents 10 0 R >>`,
-      `<< /Length ${adStream.length} >>\nstream\n${adStream}\nendstream`,
-      `<< /Type /XObject /Subtype /Image /Width ${adImage.width} /Height ${adImage.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${adImage.binary.length} >>\nstream\n${adImage.binary}\nendstream`,
-    );
-  }
   let pdf = "%PDF-1.4\n";
   const offsets = [0];
   objects.forEach((object, index) => {

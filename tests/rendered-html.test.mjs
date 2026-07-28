@@ -45,7 +45,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /history-utils\.js\?v=20260724-1/);
-  assert.match(html, /app\.js\?v=20260726-1/);
+  assert.match(html, /app\.js\?v=20260728-1/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -72,8 +72,16 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /原图显示/);
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
-  assert.match(html, /<button id="showFinalGridButton" class="is-active"/);
-  assert.doesNotMatch(html, /<button id="showRawGridButton" class="is-active"/);
+  assert.doesNotMatch(html, /id="showFinalGridButton"/);
+  assert.doesNotMatch(html, /id="showRawGridButton"/);
+  assert.match(html, /上传后直接精准匹配/);
+  assert.match(html, /图像设置和生成细项只更新当前预览/);
+  assert.ok(
+    html.indexOf('class="advanced-section matching-settings"') > html.indexOf("<summary>更多图像设置</summary>"),
+    "颜色匹配应位于更多图像设置内部",
+  );
+  assert.match(html, /<section class="advanced-section app-mode-panel" hidden>/);
+  assert.match(html, /<section class="advanced-section preview-mode-panel" hidden>/);
   assert.match(html, /class="processing-profile-option is-active" data-processing-profile="detail64"/);
   assert.match(html, /<input id="localPreprocessEnabledToggle" type="checkbox" checked/);
   [
@@ -83,7 +91,11 @@ test("serves the Xiaomai bead designer homepage", async () => {
     "noiseReductionToggle",
     "regionToneCompressionToggle",
     "outlineColorConvergenceToggle",
+    "transparentToggle",
     "lineBoostToggle",
+    "dominantSamplingToggle",
+    "mergeSimilarToggle",
+    "cleanSmallRegionsToggle",
     "animeModeToggle",
   ].forEach((id) => {
     assert.match(html, new RegExp(`<input id="${id}" type="checkbox" \\/>`));
@@ -92,10 +104,6 @@ test("serves the Xiaomai bead designer homepage", async () => {
     "materialTextureCleanupToggle",
     "backgroundCleanupToggle",
     "regionColorStabilizationToggle",
-    "transparentToggle",
-    "dominantSamplingToggle",
-    "mergeSimilarToggle",
-    "cleanSmallRegionsToggle",
   ].forEach((id) => {
     assert.match(html, new RegExp(`<input id="${id}" type="checkbox" checked \\/>`));
   });
@@ -117,18 +125,16 @@ test("serves the Xiaomai bead designer homepage", async () => {
 });
 
 test("serves the current application script, utilities, worker, and stylesheet", async () => {
-  const [scriptResponse, historyUtilsResponse, workerResponse, styleResponse, exportAdResponse] = await Promise.all([
+  const [scriptResponse, historyUtilsResponse, workerResponse, styleResponse] = await Promise.all([
     fetchFromWorker("/app.js"),
     fetchFromWorker("/history-utils.js"),
     fetchFromWorker("/palette-worker.js"),
     fetchFromWorker("/styles.css"),
-    fetchFromWorker("/assets/wechat-custom-order.png"),
   ]);
   assert.equal(scriptResponse.status, 200);
   assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
-  assert.equal(exportAdResponse.status, 200);
   const script = await scriptResponse.text();
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /function renderPattern\(options = \{\}\)/);
@@ -136,13 +142,13 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function activeGridHeight\(\)/);
   assert.match(script, /const widthCells = activeGridWidth\(\);/);
   assert.match(script, /const heightCells = activeGridHeight\(\);/);
-  assert.match(script, /diagnosticViewMode: "final"/);
+  assert.doesNotMatch(script, /diagnosticViewMode/);
   assert.match(script, /processingProfile: "detail64"/);
-  assert.match(script, /removeTransparent: true/);
+  assert.match(script, /removeTransparent: false/);
   assert.match(script, /lineBoost: false/);
-  assert.match(script, /dominantSampling: true/);
-  assert.match(script, /mergeSimilarColors: true/);
-  assert.match(script, /cleanSmallRegions: true/);
+  assert.match(script, /dominantSampling: false/);
+  assert.match(script, /mergeSimilarColors: false/);
+  assert.match(script, /cleanSmallRegions: false/);
   assert.match(script, /minRegionSize: 2/);
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
@@ -151,10 +157,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function copySelectionPixels\(\)/);
   assert.match(script, /function setupWorkbenchModes\(\)/);
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
-  assert.match(
-    script,
-    /if \(mode !== "transform" && state\.diagnosticViewMode === "raw"\) \{\s*setDiagnosticViewMode\("final"\);/,
-  );
+  assert.doesNotMatch(script, /setDiagnosticViewMode/);
   assert.match(script, /function renderToolColorPalette\(\)/);
   assert.match(script, /function toolPaletteRows\(\)/);
   assert.match(script, /toolPaletteSearch: ""/);
@@ -197,9 +200,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function buildConnectedBaseBackgroundMask\(/);
   assert.match(
     script,
-    /function displayPattern\(\) \{\s*if \(state\.diagnosticViewMode === "raw"[\s\S]*?if \(state\.isPreviewDirty && state\.previewPattern\.length\)/,
+    /function displayPattern\(\) \{\s*if \(state\.isPreviewDirty && state\.previewPattern\.length\) return state\.previewPattern;\s*return state\.pattern;/,
   );
-  assert.match(script, /function setDiagnosticViewMode\(mode, options = \{\}\)/);
   const previewUpdateSource = script.slice(
     script.indexOf("async function requestPreviewUpdate"),
     script.indexOf("function applyPreviewToEditGrid"),
@@ -213,10 +215,10 @@ test("serves the current application script, utilities, worker, and stylesheet",
     script,
     /processed = repairOutlines\(processed, size, outlineStrengthForSize\(\)\);\s*processed = forceMaxColors\(processed, size, targetColorLimit\(\)\);/,
   );
-  assert.match(script, /const EXPORT_AD_IMAGE_URL = "assets\/wechat-custom-order\.png"/);
-  assert.match(script, /function loadExportAdImage\(/);
-  assert.match(script, /function exportAdImageToJpegData\(/);
-  assert.match(script, /\/XObject << \/Im1 11 0 R >>/);
+  assert.doesNotMatch(script, /wechat-custom-order/);
+  assert.doesNotMatch(script, /loadExportAdImage/);
+  assert.doesNotMatch(script, /exportAdImageToJpegData/);
+  assert.doesNotMatch(script, /\/XObject << \/Im1/);
   assert.match(script, /addEventListener\("pointercancel", handleCanvasPointerUp\)/);
   assert.match(script, /function commitStrokeHistory\(/);
   assert.match(script, /const \{ createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual \} = historyUtils/);
@@ -224,7 +226,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(historyUtils, /global\.XiaomaiHistoryUtils = Object\.freeze/);
   assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
   assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
-  assert.match(script, /exportPatternPdf\(\{ includeWatermark, exportAdImage, \.\.\.snapshot \}\)/);
+  assert.match(script, /exportPatternPdf\(\{ includeWatermark, \.\.\.snapshot \}\)/);
   const exportSnapshotSource = script.slice(script.indexOf("function currentExportSnapshot"), script.indexOf("function renderPatternNow"));
   assert.match(exportSnapshotSource, /state\.isPreviewDirty && state\.previewPattern\.length/);
   assert.doesNotMatch(exportSnapshotSource, /displayPattern\(\)/);
