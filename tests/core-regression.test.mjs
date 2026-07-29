@@ -218,6 +218,56 @@ test("conversion settings use one preview flow without diagnostic view switching
   assert.match(previewUpdater, /setPendingPreview\(result\.pattern/);
 });
 
+test("image upload and preview confirmation share one exact commit path", async () => {
+  const source = await appSource();
+  const generator = sourceBetween(source, "async function generatePattern()", "async function buildPatternResultFromImage");
+  const applyPreview = sourceBetween(source, "function applyPreviewToEditGrid", "function confirmPendingPreview");
+
+  assert.match(generator, /requestPreviewUpdate\(/);
+  assert.doesNotMatch(generator, /state\.pattern\s*=/);
+  assert.match(applyPreview, /state\.pattern = \[\.\.\.state\.previewPattern\]/);
+  assert.doesNotMatch(applyPreview, /validateColorConstraints/);
+});
+
+test("conversion strategies do not overwrite user generation-detail switches", async () => {
+  const source = await appSource();
+  const profileSetter = sourceBetween(source, "function setProcessingProfile", "function syncProcessingProfileControls");
+  const sizeDefaults = sourceBetween(source, "function applySizePresetDefaults", "function syncControlsFromState");
+  const protectedSettings = [
+    "dominantSampling",
+    "mergeSimilarColors",
+    "cleanSmallRegions",
+    "animeMode",
+    "lineBoost",
+  ];
+
+  for (const setting of protectedSettings) {
+    assert.doesNotMatch(profileSetter, new RegExp(`state\\.${setting}\\s*=`));
+    assert.doesNotMatch(sizeDefaults, new RegExp(`state\\.${setting}\\s*=`));
+  }
+  assert.doesNotMatch(profileSetter, /localPreprocessSettings\.[a-zA-Z]+\s*=/);
+  assert.doesNotMatch(profileSetter, /setColorLimit\(/);
+});
+
+test("runtime diagnostics stay out of saved projects and duplicate grid state is removed", async () => {
+  const source = await appSource();
+  const serializer = sourceBetween(source, "function buildProjectData", "function downloadBlob");
+
+  assert.doesNotMatch(source, /\bfinalGrid\b/);
+  assert.doesNotMatch(source, /\bbaselineGrid\b/);
+  assert.doesNotMatch(source, /\boptimizedGrid\b/);
+  assert.doesNotMatch(source, /\bcompareMetrics\b/);
+  assert.doesNotMatch(serializer, /rawMappedGrid\s*:/);
+  assert.doesNotMatch(serializer, /finalGrid\s*:/);
+});
+
+test("photo-color strategy can use the full palette without changing the color-limit control", async () => {
+  const source = await appSource();
+  const targetLimit = sourceBetween(source, "function targetColorLimit", "function isColorLocked");
+
+  assert.match(targetLimit, /state\.processingProfile === "photoColor"\) return palette\.length/);
+});
+
 test("restored projects stay on the simplified automatic standard-pattern flow", async () => {
   const source = await appSource();
   assert.match(source, /state\.patternMode = "illustration";/);

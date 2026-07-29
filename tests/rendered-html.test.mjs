@@ -45,7 +45,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /history-utils\.js\?v=20260724-1/);
-  assert.match(html, /app\.js\?v=20260728-1/);
+  assert.match(html, /app\.js\?v=20260729-1/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -187,7 +187,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /state\.manualEditCount = state\.manualEditedCells\.size/);
   assert.match(script, /state\.colorMode = paletteState\.colorConstraintMode === "fixedPalette" \? "fixedPalette" : "max"/);
   const targetLimitSource = script.slice(script.indexOf("function targetColorLimit"), script.indexOf("function isColorLocked"));
-  assert.doesNotMatch(targetLimitSource, /return palette\.length/);
+  assert.match(targetLimitSource, /state\.processingProfile === "photoColor"\) return palette\.length/);
   assert.match(script, /function drawReadableExportWatermark\(/);
   assert.match(script, /const includeWatermark = options\.includeWatermark !== false/);
   assert.match(script, /const maxLegendRows = 45/);

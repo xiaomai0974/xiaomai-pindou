@@ -222,14 +222,10 @@ const state = {
   rawSampleData: [],
   rawDiagnosticSignature: "",
   rawDebugCandidates: [],
-  finalGrid: [],
   colorTrace: [],
   colorMatchMetrics: null,
   accurateMatch: DEFAULT_GENERATION_SETTINGS.accurateMatch,
   colorDebugEnabled: false,
-  baselineGrid: [],
-  optimizedGrid: [],
-  compareMetrics: null,
   backgroundMask: null,
   isPreviewDirty: false,
   hasConfirmedGrid: false,
@@ -766,6 +762,7 @@ function targetColorLimit() {
   if (state.colorMode === "fixedPalette") {
     return Math.min(effectiveAllowedPalette().length, Math.max(state.colorLimit, lockedCount));
   }
+  if (state.processingProfile === "photoColor") return palette.length;
   return Math.min(palette.length, Math.max(state.colorLimit, lockedCount));
 }
 
@@ -1076,20 +1073,19 @@ function mapSamplesToPaletteNow(pixels, size, sourcePalette, allowDither = true)
   return pattern;
 }
 
-function recordColorDiagnostics(pixels, rawPattern, finalPattern, changedBy = "postProcess") {
+function recordColorDiagnostics(pixels, rawPattern, currentPattern, changedBy = "postProcess") {
   state.rawSampleData = pixels;
   state.rawMappedGrid = [...rawPattern];
-  state.finalGrid = [...finalPattern];
   state.rawDebugCandidates = pixels.map((pixel) => nearestPaletteCandidates(pixel, palette, 5));
   state.colorTrace = rawPattern.map((rawColor, index) => {
-    const finalColor = finalPattern[index] || rawColor;
+    const currentColor = currentPattern[index] || rawColor;
     return {
       rawCode: rawColor?.empty ? "" : rawColor?.code,
-      finalCode: finalColor?.empty ? "" : finalColor?.code,
-      changedBy: rawColor?.code === finalColor?.code && rawColor?.empty === finalColor?.empty ? "" : changedBy,
+      currentCode: currentColor?.empty ? "" : currentColor?.code,
+      changedBy: rawColor?.code === currentColor?.code && rawColor?.empty === currentColor?.empty ? "" : changedBy,
     };
   });
-  state.colorMatchMetrics = calculateColorMatchMetrics(pixels, finalPattern);
+  state.colorMatchMetrics = calculateColorMatchMetrics(pixels, currentPattern);
   syncDiagnosticControls();
 }
 
@@ -1098,21 +1094,19 @@ function clearColorDiagnostics() {
   state.rawSampleData = [];
   state.rawDiagnosticSignature = "";
   state.rawDebugCandidates = [];
-  state.finalGrid = [];
   state.colorTrace = [];
   state.colorMatchMetrics = null;
   syncDiagnosticControls();
 }
 
-function refreshFinalDiagnosticsFromCurrentPattern(changedBy = "manualEdit") {
+function refreshDiagnosticsFromCurrentPattern(changedBy = "manualEdit") {
   if (!state.rawMappedGrid.length || state.rawMappedGrid.length !== state.pattern.length) return;
-  state.finalGrid = [...state.pattern];
   state.colorTrace = state.rawMappedGrid.map((rawColor, index) => {
-    const finalColor = state.pattern[index] || rawColor;
+    const currentColor = state.pattern[index] || rawColor;
     return {
       rawCode: rawColor?.empty ? "" : rawColor?.code,
-      finalCode: finalColor?.empty ? "" : finalColor?.code,
-      changedBy: rawColor?.code === finalColor?.code && rawColor?.empty === finalColor?.empty ? "" : changedBy,
+      currentCode: currentColor?.empty ? "" : currentColor?.code,
+      changedBy: rawColor?.code === currentColor?.code && rawColor?.empty === currentColor?.empty ? "" : changedBy,
     };
   });
   state.colorMatchMetrics = calculateColorMatchMetrics(state.rawSampleData, state.pattern);
@@ -1190,7 +1184,7 @@ function setupEvents() {
     button.addEventListener("click", () => setPatternMode(button.dataset.patternMode));
   });
   elements.processingProfileOptions.forEach((button) => {
-    button.addEventListener("click", () => setProcessingProfile(button.dataset.processingProfile, { updateDefaults: true }));
+    button.addEventListener("click", () => setProcessingProfile(button.dataset.processingProfile));
   });
   document.querySelectorAll(".color-preset").forEach((button) => {
     button.addEventListener("click", () => setColorLimit(button.dataset.colors === "all" ? palette.length : Number(button.dataset.colors)));
@@ -2231,37 +2225,8 @@ function recommendedProcessingProfile(size = state.gridSize) {
 }
 
 function setProcessingProfile(profile, options = {}) {
-  const { updateDefaults = false, regenerate = true } = options;
+  const { regenerate = true } = options;
   state.processingProfile = ["compact48", "detail64", "photoColor"].includes(profile) ? profile : "compact48";
-  if (updateDefaults) {
-    if (state.processingProfile === "compact48") {
-      state.dominantSampling = true;
-      state.mergeSimilarColors = true;
-      state.cleanSmallRegions = true;
-      state.animeMode = false;
-      state.localPreprocessSettings.enabled = true;
-      state.minRegionSize = state.gridSize <= 34 ? 1 : 3;
-      setColorLimit(state.gridSize <= 34 ? 12 : 16, false);
-    } else if (state.processingProfile === "detail64") {
-      state.dominantSampling = true;
-      state.mergeSimilarColors = true;
-      state.cleanSmallRegions = true;
-      state.animeMode = false;
-      state.localPreprocessSettings.enabled = true;
-      state.minRegionSize = state.gridSize <= 64 ? 2 : 3;
-      setColorLimit(state.gridSize <= 64 ? 24 : state.gridSize <= 100 ? 28 : 32, false);
-    } else {
-      state.dominantSampling = true;
-      state.mergeSimilarColors = true;
-      state.cleanSmallRegions = true;
-      state.animeMode = false;
-      state.localPreprocessSettings.enabled = false;
-      state.minRegionSize = 2;
-      state.accurateMatch = true;
-      if (elements.accurateMatchToggle) elements.accurateMatchToggle.checked = true;
-      setColorLimit(palette.length, false);
-    }
-  }
   syncProcessingProfileControls();
   syncControlsFromState();
   if (regenerate && state.image) {
@@ -2307,17 +2272,9 @@ function applySizePresetDefaults(updateColor = true) {
     return;
   }
   if (state.gridSize <= 48) {
-    state.dominantSampling = true;
-    state.lineBoost = true;
-    state.mergeSimilarColors = true;
-    state.cleanSmallRegions = true;
     state.minRegionSize = 3;
     if (updateColor) setColorLimit(16, false);
   } else if (state.gridSize <= 64) {
-    state.dominantSampling = true;
-    state.lineBoost = true;
-    state.mergeSimilarColors = true;
-    state.cleanSmallRegions = true;
     state.minRegionSize = 2;
     if (updateColor) setColorLimit(24, false);
   } else if (state.gridSize <= 100) {
@@ -2602,8 +2559,6 @@ function buildProjectData() {
     gridState: {
       editGrid: serializeGrid(state.pattern),
       previewGrid: serializeGrid(state.previewPattern),
-      rawMappedGrid: serializeGrid(state.rawMappedGrid),
-      finalGrid: serializeGrid(state.finalGrid),
       backgroundMask: maskToArray(state.backgroundMask),
       previewBackgroundMask: maskToArray(state.previewBackgroundMask),
       isPreviewDirty: state.isPreviewDirty,
@@ -2815,8 +2770,12 @@ async function restoreProjectData(projectData, options = {}) {
     const expectedGridLength = state.gridSize * state.gridSize;
     state.pattern = deserializeGrid(gridState.editGrid, expectedGridLength);
     state.previewPattern = deserializeGrid(gridState.previewGrid, expectedGridLength);
-    state.rawMappedGrid = deserializeGrid(gridState.rawMappedGrid, expectedGridLength);
-    state.finalGrid = deserializeGrid(gridState.finalGrid, expectedGridLength);
+    state.rawMappedGrid = [];
+    state.rawSampleData = [];
+    state.rawDiagnosticSignature = "";
+    state.rawDebugCandidates = [];
+    state.colorTrace = [];
+    state.colorMatchMetrics = null;
     state.backgroundMask = arrayToMask(gridState.backgroundMask, state.pattern.length);
     state.previewBackgroundMask = arrayToMask(gridState.previewBackgroundMask, state.previewPattern.length);
     state.isPreviewDirty = Boolean(gridState.isPreviewDirty && state.previewPattern.length);
@@ -3969,94 +3928,9 @@ async function generatePattern() {
     clearPreviewState();
     if (!state.image) {
       renderPattern();
-      return;
+      return false;
     }
-
-    if (state.pattern.length && !state.suspendHistory) {
-      pushHistory();
-    }
-
-    const size = state.gridSize;
-    const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
-    const rawDiagnostic = await buildRawDiagnosticReference(size, directPalette);
-    const sourceImage = conversionSourceImage();
-    const pixels = buildPixelSamples(sourceImage, size);
-    const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
-    const pattern = await mapSamplesToPaletteAsync(
-      pixels,
-      size,
-      limitedPalette,
-      !(state.accurateMatch || state.processingProfile === "photoColor"),
-    );
-
-    if (state.processingProfile === "photoColor") {
-      const photoResult = finalizePhotoColorMatch(pattern, pixels, size);
-      state.pattern = photoResult.pattern;
-      applyColorDiagnostics(rawDiagnostic, state.pattern, "photoColorMatch");
-      state.patternSize = size;
-      state.counts = buildCounts(state.pattern);
-      state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => paletteColorByCode(item.code) || item);
-      state.qualityMetrics = calculateQualityMetrics(state.pattern, size);
-      state.usedBounds = calculateUsedBounds(state.pattern, size);
-      state.backgroundMask = photoResult.backgroundMask;
-      state.hasConfirmedGrid = true;
-      state.editGridVersion += 1;
-      state.suspendHistory = false;
-      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 照片原色映射`;
-      renderPattern();
-      renderStats();
-      markProjectDirty();
-      return;
-    }
-
-    if (state.accurateMatch) {
-      const accurateResult = finalizeAccurateMatch(pattern, pixels, size, limitedPalette);
-      state.pattern = accurateResult.pattern;
-      applyColorDiagnostics(rawDiagnostic, state.pattern, "accurateMatchCleanup");
-      state.patternSize = size;
-      state.counts = buildCounts(state.pattern);
-      state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => paletteColorByCode(item.code) || item);
-      state.qualityMetrics = calculateQualityMetrics(state.pattern, size);
-      state.usedBounds = calculateUsedBounds(state.pattern, size);
-      state.backgroundMask = accurateResult.backgroundMask;
-      state.hasConfirmedGrid = true;
-      state.editGridVersion += 1;
-      state.suspendHistory = false;
-      elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 精准匹配`;
-      renderPattern();
-      renderStats();
-      showQualityHint();
-      markProjectDirty();
-      return;
-    }
-
-    const backgroundMask = computeBackgroundMask(pattern, pixels, size, true);
-    const maskedPattern = applyBackgroundModeToGrid(pattern, backgroundMask, state.pixelBackground);
-    state.pattern = postProcessPattern(maskedPattern, size);
-    if (totalBeadCount(state.pattern) === 0 && totalBeadCount(pattern) > 0) {
-      state.pattern = postProcessPattern(pattern, size);
-      elements.cellInfo.textContent = "背景识别过强，已自动保留原图主体。";
-    }
-    state.pattern = validateColorConstraints(state.pattern);
-    applyColorDiagnostics(rawDiagnostic, state.pattern, "postProcess");
-    state.patternSize = size;
-    state.counts = buildCounts(state.pattern);
-    state.projectPalette = [...state.counts.values()].sort((a, b) => b.count - a.count).map((item) => palette.find((color) => color.code === item.code) || item);
-    state.qualityMetrics = calculateQualityMetrics(state.pattern, size);
-    state.usedBounds = calculateUsedBounds(state.pattern, size);
-    state.backgroundMask = backgroundMask;
-    state.hasConfirmedGrid = true;
-    state.editGridVersion += 1;
-    state.suspendHistory = false;
-    elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
-    renderPattern();
-    renderStats();
-    showQualityHint();
-    markProjectDirty();
-  } catch (error) {
-    console.error("generatePattern failed", error);
-    elements.projectMeta.textContent = "生成图纸失败";
-    elements.cellInfo.textContent = `生成失败：${error.message || error}`;
+    return await requestPreviewUpdate("图片已生成预览，请确认应用后再进入编辑或导出。");
   } finally {
     recordPerformance("pipeline.generateTotal", performanceNow() - startedAt);
   }
@@ -4919,7 +4793,9 @@ function applyPreviewToEditGrid() {
     return false;
   }
   if (state.pattern.length) pushHistory();
-  state.pattern = validateColorConstraints([...state.previewPattern]);
+  // Preview generation already applies the active constraints. Commit the
+  // exact pixels the user reviewed so switching to Edit cannot change them.
+  state.pattern = [...state.previewPattern];
   if (!state.previewPreservesManualEdits) {
     state.manualEditedCells = new Set();
     state.manualEditCount = 0;
@@ -4930,9 +4806,10 @@ function applyPreviewToEditGrid() {
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.backgroundMask = state.previewBackgroundMask;
-  refreshFinalDiagnosticsFromCurrentPattern("applyPreview");
+  refreshDiagnosticsFromCurrentPattern("applyPreview");
   clearPreviewState();
   state.hasConfirmedGrid = true;
+  state.suspendHistory = false;
   state.editGridVersion += 1;
   renderPattern();
   renderStats();
@@ -4960,6 +4837,8 @@ function confirmPendingPreview() {
 function discardPendingPreview() {
   if (state.isProcessingPattern) return false;
   clearPreviewState({ restoreCanvas: true });
+  state.suspendHistory = false;
+  refreshDiagnosticsFromCurrentPattern("discardPreview");
   renderPendingPreview();
   if (state.pattern.length) {
     const bounds = state.usedBounds || calculateUsedBounds(state.pattern, state.gridSize);
@@ -6780,7 +6659,6 @@ function showSmartOptimize() {
   const safeRecommended = [...(recommendable.length ? recommendable : candidates.filter((plan) => plan.key === "baseline"))].sort(
     (a, b) => b.metrics.beadFriendlinessScore - a.metrics.beadFriendlinessScore,
   )[0] || recommended;
-  state.baselineGrid = [...state.pattern];
   state.pendingOptimizePlans = candidates.map((plan) => ({ ...plan, recommended: plan.key === safeRecommended.key }));
   renderOptimizePanel("smart", baseMetrics, state.pendingOptimizePlans);
 }
@@ -7034,8 +6912,6 @@ function applyOptimizePlan(index) {
     preservesManualEdits: true,
     size: state.gridSize,
   });
-  state.optimizedGrid = [...state.previewPattern];
-  state.compareMetrics = plan.compare || compareOptimizationResult(state.pattern, state.previewPattern, state.gridSize);
   elements.optimizePanel.hidden = true;
   renderPendingPreview();
   elements.cellInfo.textContent = `${plan.name} 已生成预览，请确认应用。`;
@@ -8341,7 +8217,7 @@ function showColorDebugForCell(cell) {
   const index = cell.y * state.gridSize + cell.x;
   const sample = state.rawSampleData[index];
   const rawColor = state.rawMappedGrid[index];
-  const finalColor = (state.isPreviewDirty && state.previewPattern.length ? state.previewPattern : state.pattern)[index] || state.finalGrid[index];
+  const currentColor = (state.isPreviewDirty && state.previewPattern.length ? state.previewPattern : state.pattern)[index];
   const trace = state.colorTrace[index] || {};
   const candidates = state.rawDebugCandidates[index] || (sample ? nearestPaletteCandidates(sample, palette, 5) : []);
   const crop = state.lastSampleCrop || { x: 0, y: 0, size: state.lastSampleSourceSize?.width || 0 };
@@ -8360,7 +8236,7 @@ function showColorDebugForCell(cell) {
     `诊断 ${cell.x + 1},${cell.y + 1} ｜原图区域 x${sampleArea.x} y${sampleArea.y} ${sampleArea.w}x${sampleArea.h} ｜` +
     `采样 RGB ${sample ? `${Math.round(sample.r)},${Math.round(sample.g)},${Math.round(sample.b)}` : "无"} ｜` +
     `LAB ${sampleLab ? `${sampleLab.l.toFixed(1)},${sampleLab.a.toFixed(1)},${sampleLab.b.toFixed(1)}` : "无"} ｜` +
-    `直配 ${rawColor?.code || "空"} → 当前 ${finalColor?.code || "空"}${changed} ｜候选 ${candidateText}`;
+    `直配 ${rawColor?.code || "空"} → 当前 ${currentColor?.code || "空"}${changed} ｜候选 ${candidateText}`;
   console.table(
     candidates.map((item) => ({
       code: item.code,
@@ -9486,7 +9362,7 @@ function replaceColorInGrid(oldColorId, newColorId, options = {}) {
   state.projectPalette = [...new Map([...state.projectPalette, ...state.counts.values()].map((item) => [item.code, paletteColorByCode(item.code) || item])).values()];
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
-  refreshFinalDiagnosticsFromCurrentPattern("replaceColor");
+  refreshDiagnosticsFromCurrentPattern("replaceColor");
   state.hasConfirmedGrid = true;
   state.editGridVersion += 1;
   state.selection.clear();
