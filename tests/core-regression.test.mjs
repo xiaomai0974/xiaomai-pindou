@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
 const backgroundUtilsSourceUrl = new URL("../public/background-utils.js", import.meta.url);
+const canvasRendererSourceUrl = new URL("../public/canvas-renderer.js", import.meta.url);
 const colorPostprocessSourceUrl = new URL("../public/color-postprocess.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const editorGeometrySourceUrl = new URL("../public/editor-geometry.js", import.meta.url);
@@ -309,6 +310,92 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
     Array.from(analysis.regions, (region) => [region.color.code, region.cells.length]),
     [["A", 3], ["BG", 5], ["C", 1]],
   );
+});
+
+test("canvas renderer keeps cells, labels, grid, reference, and selection layers independent", async () => {
+  const renderer = await browserUtilityContext(
+    canvasRendererSourceUrl,
+    "XiaomaiCanvasRenderer",
+    { Map, Set },
+  );
+  const calls = [];
+  const ctx = {
+    save() { calls.push(["save"]); },
+    restore() { calls.push(["restore"]); },
+    beginPath() { calls.push(["beginPath"]); },
+    arc(...args) { calls.push(["arc", ...args]); },
+    fill() { calls.push(["fill"]); },
+    stroke(path) { calls.push(["stroke", path]); },
+    fillRect(...args) { calls.push(["fillRect", this.fillStyle, ...args]); },
+    strokeRect(...args) { calls.push(["strokeRect", ...args]); },
+    moveTo(...args) { calls.push(["moveTo", ...args]); },
+    lineTo(...args) { calls.push(["lineTo", ...args]); },
+    fillText(...args) { calls.push(["fillText", ...args]); },
+    setLineDash(...args) { calls.push(["setLineDash", ...args]); },
+    drawImage(...args) { calls.push(["drawImage", ...args]); },
+  };
+  const plot = {
+    gridX: 10,
+    gridY: 20,
+    gridWidth: 20,
+    gridHeight: 20,
+    widthCells: 2,
+    heightCells: 2,
+    cell: 10,
+  };
+  const red = { code: "A1", hex: "#ff0000", rgb: { r: 255, g: 0, b: 0 }, empty: false };
+  const empty = { code: "__EMPTY__", empty: true };
+
+  renderer.drawPatternCells(ctx, {
+    pattern: [red, empty, red, red],
+    stride: 2,
+    plot,
+    viewMode: "pixel",
+  });
+  assert.equal(calls.filter(([name]) => name === "fillRect").length, 4);
+
+  renderer.drawPatternCellCodes(ctx, {
+    pattern: [red, empty, empty, empty],
+    stride: 2,
+    plot,
+    editorView: "grid",
+    contrastColor: () => "#fff",
+  });
+  assert.equal(calls.some(([name, value]) => name === "fillText" && value === "A1"), true);
+
+  renderer.drawGridLines(ctx, {
+    plot,
+    detail: "full",
+    guide: 2,
+    pathCache: {},
+    Path2DClass: undefined,
+  });
+  assert.equal(calls.some(([name]) => name === "lineTo"), true);
+
+  renderer.drawCoordinateLabels(ctx, { plot, detail: "full", editorView: "grid" });
+  assert.equal(calls.filter(([name, value]) => name === "fillText" && value === "1").length >= 2, true);
+
+  const image = { width: 100, height: 50 };
+  renderer.drawReferenceLayer(ctx, {
+    image,
+    geometry: { left: 11, top: 22, width: 33, height: 44 },
+    opacity: 0.35,
+    adjustMode: true,
+    locked: false,
+    lockedLabel: "locked",
+    movableLabel: "move",
+  });
+  assert.equal(calls.some(([name]) => name === "drawImage"), true);
+  assert.equal(calls.some(([name, value]) => name === "fillText" && value === "move"), true);
+
+  renderer.drawSelectionOverlay(ctx, {
+    selection: new Set([0]),
+    penPoints: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+    stride: 2,
+    plot,
+    isActiveCell: () => true,
+  });
+  assert.equal(calls.some(([name, color]) => name === "fillRect" && color === "rgba(232, 59, 100, 0.22)"), true);
 });
 
 test("editor geometry preserves brush, symmetry, mirror, and selection behavior", async () => {

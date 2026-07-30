@@ -53,11 +53,12 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /sampling-utils\.js\?v=20260730-1/);
   assert.match(html, /quality-utils\.js\?v=20260730-1/);
   assert.match(html, /color-postprocess\.js\?v=20260731-1/);
+  assert.match(html, /canvas-renderer\.js\?v=20260731-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260731-2/);
+  assert.match(html, /app\.js\?v=20260731-3/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -148,6 +149,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     samplingUtilsResponse,
     qualityUtilsResponse,
     colorPostprocessResponse,
+    canvasRendererResponse,
     projectCodecResponse,
     projectStoreResponse,
     pdfUtilsResponse,
@@ -165,6 +167,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/sampling-utils.js"),
       fetchFromWorker("/quality-utils.js"),
       fetchFromWorker("/color-postprocess.js"),
+      fetchFromWorker("/canvas-renderer.js"),
       fetchFromWorker("/project-codec.js"),
       fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
@@ -182,6 +185,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(samplingUtilsResponse.status, 200);
   assert.equal(qualityUtilsResponse.status, 200);
   assert.equal(colorPostprocessResponse.status, 200);
+  assert.equal(canvasRendererResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
   assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
@@ -198,6 +202,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const samplingUtils = await samplingUtilsResponse.text();
   const qualityUtils = await qualityUtilsResponse.text();
   const colorPostprocess = await colorPostprocessResponse.text();
+  const canvasRenderer = await canvasRendererResponse.text();
   const projectCodec = await projectCodecResponse.text();
   const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
@@ -211,6 +216,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const samplingUtils = window\.XiaomaiSamplingUtils/);
   assert.match(script, /const qualityUtils = window\.XiaomaiQualityUtils/);
   assert.match(script, /const colorPostprocessApi = window\.XiaomaiColorPostprocess/);
+  assert.match(script, /const canvasRenderer = window\.XiaomaiCanvasRenderer/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
   assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
@@ -223,6 +229,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(samplingUtils, /global\.XiaomaiSamplingUtils = Object\.freeze/);
   assert.match(qualityUtils, /global\.XiaomaiQualityUtils = Object\.freeze/);
   assert.match(colorPostprocess, /global\.XiaomaiColorPostprocess = Object\.freeze/);
+  assert.match(canvasRenderer, /global\.XiaomaiCanvasRenderer = Object\.freeze/);
   assert.doesNotMatch(script, /function mergeSimilarUsedColors\(/);
   assert.match(colorPostprocess, /function mergeSimilarUsedColors\(/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
@@ -244,7 +251,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
   assert.match(script, /function canvasRenderDetail\(internalCellSize\)/);
-  assert.match(script, /detail === "coarse" && index % guide !== 0/);
+  assert.match(canvasRenderer, /detail === "coarse" && index % guide !== 0/);
   assert.match(script, /codeVisibilityVersion: 2/);
   assert.match(script, /new Worker\("palette-worker\.js/);
   assert.match(script, /function copySelectionPixels\(\)/);
@@ -349,7 +356,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.doesNotMatch(script, /function applyCountChanges\(counts, changes\)/);
   assert.match(gridUtils, /function applyCountChanges\(counts, changes\)/);
   assert.match(script, /function scheduleQualityMetricsRefresh\(\)/);
-  assert.match(script, /if \(!dirtyBounds && typeof Path2D === "function"\)/);
+  assert.match(canvasRenderer, /if \(!partial && typeof Path2DClass === "function"\)/);
+  assert.doesNotMatch(script, /function drawSquareBead\(/);
+  assert.match(canvasRenderer, /function drawSquareBead\(/);
   assert.match(script, /function patchPaletteRowsInPlace\(listRows, total\)/);
   assert.match(script, /function cancelScheduledUiWork\(\)/);
   assert.match(script, /function clearReferenceSampler\(\)/);
