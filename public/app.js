@@ -38,19 +38,22 @@ if (!imageUtils) {
   throw new Error("图片工具模块加载失败，请刷新页面后重试。");
 }
 const {
-  averagePreprocessPixels,
-  buildConnectedBaseBackgroundMask,
   buildPreprocessOutlineMask,
-  colorDistanceData,
-  colorDistanceRgb,
-  estimatePreprocessEdgeBackground,
-  isPreprocessNearBackground,
-  preprocessFourNeighbors,
-  preprocessLuminance,
-  preprocessSaturation,
-  quantizeChannel,
   restorePreprocessOutlines,
 } = imageUtils;
+
+const preprocessUtils = window.XiaomaiPreprocessUtils;
+if (!preprocessUtils) {
+  throw new Error("底图预处理模块加载失败，请刷新页面后重试。");
+}
+const {
+  cleanupAntiAliasPixels,
+  cleanupBaseImageBackground,
+  cleanupMaterialTexture,
+  reduceBaseImageNoise,
+  simplifyBaseImageFlatColors,
+  stabilizeBaseImageRegions,
+} = preprocessUtils;
 
 const samplingUtils = window.XiaomaiSamplingUtils;
 if (!samplingUtils) {
@@ -4207,25 +4210,34 @@ function optimizedBaseImage() {
     ? buildPreprocessOutlineMask(original.data, canvas.width, canvas.height)
     : new Uint8Array(canvas.width * canvas.height);
   let imageData = new ImageData(new Uint8ClampedArray(original.data), canvas.width, canvas.height);
+  const preprocessOptions = {
+    pixelBackground: state.pixelBackground,
+    fillColor: whiteBeadColor().rgb,
+    processingProfile: state.processingProfile,
+    gridSize: state.gridSize,
+  };
 
   if (state.localPreprocessSettings.backgroundCleanup) {
-    imageData = cleanupBaseImageBackground(imageData, outlineMask);
+    imageData = cleanupBaseImageBackground(imageData, outlineMask, preprocessOptions);
   }
   if (state.localPreprocessSettings.antiAliasCleanup) {
-    imageData = cleanupAntiAliasPixels(imageData, outlineMask);
+    imageData = cleanupAntiAliasPixels(imageData, outlineMask, preprocessOptions);
   }
   const detailProfile = state.processingProfile === "detail64";
   if (state.localPreprocessSettings.materialTextureCleanup) {
-    imageData = cleanupMaterialTexture(imageData, outlineMask, detailProfile ? "light" : "standard");
+    imageData = cleanupMaterialTexture(imageData, outlineMask, {
+      ...preprocessOptions,
+      strength: detailProfile ? "light" : "standard",
+    });
   }
   if (state.localPreprocessSettings.noiseReduction && !detailProfile) {
     imageData = reduceBaseImageNoise(imageData, outlineMask);
   }
   if (state.localPreprocessSettings.flatColorSimplification && !detailProfile) {
-    imageData = simplifyBaseImageFlatColors(imageData, outlineMask);
+    imageData = simplifyBaseImageFlatColors(imageData, outlineMask, preprocessOptions);
   }
   if (state.localPreprocessSettings.regionColorStabilization && !detailProfile) {
-    imageData = stabilizeBaseImageRegions(imageData, outlineMask);
+    imageData = stabilizeBaseImageRegions(imageData, outlineMask, preprocessOptions);
   }
   if (state.localPreprocessSettings.outlinePreserve) {
     restorePreprocessOutlines(original, imageData, outlineMask);
@@ -4247,219 +4259,6 @@ function localPreprocessSignature() {
     background: state.pixelBackground,
     processingProfile: state.processingProfile,
   });
-}
-
-function cleanupBaseImageBackground(imageData, outlineMask) {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  const edge = estimatePreprocessEdgeBackground(data, width, height);
-  const fill = whiteBeadColor().rgb;
-  const connectedBackground = buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask);
-  for (let index = 0; index < connectedBackground.length; index += 1) {
-    if (!connectedBackground[index]) continue;
-    const offset = index * 4;
-    if (state.pixelBackground === "white") {
-      out[offset] = fill.r;
-      out[offset + 1] = fill.g;
-      out[offset + 2] = fill.b;
-      out[offset + 3] = 255;
-    } else {
-      out[offset + 3] = 0;
-    }
-  }
-  return output;
-}
-
-function cleanupAntiAliasPixels(imageData, outlineMask) {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  const fill = whiteBeadColor().rgb;
-  const edge = estimatePreprocessEdgeBackground(data, width, height);
-  const connectedBackground = buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask);
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      if (outlineMask[index]) continue;
-      const offset = index * 4;
-      const alpha = data[offset + 3];
-      const lum = preprocessLuminance(data[offset], data[offset + 1], data[offset + 2]);
-      const saturation = preprocessSaturation(data[offset], data[offset + 1], data[offset + 2]);
-      const hasSolidNeighbor = preprocessFourNeighbors(x, y, width, height).some((next) => data[next * 4 + 3] > 230);
-      const touchesTransparent = preprocessFourNeighbors(x, y, width, height).some((next) => data[next * 4 + 3] < 48);
-      const isConnectedBackground = Boolean(connectedBackground[index]);
-      const shouldCleanPartialEdge = alpha > 35 && alpha < 210 && hasSolidNeighbor && (isConnectedBackground || touchesTransparent);
-      const shouldCleanLightBackground = lum > 218 && saturation < 28 && isConnectedBackground;
-      if (shouldCleanPartialEdge || shouldCleanLightBackground) {
-        if (state.pixelBackground === "white") {
-          out[offset] = fill.r;
-          out[offset + 1] = fill.g;
-          out[offset + 2] = fill.b;
-          out[offset + 3] = 255;
-        } else {
-          out[offset + 3] = 0;
-        }
-      }
-    }
-  }
-  return output;
-}
-
-function cleanupMaterialTexture(imageData, outlineMask, strength = "standard") {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  const bins = new Uint32Array(width * height);
-  const radius = strength === "light" || state.processingProfile === "photoColor" ? 1 : state.gridSize <= 64 ? 2 : 1;
-
-  for (let index = 0; index < width * height; index += 1) {
-    const offset = index * 4;
-    if (data[offset + 3] < 48) continue;
-    bins[index] = 1 + (Math.floor(data[offset] / 24) << 8) + (Math.floor(data[offset + 1] / 24) << 4) + Math.floor(data[offset + 2] / 24);
-  }
-
-  for (let y = radius; y < height - radius; y += 1) {
-    for (let x = radius; x < width - radius; x += 1) {
-      const index = y * width + x;
-      if (outlineMask[index]) continue;
-      const offset = index * 4;
-      if (data[offset + 3] < 48) continue;
-
-      const keys = [];
-      const counts = [];
-      const samples = [];
-      for (let dy = -radius; dy <= radius; dy += 1) {
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          const next = (y + dy) * width + (x + dx);
-          if (!bins[next] || outlineMask[next]) continue;
-          const key = bins[next];
-          let slot = keys.indexOf(key);
-          if (slot < 0) {
-            slot = keys.length;
-            keys.push(key);
-            counts.push(0);
-            samples.push([]);
-          }
-          counts[slot] += 1;
-          samples[slot].push(next);
-        }
-      }
-      if (!counts.length) continue;
-      let winner = 0;
-      for (let slot = 1; slot < counts.length; slot += 1) {
-        if (counts[slot] > counts[winner]) winner = slot;
-      }
-      const minimumShare = strength === "light" ? 0.42 : radius === 2 ? 0.28 : 0.34;
-      const sampleCount = counts.reduce((sum, count) => sum + count, 0);
-      if (counts[winner] < Math.ceil(sampleCount * minimumShare)) continue;
-
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      for (const sample of samples[winner]) {
-        const sampleOffset = sample * 4;
-        r += data[sampleOffset];
-        g += data[sampleOffset + 1];
-        b += data[sampleOffset + 2];
-      }
-      r /= samples[winner].length;
-      g /= samples[winner].length;
-      b /= samples[winner].length;
-      let representative = samples[winner][0];
-      let bestDistance = Infinity;
-      for (const sample of samples[winner]) {
-        const sampleOffset = sample * 4;
-        const distance = colorDistanceRgb(data[sampleOffset], data[sampleOffset + 1], data[sampleOffset + 2], r, g, b);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          representative = sample;
-        }
-      }
-      const representativeOffset = representative * 4;
-      const replacementDistance = colorDistanceRgb(
-        data[offset], data[offset + 1], data[offset + 2],
-        data[representativeOffset], data[representativeOffset + 1], data[representativeOffset + 2],
-      );
-      const maximumReplacementDistance = strength === "light" ? 28 : 46;
-      if (replacementDistance < 7 || replacementDistance > maximumReplacementDistance) continue;
-      out[offset] = data[representativeOffset];
-      out[offset + 1] = data[representativeOffset + 1];
-      out[offset + 2] = data[representativeOffset + 2];
-    }
-  }
-  return output;
-}
-
-function reduceBaseImageNoise(imageData, outlineMask) {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      if (outlineMask[index]) continue;
-      const offset = index * 4;
-      if (data[offset + 3] < 32) continue;
-      const neighbors = preprocessFourNeighbors(x, y, width, height);
-      const similar = neighbors.filter((next) => colorDistanceData(data, offset, next * 4) < 22).length;
-      if (similar > 0) continue;
-      const replacement = averagePreprocessPixels(data, neighbors);
-      out[offset] = replacement.r;
-      out[offset + 1] = replacement.g;
-      out[offset + 2] = replacement.b;
-      out[offset + 3] = replacement.a;
-    }
-  }
-  return output;
-}
-
-function simplifyBaseImageFlatColors(imageData, outlineMask) {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  const step = state.processingProfile === "photoColor" ? 10 : state.gridSize <= 48 ? 22 : state.gridSize <= 64 ? 18 : 14;
-  for (let index = 0; index < width * height; index += 1) {
-    if (outlineMask[index]) continue;
-    const offset = index * 4;
-    if (data[offset + 3] < 32) continue;
-    if (isPreprocessNearBackground(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])) continue;
-    out[offset] = quantizeChannel(data[offset], step);
-    out[offset + 1] = quantizeChannel(data[offset + 1], step);
-    out[offset + 2] = quantizeChannel(data[offset + 2], step);
-  }
-  return output;
-}
-
-function stabilizeBaseImageRegions(imageData, outlineMask) {
-  const { data, width, height } = imageData;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      if (outlineMask[index]) continue;
-      const offset = index * 4;
-      if (data[offset + 3] < 32) continue;
-      const neighbors = [];
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dx = -1; dx <= 1; dx += 1) {
-          const next = (y + dy) * width + (x + dx);
-          if (!outlineMask[next]) neighbors.push(next);
-        }
-      }
-      const avg = averagePreprocessPixels(data, neighbors);
-      const photoProfile = state.processingProfile === "photoColor";
-      const stabilizationDistance = photoProfile ? 18 : 32;
-      const sourceWeight = photoProfile ? 0.75 : 0.55;
-      if (colorDistanceRgb(data[offset], data[offset + 1], data[offset + 2], avg.r, avg.g, avg.b) < stabilizationDistance) {
-        out[offset] = Math.round(data[offset] * sourceWeight + avg.r * (1 - sourceWeight));
-        out[offset + 1] = Math.round(data[offset + 1] * sourceWeight + avg.g * (1 - sourceWeight));
-        out[offset + 2] = Math.round(data[offset + 2] * sourceWeight + avg.b * (1 - sourceWeight));
-      }
-    }
-  }
-  return output;
 }
 
 function capturePreviewCanvasSnapshot() {

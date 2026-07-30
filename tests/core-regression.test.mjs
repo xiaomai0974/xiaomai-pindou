@@ -8,6 +8,7 @@ const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url)
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
+const preprocessUtilsSourceUrl = new URL("../public/preprocess-utils.js", import.meta.url);
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
 const projectStoreSourceUrl = new URL("../public/project-store.js", import.meta.url);
@@ -242,6 +243,57 @@ test("image utilities preserve outline and edge-connected background behavior", 
   assert.equal(mask[2 * width + 2], 0);
   assert.equal(mask[1 * width + 1], 0);
   assert.deepEqual(Array.from(imageUtils.preprocessFourNeighbors(2, 2, width, height)), [11, 13, 7, 17]);
+});
+
+test("preprocess utilities preserve background cleanup and flat-color behavior", async () => {
+  const imageUtils = await browserUtilityContext(imageUtilsSourceUrl, "XiaomaiImageUtils");
+  const source = await readFile(preprocessUtilsSourceUrl, "utf8");
+  class TestImageData {
+    constructor(data, width, height) {
+      this.data = data;
+      this.width = width;
+      this.height = height;
+    }
+  }
+  const window = { XiaomaiImageUtils: imageUtils, ImageData: TestImageData };
+  vm.runInNewContext(source, { window, Math, Uint8Array, Uint8ClampedArray, Uint32Array });
+  const preprocessUtils = window.XiaomaiPreprocessUtils;
+  const width = 3;
+  const height = 3;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < width * height; index += 1) {
+    const offset = index * 4;
+    pixels[offset] = 248;
+    pixels[offset + 1] = 246;
+    pixels[offset + 2] = 240;
+    pixels[offset + 3] = 255;
+  }
+  const centerOffset = (1 * width + 1) * 4;
+  pixels[centerOffset] = 180;
+  pixels[centerOffset + 1] = 40;
+  pixels[centerOffset + 2] = 70;
+  const imageData = new TestImageData(pixels, width, height);
+  const outlineMask = new Uint8Array(width * height);
+
+  const emptyBackground = preprocessUtils.cleanupBaseImageBackground(imageData, outlineMask, {
+    pixelBackground: "empty",
+    fillColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.equal(emptyBackground.data[3], 0);
+  assert.equal(emptyBackground.data[centerOffset + 3], 255);
+
+  const whiteBackground = preprocessUtils.cleanupBaseImageBackground(imageData, outlineMask, {
+    pixelBackground: "white",
+    fillColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.deepEqual(Array.from(whiteBackground.data.slice(0, 4)), [247, 242, 232, 255]);
+
+  const flatSource = new TestImageData(new Uint8ClampedArray([101, 119, 137, 255]), 1, 1);
+  const flattened = preprocessUtils.simplifyBaseImageFlatColors(flatSource, new Uint8Array(1), {
+    processingProfile: "detail64",
+    gridSize: 64,
+  });
+  assert.deepEqual(Array.from(flattened.data), [108, 126, 144, 255]);
 });
 
 test("sampling utilities preserve average, dominant, and transparent-cell behavior", async () => {
