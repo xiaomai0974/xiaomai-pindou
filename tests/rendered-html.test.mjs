@@ -52,11 +52,12 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
   assert.match(html, /sampling-utils\.js\?v=20260730-1/);
   assert.match(html, /quality-utils\.js\?v=20260730-1/);
+  assert.match(html, /color-postprocess\.js\?v=20260731-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260731-1/);
+  assert.match(html, /app\.js\?v=20260731-2/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -146,6 +147,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     preprocessUtilsResponse,
     samplingUtilsResponse,
     qualityUtilsResponse,
+    colorPostprocessResponse,
     projectCodecResponse,
     projectStoreResponse,
     pdfUtilsResponse,
@@ -162,6 +164,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/preprocess-utils.js"),
       fetchFromWorker("/sampling-utils.js"),
       fetchFromWorker("/quality-utils.js"),
+      fetchFromWorker("/color-postprocess.js"),
       fetchFromWorker("/project-codec.js"),
       fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
@@ -178,6 +181,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(preprocessUtilsResponse.status, 200);
   assert.equal(samplingUtilsResponse.status, 200);
   assert.equal(qualityUtilsResponse.status, 200);
+  assert.equal(colorPostprocessResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
   assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
@@ -193,6 +197,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const preprocessUtils = await preprocessUtilsResponse.text();
   const samplingUtils = await samplingUtilsResponse.text();
   const qualityUtils = await qualityUtilsResponse.text();
+  const colorPostprocess = await colorPostprocessResponse.text();
   const projectCodec = await projectCodecResponse.text();
   const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
@@ -205,6 +210,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const preprocessUtils = window\.XiaomaiPreprocessUtils/);
   assert.match(script, /const samplingUtils = window\.XiaomaiSamplingUtils/);
   assert.match(script, /const qualityUtils = window\.XiaomaiQualityUtils/);
+  assert.match(script, /const colorPostprocessApi = window\.XiaomaiColorPostprocess/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
   assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
@@ -216,6 +222,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(preprocessUtils, /global\.XiaomaiPreprocessUtils = Object\.freeze/);
   assert.match(samplingUtils, /global\.XiaomaiSamplingUtils = Object\.freeze/);
   assert.match(qualityUtils, /global\.XiaomaiQualityUtils = Object\.freeze/);
+  assert.match(colorPostprocess, /global\.XiaomaiColorPostprocess = Object\.freeze/);
+  assert.doesNotMatch(script, /function mergeSimilarUsedColors\(/);
+  assert.match(colorPostprocess, /function mergeSimilarUsedColors\(/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
   assert.match(projectStore, /global\.XiaomaiProjectStore = Object\.freeze/);
   assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
@@ -347,7 +356,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /autosaveSessionVersion: 0/);
   assert.doesNotMatch(script, /nearestColorCache\.size > 50000/);
   assert.doesNotMatch(script, /nearestCandidateCache\.size > 50000/);
-  assert.match(script, /maxColors is a user-facing[\s\S]*?while \(counts\.size > maxColors && guard < 1000\)/);
+  assert.match(colorPostprocess, /while \(counts\.size > maxColors && guard < 500\)/);
+  assert.match(colorPostprocess, /while \(counts\.size > maxColors && guard < 1000\)/);
   assert.match(
     script,
     /processed = repairOutlines\(processed, size, outlineStrengthForSize\(\)\);\s*processed = forceMaxColors\(processed, size, targetColorLimit\(\)\);/,

@@ -1,0 +1,407 @@
+(function initializeColorPostprocess(global) {
+  "use strict";
+
+  function createColorPostprocessor(deps) {
+    const {
+      backgroundColorCodes,
+      buildCounts,
+      buildProtectedIndexSet,
+      colorDistance,
+      colorFamily,
+      countNeighborColors,
+      detectBackgroundColor,
+      getAccurateMatch,
+      getFourNeighbors,
+      getLockedColorCodes,
+      getProcessingProfile,
+      isBorderIndex,
+      isColorLocked,
+      nearestColorFromList,
+      outlineColorCodes,
+      totalBeadCount,
+    } = deps;
+
+    function resolveReplacement(color, replacements) {
+      let current = color;
+      const seen = new Set();
+      while (replacements.has(current.code) && !seen.has(current.code)) {
+        seen.add(current.code);
+        current = replacements.get(current.code);
+      }
+      return current;
+    }
+
+    function colorLuminance(color) {
+      return 0.299 * color.rgb.r + 0.587 * color.rgb.g + 0.114 * color.rgb.b;
+    }
+
+    function analyzeColorRegions(pattern, size) {
+      const visited = new Uint8Array(pattern.length);
+      const regions = [];
+      const regionMap = new Int32Array(pattern.length);
+      regionMap.fill(-1);
+      const directions = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ];
+
+      for (let start = 0; start < pattern.length; start += 1) {
+        if (visited[start]) continue;
+
+        const color = pattern[start];
+        const cells = [];
+        const queue = [start];
+        visited[start] = 1;
+
+        for (let head = 0; head < queue.length; head += 1) {
+          const index = queue[head];
+          const x = index % size;
+          const y = Math.floor(index / size);
+          cells.push(index);
+
+          for (const [dx, dy] of directions) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+            const nextIndex = ny * size + nx;
+            if (visited[nextIndex] || pattern[nextIndex].code !== color.code) continue;
+            visited[nextIndex] = 1;
+            queue.push(nextIndex);
+          }
+        }
+
+        const regionIndex = regions.length;
+        for (const cell of cells) {
+          regionMap[cell] = regionIndex;
+        }
+        regions.push({ color, cells, touchesBorder: cells.some((cell) => isBorderIndex(cell, size)) });
+      }
+
+      return { regions, regionMap };
+    }
+
+    function regionNeighborColors(region, pattern, size) {
+      const regionSet = new Set(region.cells);
+      const neighbors = new Map();
+      for (const index of region.cells) {
+        const x = index % size;
+        const y = Math.floor(index / size);
+        for (const nextIndex of getFourNeighbors(x, y, size)) {
+          if (regionSet.has(nextIndex)) continue;
+          const color = pattern[nextIndex];
+          neighbors.set(color.code, color);
+        }
+      }
+      return [...neighbors.values()];
+    }
+
+    function isProtectedRegion(region, pattern, size, background) {
+      if (region.color.code === background.code || region.touchesBorder) return false;
+      const area = region.cells.length;
+      if (area < 2 || area > 30) return false;
+
+      const neighbors = regionNeighborColors(region, pattern, size);
+      if (!neighbors.length) return false;
+      const nearestNeighborDistance = Math.min(...neighbors.map((color) => colorDistance(region.color, color)));
+      const rgb = region.color.rgb;
+      const saturation = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+      const connectedToEdge = neighbors.some((color) => colorDistance(region.color, color) > 25);
+      return nearestNeighborDistance > 18 || (saturation > 55 && connectedToEdge);
+    }
+
+    function findProtectedColorCodes(pattern, size) {
+      const analysis = analyzeColorRegions(pattern, size);
+      const background = detectBackgroundColor(pattern, size);
+      const protectedCodes = new Set();
+
+      for (const region of analysis.regions) {
+        if (isProtectedRegion(region, pattern, size, background)) {
+          protectedCodes.add(region.color.code);
+        }
+      }
+
+      return protectedCodes;
+    }
+
+    function isProtectedSinglePixel(index, pattern, size, background) {
+      if (isBorderIndex(index, size)) return false;
+      const color = pattern[index];
+      if (color.code === background.code) return false;
+      const x = index % size;
+      const y = Math.floor(index / size);
+      const neighbors = getFourNeighbors(x, y, size).map((neighbor) => pattern[neighbor]);
+      if (!neighbors.length) return false;
+      const nearestDistance = Math.min(...neighbors.map((neighbor) => colorDistance(color, neighbor)));
+      const rgb = color.rgb;
+      const saturation = Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b);
+      return nearestDistance > 28 && saturation > 45;
+    }
+
+    function mergeSimilarUsedColors(pattern, size, mergeDeltaE) {
+      let merged = [...pattern];
+      let counts = buildCounts(merged);
+      const outlineCodes = outlineColorCodes(pattern, size);
+      const backgroundCodes = backgroundColorCodes();
+      const colors = [...counts.values()].sort((a, b) => {
+        const priorityA = (isColorLocked(a) ? 3 : 0) + (backgroundCodes.has(a.code) ? 2 : 0) + (outlineCodes.has(a.code) ? 1 : 0);
+        const priorityB = (isColorLocked(b) ? 3 : 0) + (backgroundCodes.has(b.code) ? 2 : 0) + (outlineCodes.has(b.code) ? 1 : 0);
+        return priorityB - priorityA || b.count - a.count;
+      });
+      const replacements = new Map();
+
+      for (let i = 0; i < colors.length; i += 1) {
+        const keep = resolveReplacement(colors[i], replacements);
+        for (let j = i + 1; j < colors.length; j += 1) {
+          const color = resolveReplacement(colors[j], replacements);
+          if (keep.code === color.code || replacements.has(colors[j].code)) continue;
+          if (isColorLocked(color) || outlineCodes.has(color.code) || backgroundCodes.has(color.code)) continue;
+          if (backgroundCodes.has(keep.code)) continue;
+          if (colorDistance(keep, color) <= mergeDeltaE) {
+            replacements.set(color.code, keep);
+          }
+        }
+      }
+
+      if (!replacements.size) return merged;
+      merged = merged.map((color) => replacements.get(color.code) || color);
+
+      counts = buildCounts(merged);
+      const remaining = [...counts.values()].sort((a, b) => b.count - a.count);
+      const secondPass = new Map();
+      for (let i = 0; i < remaining.length; i += 1) {
+        for (let j = i + 1; j < remaining.length; j += 1) {
+          if (secondPass.has(remaining[j].code)) continue;
+          if (isColorLocked(remaining[j]) || outlineCodes.has(remaining[j].code) || backgroundCodes.has(remaining[j].code)) continue;
+          if (backgroundCodes.has(remaining[i].code)) continue;
+          if (colorDistance(remaining[i], remaining[j]) <= mergeDeltaE * 0.8) {
+            secondPass.set(remaining[j].code, remaining[i]);
+          }
+        }
+      }
+
+      return secondPass.size ? merged.map((color) => secondPass.get(color.code) || color) : merged;
+    }
+
+    function nearestMergeTarget(source, counts, protectedCodes = new Set(), allowProtectedTarget = true) {
+      const candidates = [...counts.values()].filter((item) => {
+        if (item.code === source.code) return false;
+        if (isColorLocked(source)) return false;
+        if (!allowProtectedTarget && protectedCodes.has(item.code) && !isColorLocked(item)) return false;
+        return true;
+      });
+      if (!candidates.length) return null;
+      candidates.sort((a, b) => {
+        const da = colorDistance(source, a);
+        const db = colorDistance(source, b);
+        return da - db || b.count - a.count;
+      });
+      return candidates[0];
+    }
+
+    function mergeLowUsageColors(pattern, size, options = {}) {
+      let processed = [...pattern];
+      const total = totalBeadCount(processed);
+      const strong = options.strength === "strong";
+      const detail = options.strength === "detail" || getProcessingProfile() === "detail64";
+      const base = size === 48 ? (strong ? 0.008 : 0.005) : size === 64 ? (strong ? 0.005 : 0.003) : 0.005;
+      const threshold = getAccurateMatch() && !strong
+        ? detail ? (size <= 64 ? 2 : 3) : size <= 48 ? 4 : size <= 64 ? 6 : 8
+        : Math.max(8, Math.min(24, Math.ceil(total * base)));
+      const outlineCodes = outlineColorCodes(processed, size);
+      const protectedCodes = new Set([...findProtectedColorCodes(processed, size), ...outlineCodes]);
+      let counts = buildCounts(processed);
+      const lowUsage = [...counts.values()]
+        .filter((item) => item.count < threshold && !protectedCodes.has(item.code) && !isColorLocked(item))
+        .sort((a, b) => a.count - b.count);
+
+      if (!lowUsage.length) return processed;
+
+      for (const color of lowUsage) {
+        counts = buildCounts(processed);
+        const target = nearestMergeTarget(color, counts, protectedCodes);
+        if (!target) continue;
+        processed = processed.map((item) => (item.code === color.code ? target : item));
+      }
+
+      return processed;
+    }
+
+    function forceMaxColors(pattern, size, maxColors) {
+      let processed = [...pattern];
+      let counts = buildCounts(processed);
+      if (counts.size <= maxColors) return processed;
+
+      const softProtectedCodes = new Set([
+        ...findProtectedColorCodes(processed, size),
+        ...outlineColorCodes(processed, size),
+      ]);
+      const hardProtectedCodes = new Set([...backgroundColorCodes(), ...getLockedColorCodes()]);
+      const detailProfile = getProcessingProfile() === "detail64";
+      let guard = 0;
+      while (counts.size > maxColors && guard < 500) {
+        guard += 1;
+        const colors = [...counts.values()].sort((a, b) => {
+          const pa = hardProtectedCodes.has(a.code) ? 2 : softProtectedCodes.has(a.code) ? 1 : 0;
+          const pb = hardProtectedCodes.has(b.code) ? 2 : softProtectedCodes.has(b.code) ? 1 : 0;
+          return pa - pb || a.count - b.count || colorLuminance(a) - colorLuminance(b);
+        });
+        let source = null;
+        let target = null;
+        for (const candidateSource of colors) {
+          if (hardProtectedCodes.has(candidateSource.code) || isColorLocked(candidateSource)) continue;
+          const sameFamily = colors.filter((item) => item.code !== candidateSource.code && colorFamily(item) === colorFamily(candidateSource));
+          const candidateTarget = nearestColorFromList(
+            candidateSource,
+            sameFamily.length ? sameFamily : colors.filter((item) => item.code !== candidateSource.code),
+          );
+          if (!candidateTarget) continue;
+          const mergeDistance = colorDistance(candidateSource, candidateTarget);
+          if (softProtectedCodes.has(candidateSource.code) && mergeDistance > (detailProfile ? 14 : 24)) continue;
+          if (detailProfile && !sameFamily.length && mergeDistance > 18) continue;
+          source = candidateSource;
+          target = candidateTarget;
+          break;
+        }
+        if (!source || !target || source.code === target.code) break;
+        processed = processed.map((item) => (item.code === source.code ? target : item));
+        counts = buildCounts(processed);
+      }
+
+      while (counts.size > maxColors && guard < 1000) {
+        guard += 1;
+        const colors = [...counts.values()];
+        const source = colors
+          .filter((item) => !hardProtectedCodes.has(item.code) && !isColorLocked(item))
+          .sort((a, b) => {
+            const pa = softProtectedCodes.has(a.code) ? 1 : 0;
+            const pb = softProtectedCodes.has(b.code) ? 1 : 0;
+            return pa - pb || a.count - b.count || colorLuminance(a) - colorLuminance(b);
+          })[0];
+        if (!source) break;
+        const targets = colors.filter((item) => item.code !== source.code);
+        const sameFamily = targets.filter((item) => colorFamily(item) === colorFamily(source));
+        const target = nearestColorFromList(source, sameFamily.length ? sameFamily : targets);
+        if (!target) break;
+        processed = processed.map((item) => (item.code === source.code ? target : item));
+        counts = buildCounts(processed);
+      }
+
+      return processed;
+    }
+
+    function cleanIsolatedPixels(pattern, size) {
+      const cleaned = [...pattern];
+      const background = detectBackgroundColor(pattern, size);
+      const protectedIndexes = buildProtectedIndexSet(pattern, size);
+
+      for (let index = 0; index < pattern.length; index += 1) {
+        const x = index % size;
+        const y = Math.floor(index / size);
+        const color = pattern[index];
+        if (color.empty) continue;
+        if (protectedIndexes.has(index)) continue;
+        if (isColorLocked(color)) continue;
+        const neighbors = getFourNeighbors(x, y, size).map((neighbor) => pattern[neighbor]);
+        const sameNeighborCount = neighbors.filter((neighbor) => neighbor.code === color.code).length;
+        if (sameNeighborCount > 0) continue;
+        if (isProtectedSinglePixel(index, pattern, size, background)) continue;
+
+        const touchesBackground = neighbors.some((neighbor) => neighbor.code === background.code);
+        const candidates = countNeighborColors(neighbors)
+          .filter((candidate) => candidate.color.code !== background.code || touchesBackground)
+          .filter((candidate) => !isColorLocked(candidate.color))
+          .sort((a, b) => b.count - a.count || colorDistance(color, a.color) - colorDistance(color, b.color));
+
+        if (candidates.length) {
+          cleaned[index] = candidates[0].color;
+        }
+      }
+
+      return cleaned;
+    }
+
+    function chooseRegionReplacement(pattern, size, region, analysis) {
+      const regionSet = new Set(region.cells);
+      const neighbors = new Map();
+      const background = detectBackgroundColor(pattern, size);
+
+      for (const index of region.cells) {
+        const x = index % size;
+        const y = Math.floor(index / size);
+        for (const nextIndex of getFourNeighbors(x, y, size)) {
+          if (regionSet.has(nextIndex)) continue;
+          const color = pattern[nextIndex];
+          if (color.code === background.code && !region.touchesBorder) continue;
+          if (isColorLocked(color)) continue;
+          const neighborRegion = analysis.regions[analysis.regionMap[nextIndex]];
+          const entry = neighbors.get(color.code) || {
+            color,
+            count: 0,
+            area: 0,
+            distance: colorDistance(region.color, color),
+          };
+          entry.count += 1;
+          entry.area = Math.max(entry.area, neighborRegion?.cells.length || 0);
+          neighbors.set(color.code, entry);
+        }
+      }
+
+      if (!neighbors.size) return null;
+
+      const entries = [...neighbors.values()];
+      if (region.cells.length === 1) {
+        entries.sort((a, b) => b.count - a.count || a.distance - b.distance || b.area - a.area);
+      } else {
+        entries.sort((a, b) => b.area - a.area || a.distance - b.distance || b.count - a.count);
+      }
+      return entries[0].color;
+    }
+
+    function cleanPatternRegions(pattern, size, minRegionSize) {
+      let cleaned = [...pattern];
+      const passes = getProcessingProfile() === "detail64" ? 1 : 2;
+
+      for (let pass = 0; pass < passes; pass += 1) {
+        const analysis = analyzeColorRegions(cleaned, size);
+        const background = detectBackgroundColor(cleaned, size);
+        const protectedIndexes = buildProtectedIndexSet(cleaned, size);
+        let changed = false;
+
+        for (const region of analysis.regions) {
+          if (region.color.empty) continue;
+          if (region.cells.length >= minRegionSize) continue;
+          if (isColorLocked(region.color)) continue;
+          if (region.cells.some((index) => protectedIndexes.has(index))) continue;
+          if (isProtectedRegion(region, cleaned, size, background)) continue;
+          const replacement = chooseRegionReplacement(cleaned, size, region, analysis);
+          if (!replacement) continue;
+
+          for (const index of region.cells) {
+            cleaned[index] = replacement;
+          }
+          changed = true;
+        }
+
+        if (!changed) break;
+      }
+
+      return cleaned;
+    }
+
+    return Object.freeze({
+      analyzeColorRegions,
+      cleanIsolatedPixels,
+      cleanPatternRegions,
+      colorLuminance,
+      findProtectedColorCodes,
+      forceMaxColors,
+      isProtectedRegion,
+      mergeLowUsageColors,
+      mergeSimilarUsedColors,
+    });
+  }
+
+  global.XiaomaiColorPostprocess = Object.freeze({ createColorPostprocessor });
+})(window);

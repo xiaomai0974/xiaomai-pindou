@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
 const backgroundUtilsSourceUrl = new URL("../public/background-utils.js", import.meta.url);
+const colorPostprocessSourceUrl = new URL("../public/color-postprocess.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const editorGeometrySourceUrl = new URL("../public/editor-geometry.js", import.meta.url);
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
@@ -212,6 +213,101 @@ test("grid utilities preserve counts, bounds, lines, and selections after extrac
       { x: 0, y: 2 },
     ]),
     true,
+  );
+});
+
+test("color postprocessing preserves merging, cleanup, and locked-color limits after extraction", async () => {
+  const colorUtils = await browserUtilityContext(colorUtilsSourceUrl, "XiaomaiColorUtils");
+  const gridUtils = await browserUtilityContext(gridUtilsSourceUrl, "XiaomaiGridUtils", { Map });
+  const postprocessApi = await browserUtilityContext(
+    colorPostprocessSourceUrl,
+    "XiaomaiColorPostprocess",
+    { Map, Set },
+  );
+  const color = (code, r, g, b) => ({
+    code,
+    empty: false,
+    rgb: { r, g, b },
+    lab: colorUtils.rgbToLab({ r, g, b }),
+  });
+  const background = color("BG", 245, 245, 245);
+  const gray = color("A", 110, 110, 110);
+  const nearGray = color("B", 113, 113, 113);
+  const warm = color("C", 180, 80, 45);
+  const lockedColor = color("LOCK", 30, 50, 190);
+  const locked = new Set(["LOCK"]);
+  const getFourNeighbors = (x, y, size) => {
+    const neighbors = [];
+    if (x > 0) neighbors.push(y * size + x - 1);
+    if (x + 1 < size) neighbors.push(y * size + x + 1);
+    if (y > 0) neighbors.push((y - 1) * size + x);
+    if (y + 1 < size) neighbors.push((y + 1) * size + x);
+    return neighbors;
+  };
+  const processor = postprocessApi.createColorPostprocessor({
+    backgroundColorCodes: () => new Set(["BG"]),
+    buildCounts: gridUtils.buildCounts,
+    buildProtectedIndexSet: () => new Set(),
+    colorDistance: colorUtils.colorDistance,
+    colorFamily: () => "neutral",
+    countNeighborColors(neighbors) {
+      const counts = new Map();
+      for (const item of neighbors) {
+        const entry = counts.get(item.code) || { color: item, count: 0 };
+        entry.count += 1;
+        counts.set(item.code, entry);
+      }
+      return [...counts.values()];
+    },
+    detectBackgroundColor: () => background,
+    getAccurateMatch: () => false,
+    getFourNeighbors,
+    getLockedColorCodes: () => locked,
+    getProcessingProfile: () => "balanced",
+    isBorderIndex: (index, size) => {
+      const x = index % size;
+      const y = Math.floor(index / size);
+      return x === 0 || y === 0 || x === size - 1 || y === size - 1;
+    },
+    isColorLocked: (item) => locked.has(item?.code || item),
+    nearestColorFromList(source, candidates) {
+      return [...candidates].sort(
+        (left, right) => colorUtils.colorDistance(source, left) - colorUtils.colorDistance(source, right),
+      )[0] || null;
+    },
+    outlineColorCodes: () => new Set(),
+    totalBeadCount: gridUtils.totalBeadCount,
+  });
+
+  const merged = processor.mergeSimilarUsedColors(
+    [gray, gray, gray, nearGray, nearGray, warm, background, background, lockedColor],
+    3,
+    5,
+  );
+  assert.equal(merged.some((item) => item.code === "B"), false);
+  assert.equal(merged.some((item) => item.code === "LOCK"), true);
+
+  const isolated = processor.cleanIsolatedPixels(
+    [gray, gray, gray, gray, nearGray, gray, gray, gray, gray],
+    3,
+  );
+  assert.equal(isolated[4].code, "A");
+
+  const limited = processor.forceMaxColors(
+    [background, gray, warm, lockedColor, background, nearGray, warm, lockedColor, background],
+    3,
+    2,
+  );
+  assert.ok(gridUtils.buildCounts(limited).size <= 2);
+  assert.equal(limited.some((item) => item.code === "LOCK"), true);
+
+  const analysis = processor.analyzeColorRegions(
+    [gray, gray, background, gray, warm, background, background, background, background],
+    3,
+  );
+  assert.deepEqual(
+    Array.from(analysis.regions, (region) => [region.color.code, region.cells.length]),
+    [["A", 3], ["BG", 5], ["C", 1]],
   );
 });
 
