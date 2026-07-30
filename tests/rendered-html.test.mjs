@@ -47,11 +47,13 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /color-utils\.js\?v=20260730-1/);
   assert.match(html, /grid-utils\.js\?v=20260730-1/);
   assert.match(html, /image-utils\.js\?v=20260730-1/);
+  assert.match(html, /sampling-utils\.js\?v=20260730-1/);
+  assert.match(html, /quality-utils\.js\?v=20260730-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260730-9/);
+  assert.match(html, /app\.js\?v=20260730-10/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -136,6 +138,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
     colorUtilsResponse,
     gridUtilsResponse,
     imageUtilsResponse,
+    samplingUtilsResponse,
+    qualityUtilsResponse,
     projectCodecResponse,
     projectStoreResponse,
     pdfUtilsResponse,
@@ -147,6 +151,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/color-utils.js"),
       fetchFromWorker("/grid-utils.js"),
       fetchFromWorker("/image-utils.js"),
+      fetchFromWorker("/sampling-utils.js"),
+      fetchFromWorker("/quality-utils.js"),
       fetchFromWorker("/project-codec.js"),
       fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
@@ -158,6 +164,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(colorUtilsResponse.status, 200);
   assert.equal(gridUtilsResponse.status, 200);
   assert.equal(imageUtilsResponse.status, 200);
+  assert.equal(samplingUtilsResponse.status, 200);
+  assert.equal(qualityUtilsResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
   assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
@@ -168,6 +176,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const colorUtils = await colorUtilsResponse.text();
   const gridUtils = await gridUtilsResponse.text();
   const imageUtils = await imageUtilsResponse.text();
+  const samplingUtils = await samplingUtilsResponse.text();
+  const qualityUtils = await qualityUtilsResponse.text();
   const projectCodec = await projectCodecResponse.text();
   const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
@@ -175,12 +185,16 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
   assert.match(script, /const imageUtils = window\.XiaomaiImageUtils/);
+  assert.match(script, /const samplingUtils = window\.XiaomaiSamplingUtils/);
+  assert.match(script, /const qualityUtils = window\.XiaomaiQualityUtils/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
   assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
   assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
   assert.match(imageUtils, /global\.XiaomaiImageUtils = Object\.freeze/);
+  assert.match(samplingUtils, /global\.XiaomaiSamplingUtils = Object\.freeze/);
+  assert.match(qualityUtils, /global\.XiaomaiQualityUtils = Object\.freeze/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
   assert.match(projectStore, /global\.XiaomaiProjectStore = Object\.freeze/);
   assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
@@ -259,6 +273,10 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function buildBackgroundProtectionMask\(/);
   assert.doesNotMatch(script, /function buildConnectedBaseBackgroundMask\(/);
   assert.match(imageUtils, /function buildConnectedBaseBackgroundMask\(/);
+  assert.doesNotMatch(script, /function averageSampleCell\(/);
+  assert.match(samplingUtils, /function averageSampleCell\(/);
+  assert.doesNotMatch(script, /function calculateColorJumpScore\(/);
+  assert.match(qualityUtils, /function calculateColorJumpScore\(/);
   assert.match(
     script,
     /function displayPattern\(\) \{\s*if \(state\.isPreviewDirty && state\.previewPattern\.length\) return state\.previewPattern;\s*return state\.pattern;/,
@@ -269,7 +287,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   );
   assert.doesNotMatch(previewUpdateSource, /setDiagnosticViewMode\("final"/);
   assert.match(script, /async function buildRawDiagnosticReference[\s\S]*?buildPixelSamples\(state\.image, size\)/);
-  assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
+  assert.doesNotMatch(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
+  assert.match(samplingUtils, /const transparent = removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);
   assert.match(script, /rawDebugCandidates = new Array\(pixels\.length\)/);
   assert.match(script, /function releaseCanvasMemory\(canvas\)/);
@@ -439,7 +458,7 @@ test("edge background detection does not erase a dark subject touching one edge"
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
   const detectionSource = source.slice(
     source.indexOf("function detectEdgeBackgroundColors"),
-    source.indexOf("function averageSampleCell"),
+    source.indexOf("function clampRange"),
   );
   const context = { Map, Set, Math };
   vm.runInNewContext(detectionSource, context);

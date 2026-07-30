@@ -11,6 +11,8 @@ const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url)
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
 const projectStoreSourceUrl = new URL("../public/project-store.js", import.meta.url);
+const qualityUtilsSourceUrl = new URL("../public/quality-utils.js", import.meta.url);
+const samplingUtilsSourceUrl = new URL("../public/sampling-utils.js", import.meta.url);
 
 async function appSource() {
   return readFile(appSourceUrl, "utf8");
@@ -240,6 +242,69 @@ test("image utilities preserve outline and edge-connected background behavior", 
   assert.equal(mask[2 * width + 2], 0);
   assert.equal(mask[1 * width + 1], 0);
   assert.deepEqual(Array.from(imageUtils.preprocessFourNeighbors(2, 2, width, height)), [11, 13, 7, 17]);
+});
+
+test("sampling utilities preserve average, dominant, and transparent-cell behavior", async () => {
+  const samplingUtils = await browserUtilityContext(samplingUtilsSourceUrl, "XiaomaiSamplingUtils", { Map });
+  const solidRed = new Uint8ClampedArray([
+    240, 20, 30, 255,
+    240, 20, 30, 255,
+    240, 20, 30, 255,
+    240, 20, 30, 255,
+  ]);
+  const average = samplingUtils.averageSampleCell(solidRed, 2, 0, 0, 2, {
+    removeTransparent: false,
+    outlineStrength: 0,
+  });
+  assert.deepEqual(
+    { r: average.r, g: average.g, b: average.b, background: average.background },
+    { r: 240, g: 20, b: 30, background: false },
+  );
+
+  const dominant = samplingUtils.dominantSampleCell(solidRed, 2, 0, 0, 2, {
+    patternMode: "illustration",
+    removeTransparent: false,
+    outlineStrength: 0,
+    gridSize: 64,
+    pixelBackground: "empty",
+    emptyCell: { code: "", empty: true },
+    whiteColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.ok(dominant.r > 230 && dominant.g < 30 && dominant.b < 40);
+
+  const transparent = new Uint8ClampedArray(16);
+  const empty = samplingUtils.dominantSampleCell(transparent, 2, 0, 0, 2, {
+    patternMode: "illustration",
+    removeTransparent: true,
+    outlineStrength: 0,
+    gridSize: 64,
+    usesEmptyBackground: true,
+    pixelBackground: "empty",
+    emptyCell: { code: "", empty: true },
+    whiteColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.equal(empty.empty, true);
+  assert.equal(empty.background, true);
+});
+
+test("quality utilities preserve color-family and structural metrics", async () => {
+  const colorUtils = await browserUtilityContext(colorUtilsSourceUrl, "XiaomaiColorUtils");
+  const gridUtils = await browserUtilityContext(gridUtilsSourceUrl, "XiaomaiGridUtils", { Map });
+  const source = await readFile(qualityUtilsSourceUrl, "utf8");
+  const window = { XiaomaiColorUtils: colorUtils, XiaomaiGridUtils: gridUtils };
+  vm.runInNewContext(source, { window, Math, Set, Uint8Array });
+  const qualityUtils = window.XiaomaiQualityUtils;
+  const color = (code, rgb) => ({ code, rgb, lab: colorUtils.rgbToLab(rgb), empty: false });
+  const black = color("H7", { r: 10, g: 10, b: 10 });
+  const white = color("F1", { r: 247, g: 242, b: 232 });
+  const pattern = [black, white, white, white];
+
+  assert.equal(qualityUtils.colorFamily(black), "black-gray-white");
+  assert.equal(qualityUtils.countIsolatedPixels(pattern, 2), 1);
+  assert.equal(qualityUtils.countEdgeBreaks(pattern, 2), 1);
+  assert.equal(qualityUtils.calculateColorJumpScore(pattern, 2), 50);
+  const outline = qualityUtils.calculateOutlineConnectivity(pattern, 2, new Uint8Array([1, 0, 0, 0]));
+  assert.equal(outline.outlineNoiseCount, 1);
 });
 
 test("PDF utilities preserve text encoding and create a valid document", async () => {

@@ -52,6 +52,28 @@ const {
   restorePreprocessOutlines,
 } = imageUtils;
 
+const samplingUtils = window.XiaomaiSamplingUtils;
+if (!samplingUtils) {
+  throw new Error("图片采样模块加载失败，请刷新页面后重试。");
+}
+const {
+  averageSampleCell: averagePixelSample,
+  dominantSampleCell,
+} = samplingUtils;
+
+const qualityUtils = window.XiaomaiQualityUtils;
+if (!qualityUtils) {
+  throw new Error("质量分析模块加载失败，请刷新页面后重试。");
+}
+const {
+  calculateColorJumpScore,
+  calculateOutlineConnectivity,
+  calculateRegionColorChaosScore,
+  colorFamily,
+  countEdgeBreaks,
+  countIsolatedPixels,
+} = qualityUtils;
+
 const projectCodec = window.XiaomaiProjectCodec;
 if (!projectCodec) {
   throw new Error("项目编解码模块加载失败，请刷新页面后重试。");
@@ -4754,82 +4776,23 @@ function buildPixelSamplesNow(image, size) {
 }
 
 function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
-  if (!state.dominantSampling && (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
-    return averageSampleCell(data, sampleSize, cellX, cellY, sampleScale);
-  }
-
-  const buckets = new Map();
-  const bucketStep = state.patternMode === "pixelPattern" ? 16 : state.animeMode ? 24 : 18;
-  let darkWeight = 0;
-  let darkBucketKey = "";
-  let backgroundPixels = 0;
-
-  for (let yy = 0; yy < sampleScale; yy += 1) {
-    for (let xx = 0; xx < sampleScale; xx += 1) {
-      const px = cellX * sampleScale + xx;
-      const py = cellY * sampleScale + yy;
-      const index = (py * sampleSize + px) * 4;
-      const alpha = data[index + 3] / 255;
-      const pr = Math.round(data[index] * alpha + 255 * (1 - alpha));
-      const pg = Math.round(data[index + 1] * alpha + 255 * (1 - alpha));
-      const pb = Math.round(data[index + 2] * alpha + 255 * (1 - alpha));
-      const luminance = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-      const transparent = state.removeTransparent && alpha < 0.08;
-      const nearWhite = !transparent && isBackgroundLikePixel(pr, pg, pb, 1);
-      const outlineStrength = outlineStrengthForSize();
-      const isDarkLine = state.lineBoost && luminance < (outlineStrength >= 3 ? 90 : outlineStrength >= 2 ? 82 : 74);
-      const outlineWeight =
-        outlineStrength >= 3 ? (state.gridSize <= 48 ? 2.2 : 1.9) : outlineStrength >= 2 ? 1.55 : 1.18;
-      const weight = transparent ? 0 : isDarkLine ? outlineWeight : nearWhite ? 0.72 : 1;
-      if (weight <= 0) {
-        backgroundPixels += 1;
-        continue;
-      }
-      const key = `${Math.round(pr / bucketStep)},${Math.round(pg / bucketStep)},${Math.round(pb / bucketStep)}`;
-      const bucket = buckets.get(key) || { r: 0, g: 0, b: 0, weight: 0, backgroundWeight: 0 };
-
-      bucket.r += pr * weight;
-      bucket.g += pg * weight;
-      bucket.b += pb * weight;
-      bucket.weight += weight;
-      if (nearWhite) bucket.backgroundWeight += weight;
-      buckets.set(key, bucket);
-
-      if (isDarkLine) {
-        darkWeight += weight;
-        darkBucketKey = key;
-      }
-    }
-  }
-
-  if (usesEmptyBackground() && backgroundPixels / Math.max(1, sampleScale * sampleScale) > 0.72) {
-    if (state.pixelBackground === "white") return whiteBeadColor().rgb;
-    return { ...EMPTY_CELL, background: true };
-  }
-
-  const minimumLineShare = outlineStrengthForSize() >= 3 ? 0.2 : outlineStrengthForSize() >= 2 ? 0.24 : 0.32;
-  let winner = null;
-  if (darkWeight >= sampleScale * sampleScale * minimumLineShare && buckets.has(darkBucketKey)) {
-    winner = buckets.get(darkBucketKey);
-  } else {
-    for (const bucket of buckets.values()) {
-      if (!winner || bucket.weight > winner.weight) {
-        winner = bucket;
-      }
-    }
-  }
-
-  if (!winner) {
-    if (state.pixelBackground === "white") return whiteBeadColor().rgb;
-    return { ...EMPTY_CELL, background: true };
-  }
-
-  return {
-    r: winner.r / winner.weight,
-    g: winner.g / winner.weight,
-    b: winner.b / winner.weight,
-    background: false,
+  const options = {
+    patternMode: state.patternMode,
+    processingProfile: state.processingProfile,
+    animeMode: state.animeMode,
+    removeTransparent: state.removeTransparent,
+    lineBoost: state.lineBoost,
+    outlineStrength: outlineStrengthForSize(),
+    gridSize: state.gridSize,
+    usesEmptyBackground: usesEmptyBackground(),
+    pixelBackground: state.pixelBackground,
+    whiteColor: whiteBeadColor().rgb,
+    emptyCell: EMPTY_CELL,
   };
+  if (!state.dominantSampling && (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
+    return averagePixelSample(data, sampleSize, cellX, cellY, sampleScale, options);
+  }
+  return dominantSampleCell(data, sampleSize, cellX, cellY, sampleScale, options);
 }
 
 function usesEmptyBackground() {
@@ -4975,70 +4938,6 @@ function isLikelyBackgroundColor(color) {
   const min = Math.min(r, g, b);
   const saturation = max - min;
   return (r >= 228 && g >= 228 && b >= 220 && saturation < 34) || (color.lab.l > 88 && saturation < 42);
-}
-
-function averageSampleCell(data, sampleSize, cellX, cellY, sampleScale) {
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let count = 0;
-  let darkR = 0;
-  let darkG = 0;
-  let darkB = 0;
-  let darkCount = 0;
-  let transparentPixels = 0;
-
-  for (let yy = 0; yy < sampleScale; yy += 1) {
-    for (let xx = 0; xx < sampleScale; xx += 1) {
-      const px = cellX * sampleScale + xx;
-      const py = cellY * sampleScale + yy;
-      const index = (py * sampleSize + px) * 4;
-      const alpha = data[index + 3] / 255;
-      const pr = Math.round(data[index] * alpha + 255 * (1 - alpha));
-      const pg = Math.round(data[index + 1] * alpha + 255 * (1 - alpha));
-      const pb = Math.round(data[index + 2] * alpha + 255 * (1 - alpha));
-      const luminance = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-      const transparent = state.removeTransparent && alpha < 0.08;
-      const nearWhite = !transparent && isBackgroundLikePixel(pr, pg, pb, 1);
-      const weight = transparent ? 0.15 : nearWhite ? 0.72 : 1;
-      if (transparent) transparentPixels += 1;
-
-      r += pr * weight;
-      g += pg * weight;
-      b += pb * weight;
-      count += weight;
-
-      if (outlineStrengthForSize() >= 2 && luminance < (outlineStrengthForSize() >= 3 ? 86 : 76)) {
-        darkR += pr;
-        darkG += pg;
-        darkB += pb;
-        darkCount += 1;
-      }
-    }
-  }
-
-  if (outlineStrengthForSize() >= 2 && darkCount >= Math.max(2, count * 0.22)) {
-    return {
-      r: darkR / darkCount,
-      g: darkG / darkCount,
-      b: darkB / darkCount,
-    };
-  }
-
-  return {
-    r: r / count,
-    g: g / count,
-    b: b / count,
-    background: transparentPixels / Math.max(1, sampleScale * sampleScale) > 0.72,
-  };
-}
-
-function isBackgroundLikePixel(r, g, b, alpha = 1) {
-  if (state.removeTransparent && alpha < 0.08) return true;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const saturation = max - min;
-  return r > 242 && g > 242 && b > 242 && saturation < 12;
 }
 
 function clampRange(value, min, max) {
@@ -6168,75 +6067,9 @@ function countColorFamilyOveruse(pattern) {
   return [...families.entries()].filter(([family, count]) => count > (caps[family] || caps.other || 4)).length;
 }
 
-function colorFamily(color) {
-  if (color.lab.l < 24) return "black-gray-white";
-  if (color.lab.l > 88 && Math.abs(color.lab.a) < 6 && Math.abs(color.lab.b) < 10) return "black-gray-white";
-  const { r, g, b } = color.rgb;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  if (max - min < 18) return "black-gray-white";
-  if (r > 165 && g > 120 && b > 90 && Math.abs(r - g) < 78 && r >= b) return "skin-beige";
-  if (r >= g && r >= b) {
-    if (r > 170 && g > 130 && b < 95) return "yellow";
-    if (g > b + 42) return "orange-brown";
-    return "red-pink";
-  }
-  if (g >= r && g >= b) return "green";
-  if (b >= r && b >= g) return r > g + 18 ? "purple" : "blue";
-  return "other";
-}
-
-function calculateColorJumpScore(pattern, size) {
-  let jumps = 0;
-  let edges = 0;
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const color = pattern[y * size + x];
-      if (color.empty) continue;
-      for (const nextIndex of getFourNeighbors(x, y, size)) {
-        const neighbor = pattern[nextIndex];
-        if (neighbor.empty) continue;
-        edges += 1;
-        if (colorDistance(color, neighbor) > 22) jumps += 1;
-      }
-    }
-  }
-  return Math.round((jumps / Math.max(1, edges)) * 100);
-}
-
 function checkBackgroundModeConsistency(pattern) {
   if (state.pixelBackground === "white") return pattern.some((item) => !item.empty) ? 1 : 0;
   return pattern.some((item) => item.empty) ? 1 : 0;
-}
-
-function calculateRegionColorChaosScore(pattern, size) {
-  const visited = new Uint8Array(pattern.length);
-  let chaoticRegions = 0;
-  let totalRegions = 0;
-  const limit = size <= 48 ? 4 : size <= 64 ? 6 : 8;
-  for (let start = 0; start < pattern.length; start += 1) {
-    if (visited[start] || pattern[start].empty) continue;
-    const family = colorFamily(pattern[start]);
-    const queue = [start];
-    const colors = new Set();
-    visited[start] = 1;
-    for (let head = 0; head < queue.length; head += 1) {
-      const index = queue[head];
-      colors.add(pattern[index].code);
-      const x = index % size;
-      const y = Math.floor(index / size);
-      for (const nextIndex of getFourNeighbors(x, y, size)) {
-        if (visited[nextIndex] || pattern[nextIndex].empty) continue;
-        if (colorFamily(pattern[nextIndex]) !== family) continue;
-        if (colorDistance(pattern[index], pattern[nextIndex]) > 30) continue;
-        visited[nextIndex] = 1;
-        queue.push(nextIndex);
-      }
-    }
-    totalRegions += 1;
-    if (colors.size > limit) chaoticRegions += 1;
-  }
-  return Math.round((chaoticRegions / Math.max(1, totalRegions)) * 100);
 }
 
 function countSinglePixelNoise(pattern, size) {
@@ -6254,37 +6087,7 @@ function countSinglePixelNoise(pattern, size) {
 
 function outlineConnectivityCheck(pattern, size) {
   const mask = buildOutlineMask(pattern, size);
-  let outlineCount = 0;
-  let breaks = 0;
-  let noise = 0;
-  let boundaryCells = 0;
-  let coveredBoundary = 0;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const item = pattern[index];
-    if (item.empty) continue;
-    const x = index % size;
-    const y = Math.floor(index / size);
-    const neighbors = getEightNeighbors(x, y, size);
-    const touchesBackground = neighbors.some((neighbor) => pattern[neighbor].empty);
-    if (touchesBackground) {
-      boundaryCells += 1;
-      if (mask[index]) coveredBoundary += 1;
-    }
-    if (!mask[index]) continue;
-    outlineCount += 1;
-    const outlineNeighbors = neighbors.filter((neighbor) => mask[neighbor]).length;
-    if (outlineNeighbors <= 1) {
-      noise += 1;
-      if (touchesBackground) breaks += 1;
-    }
-  }
-  const continuity = outlineCount ? Math.max(0, 10 - (breaks / outlineCount) * 50 - (noise / outlineCount) * 20) : 10;
-  return {
-    outlineBreakCount: breaks,
-    outlineContinuityScore: Math.round(continuity * 10) / 10,
-    outlineNoiseCount: noise,
-    outlineCoverageRatio: Math.round((coveredBoundary / Math.max(1, boundaryCells)) * 1000) / 1000,
-  };
+  return calculateOutlineConnectivity(pattern, size, mask);
 }
 
 function countLowUsageColors(pattern) {
@@ -6292,34 +6095,6 @@ function countLowUsageColors(pattern) {
   const base = state.gridSize === 48 ? 0.006 : state.gridSize === 64 ? 0.004 : 0.005;
   const threshold = Math.max(8, Math.min(24, Math.ceil(total * base)));
   return [...buildCounts(pattern).values()].filter((item) => item.count < threshold && !isColorLocked(item)).length;
-}
-
-function countEdgeBreaks(pattern, size) {
-  let breaks = 0;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const x = index % size;
-    const y = Math.floor(index / size);
-    const color = pattern[index];
-    if (color.lab.l >= 34) continue;
-    const neighbors = getFourNeighbors(x, y, size).map((neighbor) => pattern[neighbor]);
-    const same = neighbors.filter((neighbor) => neighbor.code === color.code).length;
-    const highContrast = neighbors.some((neighbor) => colorDistance(color, neighbor) > 24);
-    if (highContrast && same === 0) breaks += 1;
-  }
-  return breaks;
-}
-
-function countIsolatedPixels(pattern, size) {
-  let count = 0;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const x = index % size;
-    const y = Math.floor(index / size);
-    const color = pattern[index];
-    if (color.empty) continue;
-    const hasSameNeighbor = getFourNeighbors(x, y, size).some((neighborIndex) => pattern[neighborIndex].code === color.code);
-    if (!hasSameNeighbor) count += 1;
-  }
-  return count;
 }
 
 function showQualityHint() {
