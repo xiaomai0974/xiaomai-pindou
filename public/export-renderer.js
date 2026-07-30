@@ -1,10 +1,6 @@
 (function initializeExportRenderer(global) {
   "use strict";
 
-  function countBeads(pattern) {
-    return pattern.reduce((total, item) => total + (item.empty ? 0 : 1), 0);
-  }
-
   function drawReadableExportWatermark(exportCtx, canvas, startY, endY, text = "小麦拼豆") {
     const size = Math.max(52, Math.round(Math.min(canvas.width, canvas.height) * 0.055));
     const stepX = Math.max(300, size * 4.6);
@@ -160,6 +156,7 @@
       stride,
       fileName,
       dimensionsLabel,
+      totalBeads,
       contrastColor,
       includeWatermark = true,
       watermarkText = "小麦拼豆",
@@ -184,7 +181,7 @@
     exportCtx.fillText(includeWatermark ? watermarkText : "拼豆图纸", margin, 76);
     exportCtx.font = `500 ${Math.max(34, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
     exportCtx.textAlign = "right";
-    exportCtx.fillText(`${fileName || "pattern"}   ${dimensionsLabel} / ${countBeads(pattern)}颗 / ${counts.size}色`, canvas.width - margin, 76);
+    exportCtx.fillText(`${fileName || "pattern"}   ${dimensionsLabel} / ${totalBeads}颗 / ${counts.size}色`, canvas.width - margin, 76);
     exportCtx.textAlign = "left";
 
     drawReadableCells(exportCtx, {
@@ -221,6 +218,7 @@
       guideEvery,
       fileName,
       dimensionsLabel,
+      totalBeads,
       paletteSize,
       contrastColor,
       hexToRgb,
@@ -266,7 +264,7 @@
 
     rect(0, 0, page.width, page.height, "#fffdf8");
     text(includeWatermark ? watermarkText : "拼豆图纸", margin, titleY, 16);
-    text(`${dimensionsLabel} / ${countBeads(pattern)} beads / ${counts.size} colors / MARD ${paletteSize}`, page.width - margin, titleY, 10, "right");
+    text(`${dimensionsLabel} / ${totalBeads} beads / ${counts.size} colors / MARD ${paletteSize}`, page.width - margin, titleY, 10, "right");
     text(fileName || "pattern", margin, titleY + 18, 9);
 
     rect(startX, startY, plotWidth, plotHeight, "#ffffff");

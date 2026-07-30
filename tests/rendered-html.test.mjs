@@ -57,9 +57,9 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
-  assert.match(html, /export-renderer\.js\?v=20260731-1/);
+  assert.match(html, /export-renderer\.js\?v=20260731-2/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260731-4/);
+  assert.match(html, /app\.js\?v=20260731-5/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -242,6 +242,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(projectStore, /global\.XiaomaiProjectStore = Object\.freeze/);
   assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
   assert.match(exportRenderer, /global\.XiaomaiExportRenderer = Object\.freeze/);
+  assert.doesNotMatch(exportRenderer, /function countBeads\(/);
+  assert.doesNotMatch(script, /localPreprocessToolbar:\s*document\.querySelector/);
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);

@@ -460,6 +460,7 @@ test("export renderer uses one pattern snapshot for PNG and PDF output", async (
     stride: 2,
     fileName: "test",
     dimensionsLabel: "2 x 2",
+    totalBeads: 2,
     contrastColor: colorUtils.contrastColor,
     includeWatermark: true,
   });
@@ -478,6 +479,7 @@ test("export renderer uses one pattern snapshot for PNG and PDF output", async (
     guideEvery: 5,
     fileName: "test",
     dimensionsLabel: "2 x 2",
+    totalBeads: 2,
     paletteSize: 221,
     contrastColor: colorUtils.contrastColor,
     hexToRgb: colorUtils.hexToRgb,

@@ -650,7 +650,6 @@ const elements = {
   referenceFloatZoomInButton: document.querySelector("#referenceFloatZoomInButton"),
   referenceFloatFitButton: document.querySelector("#referenceFloatFitButton"),
   referenceFloatHideButton: document.querySelector("#referenceFloatHideButton"),
-  localPreprocessToolbar: document.querySelector("#localPreprocessToolbar"),
   localPreprocessEnabledToggle: document.querySelector("#localPreprocessEnabledToggle"),
   localPreprocessMenuButton: document.querySelector("#localPreprocessMenuButton"),
   localPreprocessPanel: document.querySelector("#localPreprocessPanel"),
@@ -8471,6 +8470,7 @@ function renderReadableExportCanvas(options = {}) {
     stride: state.gridSize,
     fileName: state.fileName,
     dimensionsLabel: gridDimensionsLabel(),
+    totalBeads: totalBeadCount(pattern),
     contrastColor,
   });
 }
@@ -8514,6 +8514,7 @@ function buildVectorPdf(options = {}) {
     guideEvery: state.guideEvery,
     fileName: state.fileName,
     dimensionsLabel: gridDimensionsLabel(),
+    totalBeads: totalBeadCount(pattern),
     paletteSize: palette.length,
     contrastColor,
     hexToRgb,
