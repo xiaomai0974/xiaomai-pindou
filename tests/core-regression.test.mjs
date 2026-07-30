@@ -4,7 +4,9 @@ import test from "node:test";
 import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
+const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
+const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
 
 async function appSource() {
   return readFile(appSourceUrl, "utf8");
@@ -28,6 +30,23 @@ async function historyUtilsContext() {
   return window.XiaomaiHistoryUtils;
 }
 
+async function browserUtilityContext(sourceUrl, exportName, globals = {}) {
+  const source = await readFile(sourceUrl, "utf8");
+  const window = {};
+  const context = {
+    window,
+    Array,
+    Math,
+    Number,
+    Object,
+    Uint8Array,
+    parseInt,
+    ...globals,
+  };
+  vm.runInNewContext(source, context);
+  return window[exportName];
+}
+
 function sourceBetween(source, startMarker, endMarker) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start);
@@ -35,6 +54,44 @@ function sourceBetween(source, startMarker, endMarker) {
   assert.ok(end > start, `Missing source marker: ${endMarker}`);
   return source.slice(start, end);
 }
+
+test("color utilities preserve LAB matching behavior after extraction", async () => {
+  const colorUtils = await browserUtilityContext(colorUtilsSourceUrl, "XiaomaiColorUtils");
+  assert.deepEqual({ ...colorUtils.hexToRgb("#ffffff") }, { r: 255, g: 255, b: 255 });
+  assert.equal(colorUtils.contrastColor({ r: 250, g: 250, b: 250 }), "#111111");
+  assert.equal(colorUtils.contrastColor({ r: 12, g: 12, b: 12 }), "#ffffff");
+  const referenceDeltaE = colorUtils.deltaE2000(
+    { l: 50, a: 2.6772, b: -79.7751 },
+    { l: 50, a: 0, b: -82.7485 },
+  );
+  assert.ok(Math.abs(referenceDeltaE - 2.0425) < 0.0002);
+});
+
+test("project codec preserves grid codes and binary masks after extraction", async () => {
+  const codec = await browserUtilityContext(projectCodecSourceUrl, "XiaomaiProjectCodec");
+  const emptyCell = Object.freeze({ code: "__EMPTY__", empty: true });
+  const palette = new Map([
+    ["H7", { code: "H7", empty: false }],
+    ["F1", { code: "F1", empty: false }],
+  ]);
+  const serialized = codec.serializeGrid([palette.get("H7"), emptyCell, palette.get("F1")]);
+  assert.deepEqual(Array.from(serialized), ["H7", "__EMPTY__", "F1"]);
+
+  const restored = codec.deserializeGrid(serialized, {
+    expectedLength: 4,
+    emptyCell,
+    resolveColor: (code) => palette.get(code),
+    fallbackColor: palette.get("F1"),
+  });
+  assert.deepEqual(
+    Array.from(restored, (item) => item.code),
+    ["H7", "__EMPTY__", "F1", "__EMPTY__"],
+  );
+
+  const mask = codec.arrayToMask([1, 0, 7, 0], 4);
+  assert.deepEqual(Array.from(mask), [1, 0, 1, 0]);
+  assert.deepEqual(Array.from(codec.maskToArray(mask)), [1, 0, 1, 0]);
+});
 
 test("history snapshots compare grid content and editor state", async () => {
   const historyUtils = await historyUtilsContext();
