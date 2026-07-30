@@ -33,6 +33,17 @@ const {
   totalBeadCount: countPatternBeads,
 } = gridUtils;
 
+const editorGeometry = window.XiaomaiEditorGeometry;
+if (!editorGeometry) {
+  throw new Error("编辑器几何模块加载失败，请刷新页面后重试。");
+}
+const {
+  brushCellsForPoint,
+  buildSelectionFromDrag,
+  mirroredIndex,
+  symmetryPointsFor,
+} = editorGeometry;
+
 const imageUtils = window.XiaomaiImageUtils;
 if (!imageUtils) {
   throw new Error("图片工具模块加载失败，请刷新页面后重试。");
@@ -444,6 +455,17 @@ function gridDimensionsLabel() {
 
 function isActiveGridCell(x, y) {
   return x >= 0 && y >= 0 && x < activeGridWidth() && y < activeGridHeight();
+}
+
+function activeEditorGeometryOptions() {
+  return {
+    width: activeGridWidth(),
+    height: activeGridHeight(),
+    stride: state.gridSize,
+    brushSize: state.brushSize,
+    brushShape: state.brushShape,
+    symmetryMode: state.symmetryMode,
+  };
 }
 
 function constrainPatternToCanvas(pattern) {
@@ -6986,7 +7008,7 @@ function brushPreviewCellsForCell(hoverCell) {
   const seen = new Set();
   const cells = [];
   for (const point of previewPoints) {
-    for (const brushCell of brushCellsForPoint(point)) {
+    for (const brushCell of brushCellsForPoint(point, activeEditorGeometryOptions())) {
       const key = `${brushCell.x},${brushCell.y}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -7741,7 +7763,7 @@ function handleCanvasPointerMove(event) {
   const cell = getCellFromPointer(event);
   if (!cell) return;
   state.dragPreview = cell;
-  state.selection = buildSelectionFromDrag(state.dragStartCell, cell, state.activeTool);
+  state.selection = buildSelectionFromDrag(state.dragStartCell, cell, state.activeTool, state.gridSize);
   updateSelectionLabel();
   requestPatternRender();
 }
@@ -7761,7 +7783,7 @@ function handleCanvasPointerUp(event) {
   }
   if (!state.dragStartCell) return;
   const cell = getCellFromPointer(event) || state.dragPreview;
-  state.selection = buildSelectionFromDrag(state.dragStartCell, cell, state.activeTool);
+  state.selection = buildSelectionFromDrag(state.dragStartCell, cell, state.activeTool, state.gridSize);
   state.dragStartCell = null;
   state.dragPreview = null;
   updateSelectionLabel();
@@ -7804,8 +7826,8 @@ function paintBrushCell(cell, snapLine = false) {
   const cells = state.lastBrushCell ? interpolateCells(state.lastBrushCell, targetCell) : [targetCell];
   const dirtyCells = state.selectedCell ? [state.selectedCell] : [];
   for (const point of cells) {
-    for (const symmetricPoint of symmetryPointsFor(point)) {
-      for (const brushCell of brushCellsForPoint(symmetricPoint)) {
+    for (const symmetricPoint of symmetryPointsFor(point, activeEditorGeometryOptions())) {
+      for (const brushCell of brushCellsForPoint(symmetricPoint, activeEditorGeometryOptions())) {
         const index = brushCell.y * state.gridSize + brushCell.x;
         if (state.strokeVisited.has(index) || !canEditCell(index)) continue;
         state.strokeVisited.add(index);
@@ -7831,8 +7853,8 @@ function eraseBrushCell(cell) {
   const cells = state.lastEraseCell ? interpolateCells(state.lastEraseCell, cell) : [cell];
   const dirtyCells = state.selectedCell ? [state.selectedCell] : [];
   for (const point of cells) {
-    for (const symmetricPoint of symmetryPointsFor(point)) {
-      for (const brushCell of brushCellsForPoint(symmetricPoint)) {
+    for (const symmetricPoint of symmetryPointsFor(point, activeEditorGeometryOptions())) {
+      for (const brushCell of brushCellsForPoint(symmetricPoint, activeEditorGeometryOptions())) {
         const index = brushCell.y * state.gridSize + brushCell.x;
         if (state.strokeVisited.has(index) || !canEditCell(index)) continue;
         state.strokeVisited.add(index);
@@ -7890,38 +7912,6 @@ function canEditCell(index) {
   return state.allowEditLockedCells || !isColorLocked(color);
 }
 
-function brushCellsForPoint(point) {
-  const size = Math.max(1, state.brushSize || 1);
-  const radius = Math.floor(size / 2);
-  const cells = [];
-  for (let dy = -radius; dy <= radius; dy += 1) {
-    for (let dx = -radius; dx <= radius; dx += 1) {
-      const x = point.x + dx;
-      const y = point.y + dy;
-      if (!isActiveGridCell(x, y)) continue;
-      if (state.brushShape === "circle" && Math.sqrt(dx * dx + dy * dy) > radius + 0.25) continue;
-      cells.push({ x, y });
-    }
-  }
-  if (!cells.length) cells.push(point);
-  return cells;
-}
-
-function symmetryPointsFor(point) {
-  const points = new Map();
-  const add = (x, y) => {
-    if (!isActiveGridCell(x, y)) return;
-    points.set(`${x}:${y}`, { x, y });
-  };
-  const mirrorX = activeGridWidth() - 1 - point.x;
-  const mirrorY = activeGridHeight() - 1 - point.y;
-  add(point.x, point.y);
-  if (state.symmetryMode === "horizontal" || state.symmetryMode === "both") add(mirrorX, point.y);
-  if (state.symmetryMode === "vertical" || state.symmetryMode === "both") add(point.x, mirrorY);
-  if (state.symmetryMode === "both") add(mirrorX, mirrorY);
-  return [...points.values()];
-}
-
 function symmetryModeHint() {
   const labels = {
     none: "对称绘制已关闭。",
@@ -7930,14 +7920,6 @@ function symmetryModeHint() {
     both: "四向对称已开启：画笔和擦除会同步到四个对称位置。",
   };
   return labels[state.symmetryMode] || labels.none;
-}
-
-function mirroredIndex(index, direction) {
-  const x = index % state.gridSize;
-  const y = Math.floor(index / state.gridSize);
-  const targetX = direction === "horizontal" ? activeGridWidth() - 1 - x : x;
-  const targetY = direction === "vertical" ? activeGridHeight() - 1 - y : y;
-  return targetY * state.gridSize + targetX;
 }
 
 function mirrorPattern(direction) {
@@ -7951,7 +7933,7 @@ function mirrorPattern(direction) {
   for (let y = 0; y < activeGridHeight(); y += 1) {
     for (let x = 0; x < activeGridWidth(); x += 1) {
       const index = y * state.gridSize + x;
-      mirrored[mirroredIndex(index, direction)] = state.pattern[index];
+      mirrored[mirroredIndex(index, direction, activeEditorGeometryOptions())] = state.pattern[index];
     }
   }
   state.pattern = mirrored;
@@ -7960,14 +7942,18 @@ function mirrorPattern(direction) {
     const y = Math.floor(index / state.gridSize);
     return isActiveGridCell(x, y);
   });
-  state.manualEditedCells = new Set(activeIndexes([...state.manualEditedCells]).map((index) => mirroredIndex(index, direction)));
-  state.selection = new Set(activeIndexes([...state.selection]).map((index) => mirroredIndex(index, direction)));
+  state.manualEditedCells = new Set(
+    activeIndexes([...state.manualEditedCells]).map((index) => mirroredIndex(index, direction, activeEditorGeometryOptions())),
+  );
+  state.selection = new Set(
+    activeIndexes([...state.selection]).map((index) => mirroredIndex(index, direction, activeEditorGeometryOptions())),
+  );
   if (state.backgroundMask?.length === mirrored.length) {
     const mask = new Uint8Array(mirrored.length);
     for (let y = 0; y < activeGridHeight(); y += 1) {
       for (let x = 0; x < activeGridWidth(); x += 1) {
         const index = y * state.gridSize + x;
-        mask[mirroredIndex(index, direction)] = state.backgroundMask[index];
+        mask[mirroredIndex(index, direction, activeEditorGeometryOptions())] = state.backgroundMask[index];
       }
     }
     state.backgroundMask = mask;
@@ -7996,7 +7982,7 @@ function drawLineBetweenCells(start, end, color) {
   const visited = new Set();
   const countChanges = [];
   for (const point of interpolateCells(start, end)) {
-    for (const brushCell of brushCellsForPoint(point)) {
+    for (const brushCell of brushCellsForPoint(point, activeEditorGeometryOptions())) {
       const index = brushCell.y * state.gridSize + brushCell.x;
       if (visited.has(index) || !canEditCell(index)) continue;
       const before = state.pattern[index];
@@ -8415,27 +8401,6 @@ function toolHint(tool) {
     sameColor: "同色：点击图纸或右侧色块，选择全部同色格。",
   };
   return hints[tool] || "";
-}
-
-function buildSelectionFromDrag(start, end, tool) {
-  if (!start || !end) return new Set();
-  const selected = new Set();
-  let minX = Math.min(start.x, end.x);
-  let maxX = Math.max(start.x, end.x);
-  let minY = Math.min(start.y, end.y);
-  let maxY = Math.max(start.y, end.y);
-
-  if (tool === "hline") {
-    minY = maxY = start.y;
-  }
-
-  for (let y = minY; y <= maxY; y += 1) {
-    for (let x = minX; x <= maxX; x += 1) {
-      selected.add(y * state.gridSize + x);
-    }
-  }
-
-  return selected;
 }
 
 function finishPenSelection() {

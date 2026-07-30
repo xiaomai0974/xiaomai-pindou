@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
+const editorGeometrySourceUrl = new URL("../public/editor-geometry.js", import.meta.url);
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
@@ -210,6 +211,44 @@ test("grid utilities preserve counts, bounds, lines, and selections after extrac
       { x: 0, y: 2 },
     ]),
     true,
+  );
+});
+
+test("editor geometry preserves brush, symmetry, mirror, and selection behavior", async () => {
+  const geometry = await browserUtilityContext(editorGeometrySourceUrl, "XiaomaiEditorGeometry", { Map, Set });
+  const squareBrush = geometry.brushCellsForPoint(
+    { x: 2, y: 2 },
+    { width: 5, height: 5, brushSize: 3, brushShape: "square" },
+  );
+  assert.equal(squareBrush.length, 9);
+  const circleBrush = geometry.brushCellsForPoint(
+    { x: 2, y: 2 },
+    { width: 5, height: 5, brushSize: 3, brushShape: "circle" },
+  );
+  assert.equal(circleBrush.length, 5);
+  const cornerBrush = geometry.brushCellsForPoint(
+    { x: 0, y: 0 },
+    { width: 5, height: 5, brushSize: 3, brushShape: "square" },
+  );
+  assert.equal(cornerBrush.length, 4);
+
+  const symmetry = geometry.symmetryPointsFor(
+    { x: 0, y: 0 },
+    { width: 4, height: 3, symmetryMode: "both" },
+  );
+  assert.deepEqual(
+    Array.from(symmetry, (point) => `${point.x}:${point.y}`).sort(),
+    ["0:0", "0:2", "3:0", "3:2"],
+  );
+  assert.equal(geometry.mirroredIndex(6, "horizontal", { stride: 5, width: 4, height: 3 }), 7);
+  assert.equal(geometry.mirroredIndex(1, "vertical", { stride: 5, width: 4, height: 3 }), 11);
+  assert.deepEqual(
+    Array.from(geometry.buildSelectionFromDrag({ x: 1, y: 1 }, { x: 2, y: 2 }, "box", 5)),
+    [6, 7, 11, 12],
+  );
+  assert.deepEqual(
+    Array.from(geometry.buildSelectionFromDrag({ x: 1, y: 1 }, { x: 2, y: 2 }, "hline", 5)),
+    [6, 7],
   );
 });
 

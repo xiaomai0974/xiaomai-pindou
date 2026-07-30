@@ -46,6 +46,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /color-utils\.js\?v=20260730-1/);
   assert.match(html, /grid-utils\.js\?v=20260730-1/);
+  assert.match(html, /editor-geometry\.js\?v=20260730-1/);
   assert.match(html, /image-utils\.js\?v=20260730-1/);
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
   assert.match(html, /sampling-utils\.js\?v=20260730-1/);
@@ -54,7 +55,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260730-11/);
+  assert.match(html, /app\.js\?v=20260730-12/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -138,6 +139,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     scriptResponse,
     colorUtilsResponse,
     gridUtilsResponse,
+    editorGeometryResponse,
     imageUtilsResponse,
     preprocessUtilsResponse,
     samplingUtilsResponse,
@@ -152,6 +154,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/app.js"),
       fetchFromWorker("/color-utils.js"),
       fetchFromWorker("/grid-utils.js"),
+      fetchFromWorker("/editor-geometry.js"),
       fetchFromWorker("/image-utils.js"),
       fetchFromWorker("/preprocess-utils.js"),
       fetchFromWorker("/sampling-utils.js"),
@@ -166,6 +169,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(scriptResponse.status, 200);
   assert.equal(colorUtilsResponse.status, 200);
   assert.equal(gridUtilsResponse.status, 200);
+  assert.equal(editorGeometryResponse.status, 200);
   assert.equal(imageUtilsResponse.status, 200);
   assert.equal(preprocessUtilsResponse.status, 200);
   assert.equal(samplingUtilsResponse.status, 200);
@@ -179,6 +183,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const script = await scriptResponse.text();
   const colorUtils = await colorUtilsResponse.text();
   const gridUtils = await gridUtilsResponse.text();
+  const editorGeometry = await editorGeometryResponse.text();
   const imageUtils = await imageUtilsResponse.text();
   const preprocessUtils = await preprocessUtilsResponse.text();
   const samplingUtils = await samplingUtilsResponse.text();
@@ -189,6 +194,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
+  assert.match(script, /const editorGeometry = window\.XiaomaiEditorGeometry/);
   assert.match(script, /const imageUtils = window\.XiaomaiImageUtils/);
   assert.match(script, /const preprocessUtils = window\.XiaomaiPreprocessUtils/);
   assert.match(script, /const samplingUtils = window\.XiaomaiSamplingUtils/);
@@ -198,6 +204,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
   assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
+  assert.match(editorGeometry, /global\.XiaomaiEditorGeometry = Object\.freeze/);
   assert.match(imageUtils, /global\.XiaomaiImageUtils = Object\.freeze/);
   assert.match(preprocessUtils, /global\.XiaomaiPreprocessUtils = Object\.freeze/);
   assert.match(samplingUtils, /global\.XiaomaiSamplingUtils = Object\.freeze/);
@@ -225,6 +232,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /codeVisibilityVersion: 2/);
   assert.match(script, /new Worker\("palette-worker\.js/);
   assert.match(script, /function copySelectionPixels\(\)/);
+  assert.doesNotMatch(script, /function buildSelectionFromDrag\(/);
+  assert.match(editorGeometry, /function buildSelectionFromDrag\(/);
   assert.match(script, /function setupWorkbenchModes\(\)/);
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
   assert.doesNotMatch(script, /setDiagnosticViewMode/);
