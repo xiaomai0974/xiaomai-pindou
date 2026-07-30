@@ -71,9 +71,51 @@
     );
   }
 
+  function estimateHistorySnapshotBytes(snapshot) {
+    if (!snapshot) return 0;
+    if (Array.isArray(snapshot)) {
+      return snapshot.reduce((total, code) => total + String(code || "").length * 2 + 4, 0);
+    }
+
+    let bytes = 96;
+    if (ArrayBuffer.isView(snapshot.codeIndices)) {
+      bytes += snapshot.codeIndices.byteLength;
+    } else {
+      bytes += historySnapshotCodes(snapshot).reduce((total, code) => total + String(code || "").length * 2 + 4, 0);
+    }
+    bytes += (snapshot.codebook || []).reduce((total, code) => total + String(code || "").length * 2 + 4, 0);
+    for (const key of [
+      "manualEditedCells",
+      "lockedColorCodes",
+      "allowedColorCodes",
+      "disabledColorCodes",
+      "projectPaletteCodes",
+    ]) {
+      const values = Array.isArray(snapshot[key]) ? snapshot[key] : [];
+      bytes += values.reduce(
+        (total, value) => total + (typeof value === "number" ? 8 : String(value || "").length * 2 + 4),
+        0,
+      );
+    }
+    return bytes;
+  }
+
+  function trimHistoryStack(stack, options = {}) {
+    if (!Array.isArray(stack)) return [];
+    const maxEntries = Math.max(1, Math.floor(Number(options.maxEntries) || 60));
+    const maxBytes = Math.max(1024, Math.floor(Number(options.maxBytes) || 6 * 1024 * 1024));
+    let totalBytes = stack.reduce((total, snapshot) => total + estimateHistorySnapshotBytes(snapshot), 0);
+    while (stack.length > maxEntries || (stack.length > 1 && totalBytes > maxBytes)) {
+      totalBytes -= estimateHistorySnapshotBytes(stack.shift());
+    }
+    return stack;
+  }
+
   global.XiaomaiHistoryUtils = Object.freeze({
     createHistoryPatternPayload,
+    estimateHistorySnapshotBytes,
     historySnapshotCodes,
     historySnapshotsEqual,
+    trimHistoryStack,
   });
 })(window);

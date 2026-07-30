@@ -2002,6 +2002,8 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
   background: #fff;
   padding: 6px;
   cursor: pointer;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
 }
 
 .palette-row.is-selected {

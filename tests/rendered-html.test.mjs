@@ -44,8 +44,8 @@ test("serves the Xiaomai bead designer homepage", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
-  assert.match(html, /history-utils\.js\?v=20260724-1/);
-  assert.match(html, /app\.js\?v=20260729-1/);
+  assert.match(html, /history-utils\.js\?v=20260730-1/);
+  assert.match(html, /app\.js\?v=20260730-6/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -152,15 +152,24 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /minRegionSize: 2/);
   assert.match(script, /render\.canvas\.partial/);
   assert.match(script, /function drawPatternCellCodes\(dirtyBounds = null\)/);
+  assert.match(script, /function canvasRenderDetail\(internalCellSize\)/);
+  assert.match(script, /detail === "coarse" && index % guide !== 0/);
   assert.match(script, /codeVisibilityVersion: 2/);
   assert.match(script, /new Worker\("palette-worker\.js/);
   assert.match(script, /function copySelectionPixels\(\)/);
   assert.match(script, /function setupWorkbenchModes\(\)/);
   assert.match(script, /function setWorkbenchMode\(mode, options = \{\}\)/);
   assert.doesNotMatch(script, /setDiagnosticViewMode/);
-  assert.match(script, /function renderToolColorPalette\(\)/);
+  assert.match(script, /function renderToolColorPalette\(sourceRows = null\)/);
   assert.match(script, /function toolPaletteRows\(\)/);
   assert.match(script, /toolPaletteSearch: ""/);
+  assert.match(script, /const paletteColorByCodeMap = new Map/);
+  assert.match(script, /const paletteSearchTextByCode = new Map/);
+  assert.match(script, /function schedulePalettePanelRender\(\)/);
+  assert.match(script, /function scheduleToolPaletteRender\(\)/);
+  assert.match(script, /function finishContinuousStroke\(tool\)/);
+  assert.doesNotMatch(script, /addEventListener\("mousemove", handleCanvasMove\)/);
+  assert.match(script, /if \(!state\.dragStartCell\) \{\s*handleCanvasMove\(event\);/);
   assert.match(script, /function confirmPendingPreview\(\)/);
   assert.match(script, /function discardPendingPreview\(\)/);
   assert.match(script, /function clearPreviewState\(options = \{\}\)/);
@@ -210,6 +219,36 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /async function buildRawDiagnosticReference[\s\S]*?buildPixelSamples\(state\.image, size\)/);
   assert.match(script, /const transparent = state\.removeTransparent && alpha < 0\.08/);
   assert.match(script, /function currentExportSnapshot\(/);
+  assert.match(script, /rawDebugCandidates = new Array\(pixels\.length\)/);
+  assert.match(script, /function releaseCanvasMemory\(canvas\)/);
+  assert.match(script, /function canvasToBlob\(canvas, type = "image\/png", quality\)/);
+  assert.match(script, /await downloadCanvas\(readableCanvas/);
+  assert.match(script, /function setExportBusy\(isBusy\)/);
+  assert.doesNotMatch(script, /link\.href = canvas\.toDataURL\("image\/png"\)/);
+  assert.match(script, /autosaveInFlight: false/);
+  assert.match(script, /lastAutosavedRevision: -1/);
+  assert.match(script, /if \(state\.autosaveInFlight\) \{\s*state\.autosaveQueued = true;/);
+  assert.match(script, /if \(state\.lastAutosavedRevision === state\.projectRevision\) return;/);
+  assert.match(script, /function markProjectSaved\(status = "已保存", savedRevision = state\.projectRevision\)/);
+  assert.match(script, /if \(state\.projectRevision === savedRevision\)/);
+  assert.match(script, /const NEAREST_COLOR_CACHE_LIMIT = 12000/);
+  assert.match(script, /const NEAREST_CANDIDATE_CACHE_LIMIT = 3000/);
+  assert.match(script, /function boundedCacheGet\(cache, key\)/);
+  assert.match(script, /function boundedCacheSet\(cache, key, value, limit\)/);
+  assert.match(script, /function cancelPendingPaletteWorkerRequests\(/);
+  assert.match(script, /if \(error\?\.name === "AbortError"\) throw error/);
+  assert.match(script, /function invalidateImageProcessingState\(\)/);
+  assert.match(script, /const requestVersion = \+\+previewUpdateVersion;\s*cancelPendingPaletteWorkerRequests\(\);/);
+  assert.match(script, /const gridLinePathCache = \{/);
+  assert.match(script, /function applyCountChanges\(counts, changes\)/);
+  assert.match(script, /function scheduleQualityMetricsRefresh\(\)/);
+  assert.match(script, /if \(!dirtyBounds && typeof Path2D === "function"\)/);
+  assert.match(script, /function patchPaletteRowsInPlace\(listRows, total\)/);
+  assert.match(script, /function cancelScheduledUiWork\(\)/);
+  assert.match(script, /function clearReferenceSampler\(\)/);
+  assert.match(script, /autosaveSessionVersion: 0/);
+  assert.doesNotMatch(script, /nearestColorCache\.size > 50000/);
+  assert.doesNotMatch(script, /nearestCandidateCache\.size > 50000/);
   assert.match(script, /maxColors is a user-facing[\s\S]*?while \(counts\.size > maxColors && guard < 1000\)/);
   assert.match(
     script,
@@ -221,10 +260,17 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.doesNotMatch(script, /\/XObject << \/Im1/);
   assert.match(script, /addEventListener\("pointercancel", handleCanvasPointerUp\)/);
   assert.match(script, /function commitStrokeHistory\(/);
-  assert.match(script, /const \{ createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual \} = historyUtils/);
+  assert.match(
+    script,
+    /const \{ createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual, trimHistoryStack \} = historyUtils/,
+  );
   assert.match(historyUtils, /function historySnapshotsEqual\(/);
+  assert.match(historyUtils, /function estimateHistorySnapshotBytes\(/);
+  assert.match(historyUtils, /function trimHistoryStack\(/);
   assert.match(historyUtils, /global\.XiaomaiHistoryUtils = Object\.freeze/);
   assert.match(script, /function pushHistory\(snapshot = snapshotPattern\(\)\)/);
+  assert.match(script, /function historyEntryLimit\(\)/);
+  assert.match(script, /trimEditorHistory\(state\.redoStack\)/);
   assert.match(script, /while \(state\.undoStack\.length && historySnapshotsEqual/);
   assert.match(script, /exportPatternPdf\(\{ includeWatermark, \.\.\.snapshot \}\)/);
   const exportSnapshotSource = script.slice(script.indexOf("function currentExportSnapshot"), script.indexOf("function renderPatternNow"));
@@ -237,7 +283,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(pdfSource, /const item = pattern\[y \* stride \+ x\]/);
   assert.doesNotMatch(pdfSource, /state\.pattern\[y \* stride \+ x\]/);
   assert.match(script, /state\.fitMode === "center"/);
-  assert.match(script, /const codesVisibleBefore/);
+  assert.match(script, /const renderDetailBefore/);
   assert.doesNotMatch(script, /function openAutosaveDb\(/);
   assert.match(await workerResponse.text(), /function mapPaletteIndices\(/);
   const style = await styleResponse.text();
@@ -245,6 +291,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(style, /\.workbench-mode-header/);
   assert.match(style, /\.pending-preview-bar/);
   assert.match(style, /body\[data-workbench-mode="edit"\]/);
+  assert.match(style, /content-visibility: auto/);
 });
 
 test("palette worker maps colors and preserves empty cells", async () => {

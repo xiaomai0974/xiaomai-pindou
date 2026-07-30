@@ -90,11 +90,18 @@ const palette = paletteSource.slice(0, PALETTE_LIMIT).map((entry) => {
   };
 });
 const paletteIndexByCode = new Map(palette.map((item, index) => [item.code, index]));
+const paletteColorByCodeMap = new Map(palette.map((item) => [item.code, item]));
+const paletteSearchTextByCode = new Map(
+  palette.map((item) => [item.code, `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase()]),
+);
 const historyUtils = window.XiaomaiHistoryUtils;
 if (!historyUtils) {
   throw new Error("撤回历史工具加载失败，请刷新页面后重试。");
 }
-const { createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual } = historyUtils;
+const { createHistoryPatternPayload, historySnapshotCodes, historySnapshotsEqual, trimHistoryStack } = historyUtils;
+const HISTORY_MEMORY_BUDGET = 6 * 1024 * 1024;
+const NEAREST_COLOR_CACHE_LIMIT = 12000;
+const NEAREST_CANDIDATE_CACHE_LIMIT = 3000;
 
 const nearestColorCache = new Map();
 const nearestCandidateCache = new Map();
@@ -292,12 +299,18 @@ const state = {
   projectRestoring: false,
   autosaveTimer: null,
   autosaveStatusTimer: null,
+  autosaveInFlight: false,
+  autosaveQueued: false,
+  autosaveSessionVersion: 0,
+  projectRevision: 0,
+  lastAutosavedRevision: -1,
   suspendHistory: false,
   selectedColor: null,
   selectedCell: null,
   toolboxDrag: null,
   toolboxMoveActive: false,
   toolboxLocked: false,
+  exportInProgress: false,
   exportWatermarkEnabled: true,
   pendingOptimizePlans: [],
 };
@@ -499,6 +512,11 @@ const renderCache = {
   constraintSignature: null,
   toolPaletteSignature: null,
 };
+const gridLinePathCache = {
+  signature: null,
+  minor: null,
+  guide: null,
+};
 const plotMetricsCache = {
   signature: null,
   value: null,
@@ -512,6 +530,12 @@ let paletteWorkerDisabled = false;
 let paletteWorkerRequestId = 0;
 let previewUpdateVersion = 0;
 let colorLimitPreviewTimer = null;
+let palettePanelRenderFrameId = null;
+let toolPaletteRenderFrameId = null;
+let qualityMetricsRefreshHandle = null;
+let autosaveIntervalId = null;
+let autosaveRecoveryTimer = null;
+let copyListResetTimer = null;
 const pendingPaletteWorkerRequests = new Map();
 
 function performanceNow() {
@@ -544,6 +568,93 @@ function measurePerformance(name, action) {
   } finally {
     recordPerformance(name, performanceNow() - startedAt);
   }
+}
+
+function boundedCacheGet(cache, key) {
+  if (!cache.has(key)) return undefined;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function boundedCacheSet(cache, key, value, limit) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > limit) {
+    cache.delete(cache.keys().next().value);
+  }
+  return value;
+}
+
+function schedulePalettePanelRender() {
+  if (palettePanelRenderFrameId !== null) return;
+  palettePanelRenderFrameId = window.requestAnimationFrame(() => {
+    palettePanelRenderFrameId = null;
+    renderConstraintPalette();
+    renderStats();
+  });
+}
+
+function scheduleToolPaletteRender() {
+  if (toolPaletteRenderFrameId !== null) return;
+  toolPaletteRenderFrameId = window.requestAnimationFrame(() => {
+    toolPaletteRenderFrameId = null;
+    renderToolColorPalette();
+  });
+}
+
+function cancelQualityMetricsRefresh() {
+  if (!qualityMetricsRefreshHandle) return;
+  if (qualityMetricsRefreshHandle.kind === "idle") {
+    window.cancelIdleCallback?.(qualityMetricsRefreshHandle.id);
+  } else {
+    window.clearTimeout(qualityMetricsRefreshHandle.id);
+  }
+  qualityMetricsRefreshHandle = null;
+}
+
+function scheduleQualityMetricsRefresh() {
+  cancelQualityMetricsRefresh();
+  const expectedGridVersion = state.editGridVersion;
+  const refresh = () => {
+    qualityMetricsRefreshHandle = null;
+    if (state.isPreviewDirty || expectedGridVersion !== state.editGridVersion || !state.pattern.length) return;
+    state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    qualityMetricsRefreshHandle = {
+      kind: "idle",
+      id: window.requestIdleCallback(refresh, { timeout: 500 }),
+    };
+  } else {
+    qualityMetricsRefreshHandle = {
+      kind: "timeout",
+      id: window.setTimeout(refresh, 80),
+    };
+  }
+}
+
+function cancelScheduledUiWork() {
+  window.clearTimeout(colorLimitPreviewTimer);
+  colorLimitPreviewTimer = null;
+  window.clearTimeout(state.autosaveTimer);
+  state.autosaveTimer = null;
+  window.clearTimeout(state.autosaveStatusTimer);
+  state.autosaveStatusTimer = null;
+  window.clearTimeout(autosaveRecoveryTimer);
+  autosaveRecoveryTimer = null;
+  window.clearTimeout(copyListResetTimer);
+  copyListResetTimer = null;
+  if (palettePanelRenderFrameId !== null) window.cancelAnimationFrame(palettePanelRenderFrameId);
+  if (toolPaletteRenderFrameId !== null) window.cancelAnimationFrame(toolPaletteRenderFrameId);
+  if (state.renderFrameId !== null) window.cancelAnimationFrame(state.renderFrameId);
+  palettePanelRenderFrameId = null;
+  toolPaletteRenderFrameId = null;
+  state.renderFrameId = null;
+  pendingPatternRenderBounds = null;
+  pendingFullPatternRender = false;
+  cancelQualityMetricsRefresh();
 }
 
 function performanceSummary() {
@@ -772,13 +883,13 @@ function isColorLocked(colorOrCode) {
 }
 
 function paletteColorByCode(code) {
-  return palette.find((item) => item.code === code);
+  return paletteColorByCodeMap.get(code);
 }
 
 function searchMatchedPaletteColors() {
   if (!state.paletteSearch) return [];
   const query = state.paletteSearch.toLowerCase();
-  return palette.filter((item) => `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query));
+  return palette.filter((item) => paletteSearchTextByCode.get(item.code).includes(query));
 }
 
 function addVisiblePaletteColor(map, color) {
@@ -928,7 +1039,8 @@ function nearestPaletteColor(color, sourcePalette = activePalette()) {
   if (color.empty) return color;
   const paletteKey = paletteSignature(sourcePalette);
   const cacheKey = `${paletteKey}:${Math.round(color.r ?? color.rgb?.r ?? 0)},${Math.round(color.g ?? color.rgb?.g ?? 0)},${Math.round(color.b ?? color.rgb?.b ?? 0)}:${color.code || ""}`;
-  if (nearestColorCache.has(cacheKey)) return nearestColorCache.get(cacheKey);
+  const cached = boundedCacheGet(nearestColorCache, cacheKey);
+  if (cached) return cached;
 
   let best = sourcePalette[0];
   let bestDistance = Infinity;
@@ -942,16 +1054,14 @@ function nearestPaletteColor(color, sourcePalette = activePalette()) {
     }
   }
 
-  if (nearestColorCache.size > 50000) nearestColorCache.clear();
-  nearestColorCache.set(cacheKey, best);
-  return best;
+  return boundedCacheSet(nearestColorCache, cacheKey, best, NEAREST_COLOR_CACHE_LIMIT);
 }
 
 function nearestPaletteCandidates(color, sourcePalette = palette, limit = 5) {
   if (!color || color.empty) return [];
   const paletteKey = paletteSignature(sourcePalette);
   const cacheKey = `${paletteKey}:${Math.round(color.r ?? color.rgb?.r ?? 0)},${Math.round(color.g ?? color.rgb?.g ?? 0)},${Math.round(color.b ?? color.rgb?.b ?? 0)}`;
-  const cached = nearestCandidateCache.get(cacheKey);
+  const cached = boundedCacheGet(nearestCandidateCache, cacheKey);
   if (cached?.length >= limit) return cached.slice(0, limit);
   const sourceLab = color.lab || rgbToLab(color);
   const cachedLimit = Math.max(5, limit);
@@ -959,8 +1069,7 @@ function nearestPaletteCandidates(color, sourcePalette = palette, limit = 5) {
     .map((item) => ({ ...item, deltaE: deltaE2000(sourceLab, item.lab || rgbToLab(item.rgb)) }))
     .sort((a, b) => a.deltaE - b.deltaE)
     .slice(0, cachedLimit);
-  if (nearestCandidateCache.size > 50000) nearestCandidateCache.clear();
-  nearestCandidateCache.set(cacheKey, candidates);
+  boundedCacheSet(nearestCandidateCache, cacheKey, candidates, NEAREST_CANDIDATE_CACHE_LIMIT);
   return candidates.slice(0, limit);
 }
 
@@ -978,6 +1087,7 @@ async function mapSamplesToPaletteAsync(pixels, size, sourcePalette, allowDither
       paletteIndex < 0 ? pixels[pixelIndex] : sourcePalette[paletteIndex] || nearestPaletteColor(pixels[pixelIndex], sourcePalette),
     );
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     recordPerformance("pipeline.paletteMapFallback", performanceNow() - startedAt);
     console.warn("色板后台计算不可用，已切回兼容模式。", error);
     return mapSamplesToPalette(pixels, size, sourcePalette, allowDither);
@@ -1043,6 +1153,19 @@ function handlePaletteWorkerError(event) {
   pendingPaletteWorkerRequests.clear();
 }
 
+function cancelPendingPaletteWorkerRequests(message = "已取消过期颜色匹配") {
+  if (!pendingPaletteWorkerRequests.size) return;
+  const error = new Error(message);
+  error.name = "AbortError";
+  paletteWorker?.terminate();
+  paletteWorker = null;
+  for (const pending of pendingPaletteWorkerRequests.values()) {
+    window.clearTimeout(pending.timeoutId);
+    pending.reject(error);
+  }
+  pendingPaletteWorkerRequests.clear();
+}
+
 function mapSamplesToPaletteNow(pixels, size, sourcePalette, allowDither = true) {
   const pattern = new Array(size * size);
   if (allowDither && state.dither && state.patternMode !== "pixelPattern") {
@@ -1076,7 +1199,7 @@ function mapSamplesToPaletteNow(pixels, size, sourcePalette, allowDither = true)
 function recordColorDiagnostics(pixels, rawPattern, currentPattern, changedBy = "postProcess") {
   state.rawSampleData = pixels;
   state.rawMappedGrid = [...rawPattern];
-  state.rawDebugCandidates = pixels.map((pixel) => nearestPaletteCandidates(pixel, palette, 5));
+  state.rawDebugCandidates = new Array(pixels.length);
   state.colorTrace = rawPattern.map((rawColor, index) => {
     const currentColor = currentPattern[index] || rawColor;
     return {
@@ -1382,7 +1505,7 @@ function setupEvents() {
     elements.referenceOpacityProxyLabel.textContent = `${elements.referenceOpacity.value}%`;
     updateReferenceMenuState();
     renderReferenceFloatPanel();
-    renderPattern();
+    requestPatternRender();
   });
   elements.referenceMenuButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1473,7 +1596,7 @@ function setupEvents() {
   elements.traceReferenceOpacity.addEventListener("input", () => {
     state.traceReference.opacity = Number(elements.traceReferenceOpacity.value) / 100;
     syncTraceReferenceControls();
-    renderPattern();
+    requestPatternRender();
   });
   elements.traceReferenceZoomOutButton.addEventListener("click", () => setTraceReferenceScale(state.traceReference.scale / 1.12));
   elements.traceReferenceZoomInButton.addEventListener("click", () => setTraceReferenceScale(state.traceReference.scale * 1.12));
@@ -1513,12 +1636,11 @@ function setupEvents() {
   });
   elements.paletteSearchInput.addEventListener("input", () => {
     state.paletteSearch = elements.paletteSearchInput.value.trim().toLowerCase();
-    renderConstraintPalette();
-    renderStats();
+    schedulePalettePanelRender();
   });
   elements.toolColorSearchInput?.addEventListener("input", () => {
     state.toolPaletteSearch = elements.toolColorSearchInput.value.trim().toLowerCase();
-    renderToolColorPalette();
+    scheduleToolPaletteRender();
   });
   elements.toolPaletteAllButton?.addEventListener("click", () => {
     state.toolPaletteShowAll = !state.toolPaletteShowAll;
@@ -1579,7 +1701,6 @@ function setupEvents() {
     if (state.activeTool === "eraser") eraseCurrentSelection();
   });
   elements.patternCanvas.addEventListener("click", handleCanvasClick);
-  elements.patternCanvas.addEventListener("mousemove", handleCanvasMove);
   window.addEventListener("keydown", handleKeyboardShortcuts);
   window.addEventListener("keyup", handleKeyboardKeyUp);
   window.addEventListener("beforeunload", handleBeforeUnload);
@@ -1660,9 +1781,11 @@ function setupEvents() {
     });
   });
 
-  window.setInterval(() => {
-    if (state.projectDirty) scheduleProjectAutoSave(0);
-  }, 30000);
+  if (autosaveIntervalId === null) {
+    autosaveIntervalId = window.setInterval(() => {
+      if (state.projectDirty) scheduleProjectAutoSave(0);
+    }, 30000);
+  }
 }
 
 function setupProjectDirtyTracking() {
@@ -2428,7 +2551,19 @@ function closeLocalPreprocessPanel() {
   elements.localPreprocessMenuButton.setAttribute("aria-expanded", "false");
 }
 
+function invalidateImageProcessingState() {
+  previewUpdateVersion += 1;
+  cancelPendingPaletteWorkerRequests();
+  cancelScheduledUiWork();
+  clearReferenceSampler();
+  nearestColorCache.clear();
+  nearestCandidateCache.clear();
+  clearColorDiagnostics();
+  invalidateOptimizedBaseImage();
+}
+
 function invalidateOptimizedBaseImage() {
+  releaseCanvasMemory(state.optimizedBaseImage);
   state.optimizedBaseImage = null;
   state.optimizedBaseImageSignature = "";
 }
@@ -2526,9 +2661,18 @@ function serializableTraceReference() {
 function buildProjectData() {
   const now = new Date().toISOString();
   if (!state.projectCreatedAt) state.projectCreatedAt = now;
-  const sourceImageData = state.image ? imageToDataUrl(state.image, 2200) : state.sourceImageState?.croppedImageData || "";
+  const storedSourceImageData =
+    state.sourceImageState?.croppedImageData || state.sourceImageState?.originalImageData || "";
+  const sourceImageData = storedSourceImageData || (state.image ? imageToDataUrl(state.image, 2200) : "");
+  if (sourceImageData && state.sourceImageState && !storedSourceImageData) {
+    state.sourceImageState.croppedImageData = sourceImageData;
+  }
+  const croppedImageData = state.sourceImageState?.croppedImageData || sourceImageData;
+  const storedOriginalImageData = state.sourceImageState?.originalImageData || "";
+  const originalImageData = storedOriginalImageData === croppedImageData ? "" : storedOriginalImageData;
   const referenceImageData = state.referenceImageUrl || (state.referenceImage ? imageToDataUrl(state.referenceImage, 2200) : "");
-  const usedColors = [...buildCounts(state.pattern).values()].map((item) => ({
+  if (referenceImageData && !state.referenceImageUrl) state.referenceImageUrl = referenceImageData;
+  const usedColors = [...state.counts.values()].map((item) => ({
     code: item.code,
     name: item.name,
     hex: item.hex,
@@ -2552,8 +2696,8 @@ function buildProjectData() {
     },
     sourceImageState: {
       ...(state.sourceImageState || {}),
-      originalImageData: state.sourceImageState?.originalImageData || sourceImageData,
-      croppedImageData: state.sourceImageState?.croppedImageData || sourceImageData,
+      originalImageData,
+      croppedImageData,
       useCroppedImage: Boolean(sourceImageData),
     },
     gridState: {
@@ -2625,7 +2769,7 @@ function buildProjectData() {
       panel: serializableReferencePanel(),
     },
     canvasReferenceLayerState: {
-      imageData: referenceImageData,
+      imageData: "",
       ...serializableTraceReference(),
     },
     drawModeState: {
@@ -2648,7 +2792,8 @@ function downloadBlob(blob, fileName) {
   link.download = fileName;
   link.href = url;
   link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 800);
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 function hasMeaningfulProject() {
@@ -2681,12 +2826,13 @@ async function requestPersistentStorage() {
 
 async function saveProjectFile() {
   try {
+    const savedRevision = state.projectRevision;
     const projectData = buildProjectData();
     await saveLibraryProject(projectData);
     await writeAutosaveProject(projectData, { dirty: false });
     await requestPersistentStorage();
     downloadProjectData(projectData);
-    markProjectSaved("已下载并保存到图纸库");
+    markProjectSaved("已下载并保存到图纸库", savedRevision);
     await renderProjectLibrary();
   } catch (error) {
     console.error("保存项目失败", error);
@@ -2735,6 +2881,8 @@ async function restoreProjectData(projectData, options = {}) {
 
   state.projectRestoring = true;
   try {
+    state.autosaveSessionVersion += 1;
+    invalidateImageProcessingState();
     const canvas = projectData.canvas || {};
     const gridState = projectData.gridState || {};
     const paletteState = projectData.paletteState || {};
@@ -2770,12 +2918,6 @@ async function restoreProjectData(projectData, options = {}) {
     const expectedGridLength = state.gridSize * state.gridSize;
     state.pattern = deserializeGrid(gridState.editGrid, expectedGridLength);
     state.previewPattern = deserializeGrid(gridState.previewGrid, expectedGridLength);
-    state.rawMappedGrid = [];
-    state.rawSampleData = [];
-    state.rawDiagnosticSignature = "";
-    state.rawDebugCandidates = [];
-    state.colorTrace = [];
-    state.colorMatchMetrics = null;
     state.backgroundMask = arrayToMask(gridState.backgroundMask, state.pattern.length);
     state.previewBackgroundMask = arrayToMask(gridState.previewBackgroundMask, state.previewPattern.length);
     state.isPreviewDirty = Boolean(gridState.isPreviewDirty && state.previewPattern.length);
@@ -2826,9 +2968,6 @@ async function restoreProjectData(projectData, options = {}) {
     state.minRegionSize = Number(settings.minRegionSize || state.minRegionSize || 4);
     if (state.processingProfile === "photoColor" && state.minRegionSize > 3) state.minRegionSize = 2;
     state.accurateMatch = Boolean(settings.accurateMatch);
-    state.optimizedBaseImage = null;
-    state.optimizedBaseImageSignature = "";
-
     state.showCellCodes = Number(display.codeVisibilityVersion || 0) >= 2 ? display.showColorCode !== false : true;
     state.showCoordinates = display.showCoordinates !== false;
     state.guideEvery = Number(display.guideEvery || (display.showFiveGridLines === false ? 10 : 5));
@@ -2919,30 +3058,54 @@ function updateProjectSaveStatus(text) {
 
 function markProjectDirty(status = "未保存") {
   if (state.projectRestoring) return;
+  state.projectRevision += 1;
   state.projectDirty = true;
   updateProjectSaveStatus(status);
   scheduleProjectAutoSave();
 }
 
-function markProjectSaved(status = "已保存") {
-  state.projectDirty = false;
+function markProjectSaved(status = "已保存", savedRevision = state.projectRevision) {
+  state.lastAutosavedRevision = savedRevision;
   state.projectSavedAt = new Date().toISOString();
-  updateProjectSaveStatus(status);
+  if (state.projectRevision === savedRevision) {
+    state.projectDirty = false;
+    updateProjectSaveStatus(status);
+    return;
+  }
+  state.projectDirty = true;
+  updateProjectSaveStatus(`${status} / 仍有新修改`);
+  scheduleProjectAutoSave(250);
 }
 
 function scheduleProjectAutoSave(delay = 2000) {
   if (state.projectRestoring) return;
   window.clearTimeout(state.autosaveTimer);
-  state.autosaveTimer = window.setTimeout(autoSaveProject, delay);
+  state.autosaveTimer = window.setTimeout(() => {
+    state.autosaveTimer = null;
+    autoSaveProject();
+  }, delay);
 }
 
 async function autoSaveProject() {
   if (state.projectRestoring) return;
   if (!hasMeaningfulProject()) return;
+  if (state.autosaveInFlight) {
+    state.autosaveQueued = true;
+    return;
+  }
+  if (state.lastAutosavedRevision === state.projectRevision) return;
+  const revision = state.projectRevision;
+  const sessionVersion = state.autosaveSessionVersion || 0;
+  let saved = false;
+  state.autosaveInFlight = true;
+  state.autosaveQueued = false;
   try {
     updateProjectSaveStatus("自动保存中");
     const projectData = buildProjectData();
     await writeAutosaveProject(projectData, { dirty: state.projectDirty });
+    if ((state.autosaveSessionVersion || 0) !== sessionVersion) return;
+    state.lastAutosavedRevision = revision;
+    saved = true;
     updateProjectSaveStatus(state.projectDirty ? "自动保存成功 / 未保存" : "已保存");
     window.clearTimeout(state.autosaveStatusTimer);
     state.autosaveStatusTimer = window.setTimeout(() => {
@@ -2951,6 +3114,19 @@ async function autoSaveProject() {
   } catch (error) {
     console.error("自动保存失败", error);
     updateProjectSaveStatus("自动保存失败");
+  } finally {
+    state.autosaveInFlight = false;
+    if ((state.autosaveSessionVersion || 0) !== sessionVersion) {
+      if (state.autosaveQueued || state.projectDirty) {
+        state.autosaveQueued = false;
+        scheduleProjectAutoSave(250);
+      }
+      return;
+    }
+    if (state.autosaveQueued || state.projectRevision !== revision) {
+      state.autosaveQueued = false;
+      scheduleProjectAutoSave(saved ? 250 : 2000);
+    }
   }
 }
 
@@ -3095,7 +3271,9 @@ function createProjectThumbnail() {
   thumbnailCtx.fillStyle = "#111";
   thumbnailCtx.font = "700 12px Microsoft YaHei, sans-serif";
   thumbnailCtx.fillText(state.fileName || "未命名图纸", 12, 16);
-  return canvas.toDataURL("image/webp", 0.82);
+  const thumbnail = canvas.toDataURL("image/webp", 0.82);
+  releaseCanvasMemory(canvas);
+  return thumbnail;
 }
 
 async function saveLibraryProject(projectData = buildProjectData()) {
@@ -3238,11 +3416,12 @@ async function renderProjectLibrary() {
 
 async function saveCurrentProjectToLibrary() {
   try {
+    const savedRevision = state.projectRevision;
     const projectData = buildProjectData();
     await saveLibraryProject(projectData);
     await writeAutosaveProject(projectData, { dirty: false });
     await requestPersistentStorage();
-    markProjectSaved("已保存到图纸库");
+    markProjectSaved("已保存到图纸库", savedRevision);
     elements.cellInfo.textContent = "当前图纸已保存到“我做过的图纸”，以后可直接打开。";
     await renderProjectLibrary();
   } catch (error) {
@@ -3401,6 +3580,8 @@ function openCurrentImageCropper() {
 
 function acceptSourceImage(image, file, cropInfo = {}) {
   try {
+    state.autosaveSessionVersion += 1;
+    invalidateImageProcessingState();
     if (state.appMode === "draw") {
       state.referenceImage = image;
       state.referenceImageUrl = imageToDataUrl(image);
@@ -3454,8 +3635,6 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.pattern = [];
     clearPreviewState();
     state.backgroundMask = null;
-    clearColorDiagnostics();
-    invalidateOptimizedBaseImage();
     state.hasConfirmedGrid = false;
     state.editGridVersion = 0;
     state.previewGridVersion = 0;
@@ -3702,7 +3881,9 @@ function confirmCrop() {
     cropState.image = null;
     cropState.file = null;
   };
-  croppedImage.src = canvas.toDataURL("image/png");
+  const croppedDataUrl = canvas.toDataURL("image/png");
+  releaseCanvasMemory(canvas);
+  croppedImage.src = croppedDataUrl;
 }
 
 function skipCrop() {
@@ -3769,7 +3950,24 @@ function imageToDataUrl(image, maxSize = 1600) {
   canvas.height = height;
   const canvasCtx = canvas.getContext("2d");
   canvasCtx.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL("image/png");
+  const dataUrl = canvas.toDataURL("image/png");
+  releaseCanvasMemory(canvas);
+  return dataUrl;
+}
+
+function releaseCanvasMemory(canvas) {
+  if (!canvas || canvas === elements.patternCanvas || canvas === elements.cropCanvas) return;
+  canvas.width = 1;
+  canvas.height = 1;
+}
+
+function clearReferenceSampler() {
+  releaseCanvasMemory(state.referenceSampler?.canvas);
+  state.referenceSampler = {
+    image: null,
+    canvas: null,
+    context: null,
+  };
 }
 
 function toggleReferenceMenu() {
@@ -3816,6 +4014,7 @@ function updateReferenceMenuState() {
 }
 
 function clearReferenceImage() {
+  clearReferenceSampler();
   state.referenceImage = null;
   state.referenceImageUrl = "";
   state.referenceName = "";
@@ -4739,6 +4938,7 @@ function renderPendingPreview() {
 
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
   const requestVersion = ++previewUpdateVersion;
+  cancelPendingPaletteWorkerRequests();
   setPatternProcessingBusy(true);
   try {
     let result = null;
@@ -4918,6 +5118,7 @@ function buildPixelSamplesNow(image, size) {
     }
   }
 
+  releaseCanvasMemory(sourceCanvas);
   return pixels;
 }
 
@@ -6944,6 +7145,26 @@ function buildCounts(pattern) {
   return counts;
 }
 
+function applyCountChanges(counts, changes) {
+  const nextCounts = counts instanceof Map ? counts : new Map();
+  for (const change of changes) {
+    const before = change?.before;
+    const after = change?.after;
+    if (samePatternColor(before, after)) continue;
+    if (before && !before.empty) {
+      const current = nextCounts.get(before.code);
+      if (current?.count > 1) current.count -= 1;
+      else nextCounts.delete(before.code);
+    }
+    if (after && !after.empty) {
+      const current = nextCounts.get(after.code);
+      if (current) current.count += 1;
+      else nextCounts.set(after.code, { ...after, count: 1 });
+    }
+  }
+  return nextCounts;
+}
+
 function displayPattern() {
   if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   return state.pattern;
@@ -7291,10 +7512,22 @@ function drawPatternCellCodes(dirtyBounds = null) {
 }
 
 function cellCodesFitCurrentZoom(internalCellSize) {
+  return canvasRenderDetail(internalCellSize) === "full";
+}
+
+function cssCellSizeAtCurrentZoom(internalCellSize) {
   const rect = elements.patternCanvas.getBoundingClientRect();
-  if (!rect.width || !elements.patternCanvas.width) return true;
-  const cssCellSize = internalCellSize * (rect.width / elements.patternCanvas.width);
-  return cssCellSize >= 8;
+  const fallbackWidth = baseCanvasCssSize().width * state.zoom;
+  const cssCanvasWidth = rect.width || fallbackWidth;
+  if (!cssCanvasWidth || !elements.patternCanvas.width) return internalCellSize;
+  return internalCellSize * (cssCanvasWidth / elements.patternCanvas.width);
+}
+
+function canvasRenderDetail(internalCellSize) {
+  const cssCellSize = cssCellSizeAtCurrentZoom(internalCellSize);
+  if (cssCellSize < 3.5) return "coarse";
+  if (cssCellSize < 8) return "grid";
+  return "full";
 }
 
 function drawReferenceLayer() {
@@ -7436,7 +7669,7 @@ function setTraceReferenceScale(value, anchorCell = null) {
     trace.y = Math.round(trace.y);
   }
   syncTraceReferenceControls();
-  renderPattern();
+  requestPatternRender();
   markProjectDirty();
 }
 
@@ -7449,16 +7682,62 @@ function drawGridLines(dirtyBounds = null) {
   const plot = activePlotMetrics();
   const cell = plot.cell;
   const bounds = dirtyBounds || { minX: 0, minY: 0, maxX: plot.widthCells - 1, maxY: plot.heightCells - 1 };
+  const detail = canvasRenderDetail(cell);
+  const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
 
   ctx.save();
   ctx.strokeStyle = "#222";
   ctx.lineWidth = 1.4;
   ctx.strokeRect(plot.gridX, plot.gridY, plot.gridWidth, plot.gridHeight);
 
+  if (!dirtyBounds && typeof Path2D === "function") {
+    const signature = [
+      state.editorView,
+      plot.gridX,
+      plot.gridY,
+      plot.gridWidth,
+      plot.gridHeight,
+      plot.widthCells,
+      plot.heightCells,
+      cell,
+      detail,
+      guide,
+    ].join(":");
+    if (gridLinePathCache.signature !== signature) {
+      const minor = new Path2D();
+      const guideLines = new Path2D();
+      for (let index = 0; index <= plot.widthCells; index += 1) {
+        if (detail === "coarse" && index % guide !== 0) continue;
+        const path = index % guide === 0 ? guideLines : minor;
+        const vertical = plot.gridX + index * cell;
+        path.moveTo(vertical, plot.gridY);
+        path.lineTo(vertical, plot.gridY + plot.gridHeight);
+      }
+      for (let index = 0; index <= plot.heightCells; index += 1) {
+        if (detail === "coarse" && index % guide !== 0) continue;
+        const path = index % guide === 0 ? guideLines : minor;
+        const horizontal = plot.gridY + index * cell;
+        path.moveTo(plot.gridX, horizontal);
+        path.lineTo(plot.gridX + plot.gridWidth, horizontal);
+      }
+      gridLinePathCache.signature = signature;
+      gridLinePathCache.minor = minor;
+      gridLinePathCache.guide = guideLines;
+    }
+    ctx.strokeStyle = "rgba(216,216,216,0.9)";
+    ctx.lineWidth = 0.75;
+    ctx.stroke(gridLinePathCache.minor);
+    ctx.strokeStyle = "#a8a2e5";
+    ctx.lineWidth = 1.6;
+    ctx.stroke(gridLinePathCache.guide);
+    ctx.restore();
+    return;
+  }
+
   for (let index = bounds.minX; index <= bounds.maxX + 1; index += 1) {
+    if (detail === "coarse" && index % guide !== 0) continue;
     const vertical = plot.gridX + index * cell;
     ctx.beginPath();
-    const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
     ctx.strokeStyle = index % guide === 0 ? "#a8a2e5" : "rgba(216,216,216,0.9)";
     ctx.lineWidth = index % guide === 0 ? 1.6 : 0.75;
     ctx.moveTo(vertical, plot.gridY);
@@ -7467,9 +7746,9 @@ function drawGridLines(dirtyBounds = null) {
   }
 
   for (let index = bounds.minY; index <= bounds.maxY + 1; index += 1) {
+    if (detail === "coarse" && index % guide !== 0) continue;
     const horizontal = plot.gridY + index * cell;
     ctx.beginPath();
-    const guide = state.patternMode === "pixelPattern" ? state.guideEvery : 10;
     ctx.strokeStyle = index % guide === 0 ? "#a8a2e5" : "rgba(216,216,216,0.9)";
     ctx.lineWidth = index % guide === 0 ? 1.6 : 0.75;
     ctx.moveTo(plot.gridX, horizontal);
@@ -7483,6 +7762,7 @@ function drawCoordinateLabels() {
   if (!state.showCoordinates) return;
   const plot = activePlotMetrics();
   const cell = plot.cell;
+  if (canvasRenderDetail(cell) === "coarse") return;
   ctx.save();
   ctx.fillStyle = "#9b9b9b";
   const isGridEditor = state.editorView === "grid";
@@ -7728,11 +8008,51 @@ function renderStats() {
 
   try {
     renderStatsNow(sorted, total, listRows, pattern, usedBounds);
-    renderToolColorPalette();
+    if (!state.toolPaletteSearch && !state.toolPaletteShowAll) renderToolColorPalette(sorted);
+    else renderToolColorPalette();
     renderCache.statsSignature = signature;
   } finally {
     recordPerformance("render.stats", performanceNow() - startedAt);
   }
+}
+
+function patchPaletteRowsInPlace(listRows, total) {
+  const existingRows = [...elements.paletteList.children].filter((child) => child.classList.contains("palette-row"));
+  if (
+    existingRows.length !== listRows.length ||
+    existingRows.some((row, index) => row.dataset.code !== listRows[index].code)
+  ) {
+    return false;
+  }
+
+  for (let index = 0; index < listRows.length; index += 1) {
+    const item = listRows[index];
+    const row = existingRows[index];
+    const rank = row.querySelector(".palette-rank");
+    const swatch = row.querySelector(".swatch");
+    const code = row.querySelector(".palette-code");
+    const name = row.querySelector(".palette-name");
+    const count = row.querySelector(".palette-count");
+    const ratio = row.querySelector(".palette-ratio");
+    const replace = row.querySelector(".palette-replace-button");
+    if (!rank || !swatch || !code || !name || !count || !ratio || !replace) return false;
+
+    row.classList.toggle("is-selected", item.isActive);
+    row.classList.toggle("is-locked", item.isLocked);
+    row.classList.toggle("is-allowed", item.isAllowed);
+    rank.textContent = String(index + 1);
+    swatch.style.background = item.hex;
+    swatch.textContent = item.code;
+    code.dataset.editCode = item.code;
+    code.title = `双击替换整张图纸中的 ${item.code}`;
+    code.textContent = `${item.code}${item.isLocked ? " · 锁" : ""}`;
+    name.textContent = item.name;
+    count.textContent = item.count.toLocaleString("zh-CN");
+    ratio.textContent = `${total ? ((item.count / total) * 100).toFixed(2) : "0.00"}%`;
+    replace.dataset.replaceCode = item.code;
+    replace.title = `替换 ${item.code}`;
+  }
+  return true;
 }
 
 function renderStatsNow(sorted, total, listRows, pattern, usedBounds) {
@@ -7747,33 +8067,35 @@ function renderStatsNow(sorted, total, listRows, pattern, usedBounds) {
     return;
   }
 
-  elements.paletteList.innerHTML = `
-    <div class="palette-table-head" aria-hidden="true">
-      <span>序号</span>
-      <span>色号</span>
-      <span>颗数</span>
-      <span>占比</span>
-      <span></span>
-    </div>
-  ` + listRows
-    .map(
-      (item, index) => `
-        <div class="palette-row${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}${item.isAllowed ? " is-allowed" : ""}" data-code="${item.code}" role="button" tabindex="0" draggable="true" title="单击设为画笔色，Ctrl+单击加入固定色板并激活，双击色号可全局替换">
-          <span class="palette-rank">${index + 1}</span>
-          <span class="palette-identity">
-            <span class="swatch" style="background:${item.hex}">${item.code}</span>
-            <span>
-              <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code}${item.isLocked ? " · 锁" : ""}</span>
-              <span class="palette-name">${item.name}</span>
+  if (!patchPaletteRowsInPlace(listRows, total)) {
+    elements.paletteList.innerHTML = `
+      <div class="palette-table-head" aria-hidden="true">
+        <span>序号</span>
+        <span>色号</span>
+        <span>颗数</span>
+        <span>占比</span>
+        <span></span>
+      </div>
+    ` + listRows
+      .map(
+        (item, index) => `
+          <div class="palette-row${item.isActive ? " is-selected" : ""}${item.isLocked ? " is-locked" : ""}${item.isAllowed ? " is-allowed" : ""}" data-code="${item.code}" role="button" tabindex="0" draggable="true" title="单击设为画笔色，Ctrl+单击加入固定色板并激活，双击色号可全局替换">
+            <span class="palette-rank">${index + 1}</span>
+            <span class="palette-identity">
+              <span class="swatch" style="background:${item.hex}">${item.code}</span>
+              <span>
+                <span class="palette-code" data-edit-code="${item.code}" title="双击替换整张图纸中的 ${item.code}">${item.code}${item.isLocked ? " · 锁" : ""}</span>
+                <span class="palette-name">${item.name}</span>
+              </span>
             </span>
-          </span>
-          <span class="palette-count">${item.count.toLocaleString("zh-CN")}</span>
-          <span class="palette-ratio">${total ? ((item.count / total) * 100).toFixed(2) : "0.00"}%</span>
-          <button class="palette-replace-button" data-replace-code="${item.code}" type="button" title="替换 ${item.code}">换</button>
-        </div>
-      `,
-    )
-    .join("");
+            <span class="palette-count">${item.count.toLocaleString("zh-CN")}</span>
+            <span class="palette-ratio">${total ? ((item.count / total) * 100).toFixed(2) : "0.00"}%</span>
+            <button class="palette-replace-button" data-replace-code="${item.code}" type="button" title="替换 ${item.code}">换</button>
+          </div>
+        `,
+      )
+      .join("");
+  }
 
   const boundsLabel = state.usedBounds ? `<span class="bounds-chip">所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}</span>` : "";
   elements.legendStrip.innerHTML =
@@ -7927,7 +8249,7 @@ function toolPaletteRows() {
   };
 
   const source = query || state.toolPaletteShowAll
-    ? palette.filter((item) => !query || `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query))
+    ? palette.filter((item) => !query || paletteSearchTextByCode.get(item.code).includes(query))
     : currentPaletteRows().filter((item) => item.count > 0 || item.isLocked || item.isActive);
 
   const rows = source.map(enrich).sort((a, b) => {
@@ -7937,15 +8259,24 @@ function toolPaletteRows() {
       if (item.isUsed) return 2;
       return 3;
     };
-    return rank(a) - rank(b) || b.count - a.count || palette.findIndex((item) => item.code === a.code) - palette.findIndex((item) => item.code === b.code);
+    return (
+      rank(a) - rank(b) ||
+      b.count - a.count ||
+      (paletteIndexByCode.get(a.code) ?? Number.MAX_SAFE_INTEGER) -
+        (paletteIndexByCode.get(b.code) ?? Number.MAX_SAFE_INTEGER)
+    );
   });
 
   return rows.slice(0, query ? 80 : state.toolPaletteShowAll ? 96 : 40);
 }
 
-function renderToolColorPalette() {
+function renderToolColorPalette(sourceRows = null) {
   if (!elements.toolColorPalette) return;
-  const rows = toolPaletteRows();
+  const rows = sourceRows
+    ? sourceRows
+      .filter((item) => item.count > 0 || item.isLocked || item.isActive)
+      .slice(0, state.toolPaletteShowAll ? 96 : 40)
+    : toolPaletteRows();
   const signature = [
     state.toolPaletteSearch,
     Number(state.toolPaletteShowAll),
@@ -8220,6 +8551,7 @@ function showColorDebugForCell(cell) {
   const currentColor = (state.isPreviewDirty && state.previewPattern.length ? state.previewPattern : state.pattern)[index];
   const trace = state.colorTrace[index] || {};
   const candidates = state.rawDebugCandidates[index] || (sample ? nearestPaletteCandidates(sample, palette, 5) : []);
+  if (candidates.length) state.rawDebugCandidates[index] = candidates;
   const crop = state.lastSampleCrop || { x: 0, y: 0, size: state.lastSampleSourceSize?.width || 0 };
   const sampleArea = {
     x: Math.round(crop.x + (cell.x / state.gridSize) * crop.size),
@@ -8316,7 +8648,10 @@ function handleCanvasPointerMove(event) {
     if (cell) eraseBrushCell(cell);
     return;
   }
-  if (!state.dragStartCell) return;
+  if (!state.dragStartCell) {
+    handleCanvasMove(event);
+    return;
+  }
   const cell = getCellFromPointer(event);
   if (!cell) return;
   state.dragPreview = cell;
@@ -8331,41 +8666,11 @@ function handleCanvasPointerUp(event) {
     return;
   }
   if (state.isBrushPainting) {
-    state.isBrushPainting = false;
-    state.lastBrushIndex = null;
-    state.lastBrushCell = null;
-    state.strokeVisited = new Set();
-    const strokeChanged = commitStrokeHistory();
-    state.pattern = validateColorConstraints(state.pattern);
-    state.counts = buildCounts(state.pattern);
-    state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
-    state.hasConfirmedGrid = true;
-    if (strokeChanged) {
-      state.manualEditCount += 1;
-      state.editGridVersion += 1;
-    }
-    renderStats();
-    renderPattern();
-    if (strokeChanged) markProjectDirty();
+    finishContinuousStroke("brush");
     return;
   }
   if (state.isErasing) {
-    state.isErasing = false;
-    state.lastEraseIndex = null;
-    state.lastEraseCell = null;
-    state.strokeVisited = new Set();
-    const strokeChanged = commitStrokeHistory();
-    state.pattern = validateColorConstraints(state.pattern);
-    state.counts = buildCounts(state.pattern);
-    state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
-    state.hasConfirmedGrid = true;
-    if (strokeChanged) {
-      state.manualEditCount += 1;
-      state.editGridVersion += 1;
-    }
-    renderStats();
-    renderPattern();
-    if (strokeChanged) markProjectDirty();
+    finishContinuousStroke("eraser");
     return;
   }
   if (!state.dragStartCell) return;
@@ -8375,6 +8680,36 @@ function handleCanvasPointerUp(event) {
   state.dragPreview = null;
   updateSelectionLabel();
   renderPattern();
+}
+
+function finishContinuousStroke(tool) {
+  if (tool === "brush") {
+    state.isBrushPainting = false;
+    state.lastBrushIndex = null;
+    state.lastBrushCell = null;
+  } else {
+    state.isErasing = false;
+    state.lastEraseIndex = null;
+    state.lastEraseCell = null;
+  }
+  state.strokeVisited = new Set();
+  const strokeChanged = commitStrokeHistory();
+  if (!strokeChanged) {
+    requestPatternRender(brushPreviewCellsForCell(state.brushHoverCell));
+    return false;
+  }
+
+  const validation = validateColorConstraints(state.pattern, { withReport: true });
+  state.pattern = validation.pattern;
+  if (validation.violationCount) state.counts = buildCounts(state.pattern);
+  state.hasConfirmedGrid = true;
+  state.manualEditCount += 1;
+  state.editGridVersion += 1;
+  scheduleQualityMetricsRefresh();
+  renderStats();
+  renderPattern();
+  markProjectDirty();
+  return true;
 }
 
 function paintBrushCell(cell, snapLine = false) {
@@ -8391,6 +8726,7 @@ function paintBrushCell(cell, snapLine = false) {
         const current = state.pattern[index];
         if (samePatternColor(current, constrainedColor)) continue;
         state.pattern[index] = constrainedColor;
+        applyCountChanges(state.counts, [{ before: current, after: constrainedColor }]);
         state.manualEditedCells.add(index);
         state.strokeChanged = true;
         state.lastBrushIndex = index;
@@ -8417,6 +8753,7 @@ function eraseBrushCell(cell) {
         const current = state.pattern[index];
         if (samePatternColor(current, fill)) continue;
         state.pattern[index] = fill;
+        applyCountChanges(state.counts, [{ before: current, after: fill }]);
         state.manualEditedCells.add(index);
         state.strokeChanged = true;
         state.lastEraseIndex = index;
@@ -8585,19 +8922,22 @@ function drawLineBetweenCells(start, end, color) {
   pushHistory();
   const constrainedColor = manualPaintColor(color);
   const visited = new Set();
+  const countChanges = [];
   for (const point of interpolateCells(start, end)) {
     for (const brushCell of brushCellsForPoint(point)) {
       const index = brushCell.y * state.gridSize + brushCell.x;
       if (visited.has(index) || !canEditCell(index)) continue;
+      const before = state.pattern[index];
       state.pattern[index] = constrainedColor;
+      countChanges.push({ before, after: constrainedColor });
       state.manualEditedCells.add(index);
       visited.add(index);
     }
   }
-  state.counts = buildCounts(state.pattern);
-  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  applyCountChanges(state.counts, countChanges);
   state.manualEditCount += 1;
   state.editGridVersion += 1;
+  scheduleQualityMetricsRefresh();
   state.selectedCell = end;
   renderPattern();
   renderStats();
@@ -8632,14 +8972,17 @@ function floodFillFromCell(cell, color) {
       queue.push(next);
     }
   }
+  const countChanges = [];
   for (const index of targets) {
+    const before = state.pattern[index];
     state.pattern[index] = target;
+    countChanges.push({ before, after: target });
     state.manualEditedCells.add(index);
   }
-  state.counts = buildCounts(state.pattern);
-  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  applyCountChanges(state.counts, countChanges);
   state.manualEditCount += 1;
   state.editGridVersion += 1;
+  scheduleQualityMetricsRefresh();
   renderPattern();
   renderStats();
   elements.cellInfo.textContent = `已填充 ${targets.length} 格为 ${target.code}。`;
@@ -8802,7 +9145,7 @@ function handleCanvasDrop(event) {
   }
   if (state.gridLocked) return;
   const code = event.dataTransfer.getData("text/plain");
-  const color = palette.find((item) => item.code === code);
+  const color = paletteColorByCode(code);
   if (!color) return;
   activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette", announce: false });
   const cell = getCellFromPointer(event);
@@ -9151,10 +9494,13 @@ function pasteSelectionPixels() {
 
   pushHistory();
   const pastedSelection = new Set();
+  const countChanges = [];
   for (const change of changes) {
     const color = change.code === "__EMPTY__" ? EMPTY_CELL : paletteColorByCode(change.code);
     if (!color) continue;
+    const before = state.pattern[change.index];
     state.pattern[change.index] = color;
+    countChanges.push({ before, after: color });
     state.manualEditedCells.add(change.index);
     rememberPaletteColor(color);
     pastedSelection.add(change.index);
@@ -9162,8 +9508,7 @@ function pasteSelectionPixels() {
   clipboard.pasteCount += 1;
   state.selection = pastedSelection;
   state.penPoints = [];
-  state.counts = buildCounts(state.pattern);
-  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  applyCountChanges(state.counts, countChanges);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.hasConfirmedGrid = true;
   state.manualEditCount += 1;
@@ -9240,12 +9585,25 @@ function pushHistory(snapshot = snapshotPattern()) {
     return false;
   }
   state.undoStack.push(snapshot);
-  if (state.undoStack.length > 60) {
-    state.undoStack.shift();
-  }
+  trimEditorHistory(state.undoStack);
   state.redoStack = [];
   updateHistoryButtons();
   return true;
+}
+
+function historyEntryLimit() {
+  const cells = activeGridWidth() * activeGridHeight();
+  if (cells > 10000) return 24;
+  if (cells > 4096) return 32;
+  if (cells > 2304) return 48;
+  return 60;
+}
+
+function trimEditorHistory(stack) {
+  return trimHistoryStack(stack, {
+    maxEntries: historyEntryLimit(),
+    maxBytes: HISTORY_MEMORY_BUDGET,
+  });
 }
 
 function clearHistory() {
@@ -9267,6 +9625,7 @@ function undoEdit() {
   const previousSnapshot = state.undoStack.pop();
   restorePattern(previousSnapshot);
   state.redoStack.push(currentSnapshot);
+  trimEditorHistory(state.redoStack);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已撤回一步";
   markProjectDirty();
@@ -9285,6 +9644,7 @@ function redoEdit() {
   const nextSnapshot = state.redoStack.pop();
   restorePattern(nextSnapshot);
   state.undoStack.push(currentSnapshot);
+  trimEditorHistory(state.undoStack);
   updateHistoryButtons();
   elements.cellInfo.textContent = "已重做一步";
   markProjectDirty();
@@ -9529,23 +9889,38 @@ function applyColorToIndices(indices, color, recordHistory = true) {
     return;
   }
   if (state.gridLocked && recordHistory) return;
-  if (recordHistory) pushHistory();
   const constrainedColor = manualPaintColor(color);
+  const targetIndices = [...new Set(indices)].filter((index) => {
+    if (!canEditCell(index)) return false;
+    return !samePatternColor(state.pattern[index], constrainedColor);
+  });
+  if (!targetIndices.length) {
+    updateSelectionLabel();
+    requestPatternRender();
+    return false;
+  }
+  if (recordHistory) pushHistory();
   rememberPaletteColor(constrainedColor);
-  for (const index of indices) {
-    if (!canEditCell(index)) continue;
+  const countChanges = [];
+  for (const index of targetIndices) {
+    const before = state.pattern[index];
     state.pattern[index] = constrainedColor;
+    countChanges.push({ before, after: constrainedColor });
     state.manualEditedCells.add(index);
   }
-  state.pattern = validateColorConstraints(state.pattern);
-  state.counts = buildCounts(state.pattern);
-  state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+  applyCountChanges(state.counts, countChanges);
+  const validation = validateColorConstraints(state.pattern, { withReport: true });
+  state.pattern = validation.pattern;
+  if (validation.violationCount) state.counts = buildCounts(state.pattern);
   state.hasConfirmedGrid = true;
   state.manualEditCount += 1;
   state.editGridVersion += 1;
+  scheduleQualityMetricsRefresh();
+  scheduleQualityMetricsRefresh();
   updateSelectionLabel();
   renderPattern();
   renderStats();
+  return true;
 }
 
 function toggleEditing() {
@@ -9643,7 +10018,7 @@ function setZoom(value, options = {}) {
   const oldScrollHeight = Math.max(1, wrap.scrollHeight - wrap.clientHeight);
   const centerRatioX = oldScrollWidth ? (wrap.scrollLeft + wrap.clientWidth / 2) / Math.max(1, wrap.scrollWidth) : 0.5;
   const centerRatioY = oldScrollHeight ? (wrap.scrollTop + wrap.clientHeight / 2) / Math.max(1, wrap.scrollHeight) : 0.5;
-  const codesVisibleBefore = state.pattern.length && state.showCellCodes ? cellCodesFitCurrentZoom(activePlotMetrics().cell) : null;
+  const renderDetailBefore = state.pattern.length ? canvasRenderDetail(activePlotMetrics().cell) : null;
 
   state.zoom = nextZoom;
   const base = baseCanvasCssSize();
@@ -9652,10 +10027,7 @@ function setZoom(value, options = {}) {
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 
   requestAnimationFrame(() => {
-    if (
-      codesVisibleBefore !== null &&
-      codesVisibleBefore !== cellCodesFitCurrentZoom(activePlotMetrics().cell)
-    ) {
+    if (renderDetailBefore !== null && renderDetailBefore !== canvasRenderDetail(activePlotMetrics().cell)) {
       requestPatternRender();
     }
     if (options.center) {
@@ -9685,16 +10057,34 @@ function fitCanvasToScreen() {
 
 async function exportPattern() {
   if (!canLeaveTransformWithCurrentPreview("export")) return;
-  if (!state.pattern.length) return;
+  if (!state.pattern.length || state.exportInProgress) return;
   const includeWatermark = elements.exportWatermarkToggle?.checked ?? state.exportWatermarkEnabled;
   const snapshot = currentExportSnapshot();
   state.exportWatermarkEnabled = includeWatermark;
-  if (elements.exportFormat?.value === "pdf") {
-    await exportPatternPdf({ includeWatermark, ...snapshot });
-    return;
+  setExportBusy(true);
+  elements.cellInfo.textContent = "正在生成清晰图纸，请稍候…";
+  await new Promise((resolve) => window.requestAnimationFrame(resolve));
+  try {
+    if (elements.exportFormat?.value === "pdf") {
+      await exportPatternPdf({ includeWatermark, ...snapshot });
+    } else {
+      const readableCanvas = renderReadableExportCanvas({ includeWatermark, ...snapshot });
+      await downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
+    }
+    elements.cellInfo.textContent = "图纸已生成并开始下载。";
+  } catch (error) {
+    console.error("导出图纸失败", error);
+    elements.cellInfo.textContent = `导出失败：${error.message || error}`;
+  } finally {
+    setExportBusy(false);
   }
-  const readableCanvas = renderReadableExportCanvas({ includeWatermark, ...snapshot });
-  downloadCanvas(readableCanvas, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-高清.png`);
+}
+
+function setExportBusy(isBusy) {
+  state.exportInProgress = isBusy;
+  for (const button of [elements.exportButton, elements.coverButton]) {
+    if (button) button.disabled = isBusy;
+  }
 }
 
 function renderReadableExportCanvas(options = {}) {
@@ -9867,22 +10257,28 @@ function drawReadableLegend(exportCtx, startX, startY, maxWidth, rows = sortedCo
   });
 }
 
-function downloadCanvas(canvas, fileName) {
-  const link = document.createElement("a");
-  link.download = fileName;
-  link.href = canvas.toDataURL("image/png");
-  link.click();
+function canvasToBlob(canvas, type = "image/png", quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("浏览器无法生成图片文件。"));
+    }, type, quality);
+  });
+}
+
+async function downloadCanvas(canvas, fileName) {
+  try {
+    const blob = await canvasToBlob(canvas, "image/png");
+    downloadBlob(blob, fileName);
+  } finally {
+    releaseCanvasMemory(canvas);
+  }
 }
 
 async function exportPatternPdf(options = {}) {
   const pdfBytes = buildVectorPdf(options);
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.download = `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-清晰图纸.pdf`;
-  link.href = url;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 800);
+  downloadBlob(blob, `${state.fileName || "小麦拼豆"}-${activeGridWidth()}x${activeGridHeight()}-清晰图纸.pdf`);
 }
 
 function buildVectorPdf(options = {}) {
@@ -10084,13 +10480,22 @@ async function copyBeadList() {
   }
 
   elements.copyListButton.title = "已复制";
-  setTimeout(() => {
+  window.clearTimeout(copyListResetTimer);
+  copyListResetTimer = window.setTimeout(() => {
+    copyListResetTimer = null;
     elements.copyListButton.title = "复制清单";
   }, 1200);
 }
 
 function resetApp() {
-  window.clearTimeout(state.autosaveTimer);
+  state.autosaveSessionVersion += 1;
+  invalidateImageProcessingState();
+  state.autosaveQueued = false;
+  cropState.image = null;
+  cropState.file = null;
+  cropState.dragging = false;
+  cropState.pointerId = null;
+  if (elements.cropModal) elements.cropModal.hidden = true;
   state.image = null;
   state.sourceImageState = null;
   state.fileName = "";
@@ -10099,8 +10504,6 @@ function resetApp() {
   state.pattern = [];
   clearPreviewState();
   state.backgroundMask = null;
-  clearColorDiagnostics();
-  invalidateOptimizedBaseImage();
   state.hasConfirmedGrid = false;
   state.editGridVersion = 0;
   state.previewGridVersion = 0;
@@ -10185,7 +10588,11 @@ function init() {
   renderStats();
   updateProjectSaveStatus("未保存");
   renderProjectLibrary();
-  window.setTimeout(checkAutosaveRecovery, 350);
+  window.clearTimeout(autosaveRecoveryTimer);
+  autosaveRecoveryTimer = window.setTimeout(() => {
+    autosaveRecoveryTimer = null;
+    checkAutosaveRecovery();
+  }, 350);
   if (window.lucide) {
     window.lucide.createIcons();
   } else {

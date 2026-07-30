@@ -91,6 +91,37 @@ test("history snapshots compare grid content and editor state", async () => {
   assert.equal(historyUtils.historySnapshotsEqual(packedBaseline, packedCopy), false);
 });
 
+test("history stacks retain newest edits within entry and memory limits", async () => {
+  const historyUtils = await historyUtilsContext();
+  const makeSnapshot = (code, length = 64) => ({
+    size: 64,
+    width: 64,
+    height: 64,
+    ...historyUtils.createHistoryPatternPayload(Array.from({ length }, () => ({ code, empty: false }))),
+    manualEditedCells: [],
+    lockedColorCodes: [],
+    allowedColorCodes: [],
+    disabledColorCodes: [],
+    projectPaletteCodes: [code],
+  });
+
+  const entryLimited = [makeSnapshot("A"), makeSnapshot("B"), makeSnapshot("C")];
+  historyUtils.trimHistoryStack(entryLimited, { maxEntries: 2, maxBytes: 1024 * 1024 });
+  assert.equal(entryLimited.length, 2);
+  assert.deepEqual(historyUtils.historySnapshotCodes(entryLimited[0]), Array(64).fill("B"));
+  assert.deepEqual(historyUtils.historySnapshotCodes(entryLimited[1]), Array(64).fill("C"));
+
+  const largeA = makeSnapshot("A", 4096);
+  const largeB = makeSnapshot("B", 4096);
+  const newestOnly = [largeA, largeB];
+  historyUtils.trimHistoryStack(newestOnly, {
+    maxEntries: 10,
+    maxBytes: historyUtils.estimateHistorySnapshotBytes(largeB) + 16,
+  });
+  assert.equal(newestOnly.length, 1);
+  assert.deepEqual(historyUtils.historySnapshotCodes(newestOnly[0]), Array(4096).fill("B"));
+});
+
 test("history pattern payload round-trips exactly with compact indices", async () => {
   const historyUtils = await historyUtilsContext();
 
@@ -118,6 +149,210 @@ test("history payload supports more than 256 unique color identifiers", async ()
   assert.equal(payload.codeIndices instanceof Uint16Array, true);
   assert.equal(payload.codebook.length, 300);
   assert.deepEqual(Array.from(historyUtils.historySnapshotCodes(payload)), pattern.map((item) => item.code));
+});
+
+test("autosave coalesces overlapping edits and skips unchanged revisions", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "function openProjectDb");
+  const writes = [];
+  let releaseFirstWrite;
+  const state = {
+    projectRestoring: false,
+    autosaveTimer: null,
+    autosaveStatusTimer: null,
+    autosaveInFlight: false,
+    autosaveQueued: false,
+    projectRevision: 1,
+    lastAutosavedRevision: -1,
+    projectDirty: true,
+  };
+  const context = {
+    state,
+    window: {
+      clearTimeout,
+      setTimeout(callback) {
+        queueMicrotask(callback);
+        return 1;
+      },
+    },
+    hasMeaningfulProject: () => true,
+    updateProjectSaveStatus() {},
+    buildProjectData: () => ({ revision: state.projectRevision }),
+    async writeAutosaveProject(data) {
+      writes.push(data.revision);
+      if (writes.length === 1) {
+        await new Promise((resolve) => {
+          releaseFirstWrite = resolve;
+        });
+      }
+    },
+    console,
+  };
+  vm.runInNewContext(helperSource, context);
+
+  const firstSave = context.autoSaveProject();
+  await Promise.resolve();
+  state.projectRevision = 2;
+  await context.autoSaveProject();
+  assert.equal(state.autosaveQueued, true);
+  releaseFirstWrite();
+  await firstSave;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(writes, [1, 2]);
+  assert.equal(state.lastAutosavedRevision, 2);
+  await context.autoSaveProject();
+  assert.deepEqual(writes, [1, 2]);
+});
+
+test("a completed save does not clear edits made while saving", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function markProjectSaved", "function scheduleProjectAutoSave");
+  const statuses = [];
+  const scheduledDelays = [];
+  const state = {
+    projectRevision: 4,
+    projectDirty: true,
+    lastAutosavedRevision: -1,
+    projectSavedAt: null,
+  };
+  const context = {
+    state,
+    Date,
+    updateProjectSaveStatus: (status) => statuses.push(status),
+    scheduleProjectAutoSave: (delay) => scheduledDelays.push(delay),
+  };
+  vm.runInNewContext(helperSource, context);
+
+  context.markProjectSaved("已保存", 3);
+  assert.equal(state.projectDirty, true);
+  assert.equal(state.lastAutosavedRevision, 3);
+  assert.deepEqual(scheduledDelays, [250]);
+  assert.match(statuses.at(-1), /仍有新修改/);
+
+  context.markProjectSaved("已保存", 4);
+  assert.equal(state.projectDirty, false);
+  assert.equal(state.lastAutosavedRevision, 4);
+  assert.equal(statuses.at(-1), "已保存");
+});
+
+test("autosave from an older project session cannot update the new session", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "function openProjectDb");
+  let releaseWrite;
+  const state = {
+    projectRestoring: false,
+    autosaveTimer: null,
+    autosaveStatusTimer: null,
+    autosaveInFlight: false,
+    autosaveQueued: false,
+    autosaveSessionVersion: 1,
+    projectRevision: 1,
+    lastAutosavedRevision: -1,
+    projectDirty: false,
+  };
+  const context = {
+    state,
+    window: {
+      clearTimeout,
+      setTimeout,
+    },
+    hasMeaningfulProject: () => true,
+    updateProjectSaveStatus() {},
+    buildProjectData: () => ({ revision: state.projectRevision }),
+    async writeAutosaveProject() {
+      await new Promise((resolve) => {
+        releaseWrite = resolve;
+      });
+    },
+    console,
+  };
+  vm.runInNewContext(helperSource, context);
+
+  const save = context.autoSaveProject();
+  await Promise.resolve();
+  state.autosaveSessionVersion = 2;
+  releaseWrite();
+  await save;
+
+  assert.equal(state.lastAutosavedRevision, -1);
+  assert.equal(state.autosaveInFlight, false);
+});
+
+test("bounded caches evict the least recently used entry", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function boundedCacheGet", "function schedulePalettePanelRender");
+  const context = { Map };
+  vm.runInNewContext(helperSource, context);
+  const cache = new Map();
+
+  context.boundedCacheSet(cache, "A", 1, 2);
+  context.boundedCacheSet(cache, "B", 2, 2);
+  assert.equal(context.boundedCacheGet(cache, "A"), 1);
+  context.boundedCacheSet(cache, "C", 3, 2);
+
+  assert.deepEqual([...cache.keys()], ["A", "C"]);
+  assert.equal(context.boundedCacheGet(cache, "B"), undefined);
+});
+
+test("incremental color counts match a full recount after edits", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(source, "function buildCounts", "function displayPattern");
+  const context = {
+    Map,
+    samePatternColor(left, right) {
+      if (!left || !right) return false;
+      return Boolean(left.empty) === Boolean(right.empty) && (left.empty || left.code === right.code);
+    },
+  };
+  vm.runInNewContext(helperSource, context);
+  const red = { code: "A1", hex: "#f00", empty: false };
+  const blue = { code: "B1", hex: "#00f", empty: false };
+  const empty = { code: "__EMPTY__", empty: true };
+  const before = [red, red, blue, empty];
+  const after = [blue, red, empty, blue];
+  const counts = context.buildCounts(before);
+
+  context.applyCountChanges(counts, [
+    { before: red, after: blue },
+    { before: blue, after: empty },
+    { before: empty, after: blue },
+  ]);
+
+  const expected = context.buildCounts(after);
+  assert.deepEqual(
+    [...counts.entries()].map(([code, item]) => [code, item.count]).sort(),
+    [...expected.entries()].map(([code, item]) => [code, item.count]).sort(),
+  );
+});
+
+test("stale palette worker requests are aborted before a new preview", async () => {
+  const source = await appSource();
+  const helperSource = sourceBetween(
+    source,
+    "function cancelPendingPaletteWorkerRequests",
+    "function mapSamplesToPaletteNow",
+  );
+  let terminated = false;
+  let clearedTimeout = null;
+  let rejection = null;
+  const pendingPaletteWorkerRequests = new Map([
+    [1, { timeoutId: 7, reject: (error) => { rejection = error; } }],
+  ]);
+  const context = {
+    pendingPaletteWorkerRequests,
+    paletteWorker: { terminate() { terminated = true; } },
+    window: { clearTimeout(timeoutId) { clearedTimeout = timeoutId; } },
+    Error,
+  };
+  vm.runInNewContext(helperSource, context);
+  context.cancelPendingPaletteWorkerRequests();
+
+  assert.equal(terminated, true);
+  assert.equal(clearedTimeout, 7);
+  assert.equal(pendingPaletteWorkerRequests.size, 0);
+  assert.equal(rejection?.name, "AbortError");
+  assert.equal(context.paletteWorker, null);
 });
 
 test("exports the visible preview without mutating the saved edit grid", async () => {
@@ -259,6 +494,10 @@ test("runtime diagnostics stay out of saved projects and duplicate grid state is
   assert.doesNotMatch(source, /\bcompareMetrics\b/);
   assert.doesNotMatch(serializer, /rawMappedGrid\s*:/);
   assert.doesNotMatch(serializer, /finalGrid\s*:/);
+  assert.match(serializer, /state\.sourceImageState\.croppedImageData = sourceImageData/);
+  assert.match(serializer, /const originalImageData = storedOriginalImageData === croppedImageData \? "" : storedOriginalImageData/);
+  assert.match(serializer, /const usedColors = \[\.\.\.state\.counts\.values\(\)\]/);
+  assert.match(serializer, /canvasReferenceLayerState:\s*{\s*imageData: ""/);
 });
 
 test("photo-color strategy can use the full palette without changing the color-limit control", async () => {
