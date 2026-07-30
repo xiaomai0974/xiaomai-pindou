@@ -46,10 +46,12 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /color-utils\.js\?v=20260730-1/);
   assert.match(html, /grid-utils\.js\?v=20260730-1/);
+  assert.match(html, /image-utils\.js\?v=20260730-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
+  assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260730-8/);
+  assert.match(html, /app\.js\?v=20260730-9/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -133,7 +135,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
     scriptResponse,
     colorUtilsResponse,
     gridUtilsResponse,
+    imageUtilsResponse,
     projectCodecResponse,
+    projectStoreResponse,
     pdfUtilsResponse,
     historyUtilsResponse,
     workerResponse,
@@ -142,7 +146,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/app.js"),
       fetchFromWorker("/color-utils.js"),
       fetchFromWorker("/grid-utils.js"),
+      fetchFromWorker("/image-utils.js"),
       fetchFromWorker("/project-codec.js"),
+      fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
       fetchFromWorker("/history-utils.js"),
       fetchFromWorker("/palette-worker.js"),
@@ -151,7 +157,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(scriptResponse.status, 200);
   assert.equal(colorUtilsResponse.status, 200);
   assert.equal(gridUtilsResponse.status, 200);
+  assert.equal(imageUtilsResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
+  assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
   assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
@@ -159,16 +167,22 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const script = await scriptResponse.text();
   const colorUtils = await colorUtilsResponse.text();
   const gridUtils = await gridUtilsResponse.text();
+  const imageUtils = await imageUtilsResponse.text();
   const projectCodec = await projectCodecResponse.text();
+  const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
+  assert.match(script, /const imageUtils = window\.XiaomaiImageUtils/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
+  assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
   assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
+  assert.match(imageUtils, /global\.XiaomaiImageUtils = Object\.freeze/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
+  assert.match(projectStore, /global\.XiaomaiProjectStore = Object\.freeze/);
   assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
@@ -224,7 +238,10 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function renderProjectLibrary\(/);
   assert.match(script, /function clearAutosaveProject\(/);
   assert.match(script, /dirty: options\.dirty \?\? state\.projectDirty/);
-  const autosaveSource = script.slice(script.indexOf("async function autoSaveProject"), script.indexOf("function openProjectDb"));
+  const autosaveSource = script.slice(
+    script.indexOf("async function autoSaveProject"),
+    script.indexOf("async function writeAutosaveProject"),
+  );
   assert.doesNotMatch(autosaveSource, /saveLibraryProject/);
   assert.match(script, /state\.manualEditCount = state\.manualEditedCells\.size/);
   assert.match(script, /state\.colorMode = paletteState\.colorConstraintMode === "fixedPalette" \? "fixedPalette" : "max"/);
@@ -240,7 +257,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function refineAccuratePaletteMatches\(/);
   assert.match(script, /function calculateColorMatchMetrics\(/);
   assert.match(script, /function buildBackgroundProtectionMask\(/);
-  assert.match(script, /function buildConnectedBaseBackgroundMask\(/);
+  assert.doesNotMatch(script, /function buildConnectedBaseBackgroundMask\(/);
+  assert.match(imageUtils, /function buildConnectedBaseBackgroundMask\(/);
   assert.match(
     script,
     /function displayPattern\(\) \{\s*if \(state\.isPreviewDirty && state\.previewPattern\.length\) return state\.previewPattern;\s*return state\.pattern;/,
@@ -378,13 +396,11 @@ test("palette worker maps colors and preserves empty cells", async () => {
 });
 
 test("base-image background cleanup only removes edge-connected light pixels", async () => {
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  const helperSource = source.slice(
-    source.indexOf("function buildConnectedBaseBackgroundMask"),
-    source.indexOf("function cleanupAntiAliasPixels"),
-  );
-  const context = { Uint8Array, Math };
-  vm.runInNewContext(helperSource, context);
+  const source = await readFile(new URL("../public/image-utils.js", import.meta.url), "utf8");
+  const window = {};
+  const context = { window, Uint8Array, Math };
+  vm.runInNewContext(source, context);
+  const { buildConnectedBaseBackgroundMask } = window.XiaomaiImageUtils;
 
   const width = 5;
   const height = 5;
@@ -407,7 +423,7 @@ test("base-image background cleanup only removes edge-connected light pixels", a
   }
   setPixel(0, 2, 232, 229, 221);
 
-  const mask = context.buildConnectedBaseBackgroundMask(
+  const mask = buildConnectedBaseBackgroundMask(
     pixels,
     width,
     height,

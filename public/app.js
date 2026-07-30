@@ -33,6 +33,25 @@ const {
   totalBeadCount: countPatternBeads,
 } = gridUtils;
 
+const imageUtils = window.XiaomaiImageUtils;
+if (!imageUtils) {
+  throw new Error("图片工具模块加载失败，请刷新页面后重试。");
+}
+const {
+  averagePreprocessPixels,
+  buildConnectedBaseBackgroundMask,
+  buildPreprocessOutlineMask,
+  colorDistanceData,
+  colorDistanceRgb,
+  estimatePreprocessEdgeBackground,
+  isPreprocessNearBackground,
+  preprocessFourNeighbors,
+  preprocessLuminance,
+  preprocessSaturation,
+  quantizeChannel,
+  restorePreprocessOutlines,
+} = imageUtils;
+
 const projectCodec = window.XiaomaiProjectCodec;
 if (!projectCodec) {
   throw new Error("项目编解码模块加载失败，请刷新页面后重试。");
@@ -199,6 +218,19 @@ const AUTOSAVE_KEY = "latest";
 const PROJECT_DB_VERSION = 2;
 const LIBRARY_META_STORE_NAME = "libraryMeta";
 const LIBRARY_DATA_STORE_NAME = "libraryData";
+const projectStoreApi = window.XiaomaiProjectStore;
+if (!projectStoreApi) {
+  throw new Error("项目存储模块加载失败，请刷新页面后重试。");
+}
+const projectStore = projectStoreApi.createProjectStore({
+  indexedDB: window.indexedDB,
+  dbName: AUTOSAVE_DB_NAME,
+  dbVersion: PROJECT_DB_VERSION,
+  autosaveStoreName: AUTOSAVE_STORE_NAME,
+  autosaveKey: AUTOSAVE_KEY,
+  libraryMetaStoreName: LIBRARY_META_STORE_NAME,
+  libraryDataStoreName: LIBRARY_DATA_STORE_NAME,
+});
 const state = {
   image: null,
   sourceImageState: null,
@@ -3051,94 +3083,31 @@ async function autoSaveProject() {
   }
 }
 
-function openProjectDb() {
-  return new Promise((resolve, reject) => {
-    if (!("indexedDB" in window)) {
-      reject(new Error("当前环境不支持 IndexedDB。"));
-      return;
-    }
-    const request = indexedDB.open(AUTOSAVE_DB_NAME, PROJECT_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(AUTOSAVE_STORE_NAME)) db.createObjectStore(AUTOSAVE_STORE_NAME);
-      const metaStore = db.objectStoreNames.contains(LIBRARY_META_STORE_NAME)
-        ? request.transaction.objectStore(LIBRARY_META_STORE_NAME)
-        : db.createObjectStore(LIBRARY_META_STORE_NAME, { keyPath: "id" });
-      if (!metaStore.indexNames.contains("updatedAt")) metaStore.createIndex("updatedAt", "updatedAt");
-      if (!db.objectStoreNames.contains(LIBRARY_DATA_STORE_NAME)) {
-        db.createObjectStore(LIBRARY_DATA_STORE_NAME, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error("图纸库正在被其他页面使用，请关闭旧页面后重试。"));
-  });
-}
-
-function idbRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-function transactionDone(transaction) {
-  return new Promise((resolve, reject) => {
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error || new Error("本地存储事务失败。"));
-    transaction.onabort = () => reject(transaction.error || new Error("本地存储事务已取消。"));
-  });
-}
-
 async function writeAutosaveProject(data, options = {}) {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readwrite");
-    transaction.objectStore(AUTOSAVE_STORE_NAME).put(
-      {
-        schemaVersion: 2,
-        dirty: options.dirty ?? state.projectDirty,
-        projectId: state.libraryProjectId,
-        updatedAt: data.updatedAt || new Date().toISOString(),
-        payload: data,
-      },
-      AUTOSAVE_KEY,
-    );
-    await transactionDone(transaction);
-  } finally {
-    db.close();
-  }
+  await projectStore.writeAutosave({
+    schemaVersion: 2,
+    dirty: options.dirty ?? state.projectDirty,
+    projectId: state.libraryProjectId,
+    updatedAt: data.updatedAt || new Date().toISOString(),
+    payload: data,
+  });
 }
 
 async function readAutosaveProject() {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readonly");
-    const raw = await idbRequest(transaction.objectStore(AUTOSAVE_STORE_NAME).get(AUTOSAVE_KEY));
-    await transactionDone(transaction);
-    if (!raw) return null;
-    if (raw.payload) return raw;
-    return {
-      schemaVersion: 1,
-      dirty: true,
-      projectId: raw.libraryState?.id || null,
-      updatedAt: raw.updatedAt,
-      payload: raw,
-    };
-  } finally {
-    db.close();
-  }
+  const raw = await projectStore.readAutosave();
+  if (!raw) return null;
+  if (raw.payload) return raw;
+  return {
+    schemaVersion: 1,
+    dirty: true,
+    projectId: raw.libraryState?.id || null,
+    updatedAt: raw.updatedAt,
+    payload: raw,
+  };
 }
 
 async function clearAutosaveProject() {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction(AUTOSAVE_STORE_NAME, "readwrite");
-    transaction.objectStore(AUTOSAVE_STORE_NAME).delete(AUTOSAVE_KEY);
-    await transactionDone(transaction);
-  } finally {
-    db.close();
-  }
+  await projectStore.clearAutosave();
 }
 
 function createLibraryProjectId() {
@@ -3219,55 +3188,25 @@ async function saveLibraryProject(projectData = buildProjectData()) {
     thumbnail: createProjectThumbnail(),
     projectFileVersion: projectData.version || PROJECT_FILE_VERSION,
   };
-  const db = await openProjectDb();
   try {
-    const transaction = db.transaction([LIBRARY_META_STORE_NAME, LIBRARY_DATA_STORE_NAME], "readwrite");
-    transaction.objectStore(LIBRARY_META_STORE_NAME).put(meta);
-    transaction.objectStore(LIBRARY_DATA_STORE_NAME).put({ id, payload });
-    await transactionDone(transaction);
+    await projectStore.saveLibraryProject(meta, { id, payload });
     return id;
   } catch (error) {
     state.libraryProjectId = previousId;
     throw error;
-  } finally {
-    db.close();
   }
 }
 
 async function listLibraryProjectMeta() {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction(LIBRARY_META_STORE_NAME, "readonly");
-    const records = await idbRequest(transaction.objectStore(LIBRARY_META_STORE_NAME).getAll());
-    await transactionDone(transaction);
-    return records.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-  } finally {
-    db.close();
-  }
+  return projectStore.listLibraryProjectMeta();
 }
 
 async function readLibraryProject(id) {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction(LIBRARY_DATA_STORE_NAME, "readonly");
-    const record = await idbRequest(transaction.objectStore(LIBRARY_DATA_STORE_NAME).get(id));
-    await transactionDone(transaction);
-    return record?.payload || null;
-  } finally {
-    db.close();
-  }
+  return projectStore.readLibraryProject(id);
 }
 
 async function removeLibraryProject(id) {
-  const db = await openProjectDb();
-  try {
-    const transaction = db.transaction([LIBRARY_META_STORE_NAME, LIBRARY_DATA_STORE_NAME], "readwrite");
-    transaction.objectStore(LIBRARY_META_STORE_NAME).delete(id);
-    transaction.objectStore(LIBRARY_DATA_STORE_NAME).delete(id);
-    await transactionDone(transaction);
-  } finally {
-    db.close();
-  }
+  await projectStore.removeLibraryProject(id);
 }
 
 function appendLibraryAction(actions, label, action, id, className = "") {
@@ -4288,62 +4227,6 @@ function localPreprocessSignature() {
   });
 }
 
-function buildPreprocessOutlineMask(data, width, height) {
-  const mask = new Uint8Array(width * height);
-  for (let y = 1; y < height - 1; y += 1) {
-    for (let x = 1; x < width - 1; x += 1) {
-      const index = y * width + x;
-      const offset = index * 4;
-      const alpha = data[offset + 3];
-      if (alpha < 48) continue;
-      const lum = preprocessLuminance(data[offset], data[offset + 1], data[offset + 2]);
-      if (lum > 98) continue;
-      let maxContrast = 0;
-      let darkSimilar = 0;
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dx = -1; dx <= 1; dx += 1) {
-          if (!dx && !dy) continue;
-          const n = ((y + dy) * width + (x + dx)) * 4;
-          if (data[n + 3] < 48) continue;
-          const nLum = preprocessLuminance(data[n], data[n + 1], data[n + 2]);
-          maxContrast = Math.max(maxContrast, Math.abs(nLum - lum));
-          if (nLum < 110 && Math.abs(nLum - lum) < 24) darkSimilar += 1;
-        }
-      }
-      if (maxContrast >= 34 && (darkSimilar >= 1 || lum < 56)) {
-        mask[index] = 1;
-      }
-    }
-  }
-  return removeTinyPreprocessMaskParts(mask, width, height);
-}
-
-function removeTinyPreprocessMaskParts(mask, width, height) {
-  const cleaned = new Uint8Array(mask);
-  const visited = new Uint8Array(mask.length);
-  for (let index = 0; index < mask.length; index += 1) {
-    if (!mask[index] || visited[index]) continue;
-    const queue = [index];
-    const cells = [];
-    visited[index] = 1;
-    for (let head = 0; head < queue.length; head += 1) {
-      const current = queue[head];
-      cells.push(current);
-      const x = current % width;
-      const y = Math.floor(current / width);
-      for (const next of preprocessFourNeighbors(x, y, width, height)) {
-        if (!mask[next] || visited[next]) continue;
-        visited[next] = 1;
-        queue.push(next);
-      }
-    }
-    if (cells.length < 3) {
-      for (const cell of cells) cleaned[cell] = 0;
-    }
-  }
-  return cleaned;
-}
-
 function cleanupBaseImageBackground(imageData, outlineMask) {
   const { data, width, height } = imageData;
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
@@ -4364,86 +4247,6 @@ function cleanupBaseImageBackground(imageData, outlineMask) {
     }
   }
   return output;
-}
-
-function buildConnectedBaseBackgroundMask(data, width, height, edge, outlineMask = null) {
-  const mask = new Uint8Array(width * height);
-  const queue = [];
-  const edgeSaturation = Math.max(edge.r, edge.g, edge.b) - Math.min(edge.r, edge.g, edge.b);
-  const edgeLuminance = 0.299 * edge.r + 0.587 * edge.g + 0.114 * edge.b;
-  const distanceLimit = edgeLuminance >= 215 && edgeSaturation <= 42 ? 34 : 24;
-  const isCandidate = (index) => {
-    if (outlineMask?.[index]) return false;
-    const offset = index * 4;
-    const alpha = data[offset + 3];
-    if (alpha < 48) return true;
-    const r = data[offset];
-    const g = data[offset + 1];
-    const b = data[offset + 2];
-    const dr = r - edge.r;
-    const dg = g - edge.g;
-    const db = b - edge.b;
-    const distance = Math.sqrt(dr * dr + dg * dg + db * db);
-    const x = index % width;
-    const y = Math.floor(index / width);
-    const isOuterEdge = x === 0 || y === 0 || x === width - 1 || y === height - 1;
-    if (!isOuterEdge && alpha >= 180 && hasStrongLocalImageBoundary(data, index, width, height)) return false;
-    if (distance <= distanceLimit) return true;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const saturation = max - min;
-    const lightNeutral = r > 226 && g > 226 && b > 216 && saturation < 42;
-    return lightNeutral && distance <= distanceLimit + 10;
-  };
-  const push = (index) => {
-    if (mask[index] || !isCandidate(index)) return;
-    mask[index] = 1;
-    queue.push(index);
-  };
-
-  for (let x = 0; x < width; x += 1) {
-    push(x);
-    push((height - 1) * width + x);
-  }
-  for (let y = 0; y < height; y += 1) {
-    push(y * width);
-    push(y * width + width - 1);
-  }
-
-  for (let head = 0; head < queue.length; head += 1) {
-    const index = queue[head];
-    const x = index % width;
-    const y = Math.floor(index / width);
-    if (x > 0) push(index - 1);
-    if (x < width - 1) push(index + 1);
-    if (y > 0) push(index - width);
-    if (y < height - 1) push(index + width);
-  }
-  return mask;
-}
-
-function hasStrongLocalImageBoundary(data, index, width, height) {
-  const x = index % width;
-  const y = Math.floor(index / width);
-  const offset = index * 4;
-  const r = data[offset];
-  const g = data[offset + 1];
-  const b = data[offset + 2];
-  const neighbors = [];
-  if (x > 0) neighbors.push(index - 1);
-  if (x < width - 1) neighbors.push(index + 1);
-  if (y > 0) neighbors.push(index - width);
-  if (y < height - 1) neighbors.push(index + width);
-  return neighbors.some((next) => {
-    const neighborOffset = next * 4;
-    if (data[neighborOffset + 3] < 96) return false;
-    const maxChannelDelta = Math.max(
-      Math.abs(r - data[neighborOffset]),
-      Math.abs(g - data[neighborOffset + 1]),
-      Math.abs(b - data[neighborOffset + 2]),
-    );
-    return maxChannelDelta >= 30;
-  });
 }
 
 function cleanupAntiAliasPixels(imageData, outlineMask) {
@@ -4635,99 +4438,6 @@ function stabilizeBaseImageRegions(imageData, outlineMask) {
     }
   }
   return output;
-}
-
-function restorePreprocessOutlines(original, target, outlineMask) {
-  for (let index = 0; index < outlineMask.length; index += 1) {
-    if (!outlineMask[index]) continue;
-    const offset = index * 4;
-    target.data[offset] = original.data[offset];
-    target.data[offset + 1] = original.data[offset + 1];
-    target.data[offset + 2] = original.data[offset + 2];
-    target.data[offset + 3] = original.data[offset + 3];
-  }
-}
-
-function estimatePreprocessEdgeBackground(data, width, height) {
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let count = 0;
-  const add = (x, y) => {
-    const offset = (y * width + x) * 4;
-    const alpha = data[offset + 3] / 255;
-    r += data[offset] * alpha + 255 * (1 - alpha);
-    g += data[offset + 1] * alpha + 255 * (1 - alpha);
-    b += data[offset + 2] * alpha + 255 * (1 - alpha);
-    count += 1;
-  };
-  for (let x = 0; x < width; x += Math.max(1, Math.floor(width / 80))) {
-    add(x, 0);
-    add(x, height - 1);
-  }
-  for (let y = 0; y < height; y += Math.max(1, Math.floor(height / 80))) {
-    add(0, y);
-    add(width - 1, y);
-  }
-  return { r: r / count, g: g / count, b: b / count };
-}
-
-function preprocessFourNeighbors(x, y, width, height) {
-  const neighbors = [];
-  if (x > 0) neighbors.push(y * width + x - 1);
-  if (x < width - 1) neighbors.push(y * width + x + 1);
-  if (y > 0) neighbors.push((y - 1) * width + x);
-  if (y < height - 1) neighbors.push((y + 1) * width + x);
-  return neighbors;
-}
-
-function averagePreprocessPixels(data, indexes) {
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let a = 0;
-  let count = 0;
-  for (const index of indexes) {
-    const offset = index * 4;
-    if (data[offset + 3] < 16) continue;
-    r += data[offset];
-    g += data[offset + 1];
-    b += data[offset + 2];
-    a += data[offset + 3];
-    count += 1;
-  }
-  return count
-    ? { r: Math.round(r / count), g: Math.round(g / count), b: Math.round(b / count), a: Math.round(a / count) }
-    : { r: 255, g: 255, b: 255, a: 0 };
-}
-
-function quantizeChannel(value, step) {
-  return clamp(Math.round(value / step) * step);
-}
-
-function preprocessLuminance(r, g, b) {
-  return 0.299 * r + 0.587 * g + 0.114 * b;
-}
-
-function preprocessSaturation(r, g, b) {
-  return Math.max(r, g, b) - Math.min(r, g, b);
-}
-
-function colorDistanceRgb(r1, g1, b1, r2, g2, b2) {
-  const dr = r1 - r2;
-  const dg = g1 - g2;
-  const db = b1 - b2;
-  return Math.sqrt(dr * dr + dg * dg + db * db);
-}
-
-function colorDistanceData(data, offsetA, offsetB) {
-  return colorDistanceRgb(data[offsetA], data[offsetA + 1], data[offsetA + 2], data[offsetB], data[offsetB + 1], data[offsetB + 2]);
-}
-
-function isPreprocessNearBackground(r, g, b, alpha) {
-  if (alpha < 48) return true;
-  const saturation = preprocessSaturation(r, g, b);
-  return (r > 232 && g > 232 && b > 224 && saturation < 36) || (Math.max(r, g, b) > 238 && saturation < 22);
 }
 
 function capturePreviewCanvasSnapshot() {

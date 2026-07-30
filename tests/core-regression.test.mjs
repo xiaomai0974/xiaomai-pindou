@@ -7,8 +7,10 @@ const appSourceUrl = new URL("../public/app.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
+const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
+const projectStoreSourceUrl = new URL("../public/project-store.js", import.meta.url);
 
 async function appSource() {
   return readFile(appSourceUrl, "utf8");
@@ -47,6 +49,102 @@ async function browserUtilityContext(sourceUrl, exportName, globals = {}) {
   };
   vm.runInNewContext(source, context);
   return window[exportName];
+}
+
+function createMemoryIndexedDb() {
+  const databases = new Map();
+  return {
+    open(name) {
+      const request = {};
+      queueMicrotask(() => {
+        let database = databases.get(name);
+        const isNew = !database;
+        if (!database) {
+          const stores = new Map();
+          const keyPaths = new Map();
+          const storeNames = {
+            contains(storeName) {
+              return stores.has(storeName);
+            },
+          };
+          const storeFacade = (storeName, transaction = null) => ({
+            indexNames: { contains: () => false },
+            createIndex() {},
+            put(value, explicitKey) {
+              const key = explicitKey ?? value?.[keyPaths.get(storeName)];
+              return transaction?.run(() => stores.get(storeName).set(key, value));
+            },
+            get(key) {
+              return transaction.run(() => stores.get(storeName).get(key));
+            },
+            getAll() {
+              return transaction.run(() => [...stores.get(storeName).values()]);
+            },
+            delete(key) {
+              return transaction.run(() => stores.get(storeName).delete(key));
+            },
+          });
+          database = {
+            objectStoreNames: storeNames,
+            createObjectStore(storeName, options = {}) {
+              stores.set(storeName, new Map());
+              keyPaths.set(storeName, options.keyPath);
+              return storeFacade(storeName);
+            },
+            transaction(storeNamesInput) {
+              const transaction = {
+                pending: 0,
+                completionScheduled: false,
+                run(action) {
+                  transaction.pending += 1;
+                  const operation = {};
+                  queueMicrotask(() => {
+                    try {
+                      operation.result = action();
+                      operation.onsuccess?.();
+                    } catch (error) {
+                      operation.error = error;
+                      operation.onerror?.();
+                      transaction.error = error;
+                      transaction.onerror?.();
+                    } finally {
+                      transaction.pending -= 1;
+                      transaction.scheduleCompletion();
+                    }
+                  });
+                  return operation;
+                },
+                scheduleCompletion() {
+                  if (transaction.pending || transaction.completionScheduled) return;
+                  transaction.completionScheduled = true;
+                  setTimeout(() => transaction.oncomplete?.(), 0);
+                },
+                objectStore(storeName) {
+                  return storeFacade(storeName, transaction);
+                },
+              };
+              const names = Array.isArray(storeNamesInput) ? storeNamesInput : [storeNamesInput];
+              for (const storeName of names) {
+                if (!stores.has(storeName)) throw new Error(`Missing store: ${storeName}`);
+              }
+              return transaction;
+            },
+            close() {},
+          };
+          databases.set(name, database);
+        }
+        request.result = database;
+        request.transaction = {
+          objectStore(storeName) {
+            return database.createObjectStore(storeName);
+          },
+        };
+        if (isNew) request.onupgradeneeded?.();
+        request.onsuccess?.();
+      });
+      return request;
+    },
+  };
 }
 
 function sourceBetween(source, startMarker, endMarker) {
@@ -112,6 +210,38 @@ test("grid utilities preserve counts, bounds, lines, and selections after extrac
   );
 });
 
+test("image utilities preserve outline and edge-connected background behavior", async () => {
+  const imageUtils = await browserUtilityContext(imageUtilsSourceUrl, "XiaomaiImageUtils");
+  const width = 5;
+  const height = 5;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const setPixel = (x, y, r, g, b, a = 255) => {
+    const offset = (y * width + x) * 4;
+    pixels[offset] = r;
+    pixels[offset + 1] = g;
+    pixels[offset + 2] = b;
+    pixels[offset + 3] = a;
+  };
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) setPixel(x, y, 248, 246, 240);
+  }
+  for (let y = 1; y <= 3; y += 1) {
+    for (let x = 1; x <= 3; x += 1) {
+      setPixel(x, y, x === 2 && y === 2 ? 252 : 185, x === 2 && y === 2 ? 252 : 52, x === 2 && y === 2 ? 249 : 78);
+    }
+  }
+  const mask = imageUtils.buildConnectedBaseBackgroundMask(
+    pixels,
+    width,
+    height,
+    { r: 248, g: 246, b: 240 },
+  );
+  assert.equal(mask[0], 1);
+  assert.equal(mask[2 * width + 2], 0);
+  assert.equal(mask[1 * width + 1], 0);
+  assert.deepEqual(Array.from(imageUtils.preprocessFourNeighbors(2, 2, width, height)), [11, 13, 7, 17]);
+});
+
 test("PDF utilities preserve text encoding and create a valid document", async () => {
   const pdfUtils = await browserUtilityContext(pdfUtilsSourceUrl, "XiaomaiPdfUtils");
   assert.equal(pdfUtils.roundPdf(0.5), "0.5");
@@ -148,6 +278,40 @@ test("project codec preserves grid codes and binary masks after extraction", asy
   const mask = codec.arrayToMask([1, 0, 7, 0], 4);
   assert.deepEqual(Array.from(mask), [1, 0, 1, 0]);
   assert.deepEqual(Array.from(codec.maskToArray(mask)), [1, 0, 1, 0]);
+});
+
+test("project store persists autosaves and library projects after extraction", async () => {
+  const projectStoreApi = await browserUtilityContext(projectStoreSourceUrl, "XiaomaiProjectStore");
+  const store = projectStoreApi.createProjectStore({
+    indexedDB: createMemoryIndexedDb(),
+    dbName: "test-projects",
+    dbVersion: 2,
+    autosaveStoreName: "autosave",
+    autosaveKey: "latest",
+    libraryMetaStoreName: "libraryMeta",
+    libraryDataStoreName: "libraryData",
+  });
+  const autosave = { schemaVersion: 2, payload: { fileName: "自动保存" } };
+  await store.writeAutosave(autosave);
+  assert.deepEqual({ ...(await store.readAutosave()) }, autosave);
+
+  await store.saveLibraryProject(
+    { id: "older", updatedAt: "2026-01-01T00:00:00.000Z" },
+    { id: "older", payload: { fileName: "旧图纸" } },
+  );
+  await store.saveLibraryProject(
+    { id: "newer", updatedAt: "2026-02-01T00:00:00.000Z" },
+    { id: "newer", payload: { fileName: "新图纸" } },
+  );
+  assert.deepEqual(
+    Array.from(await store.listLibraryProjectMeta(), (item) => item.id),
+    ["newer", "older"],
+  );
+  assert.equal((await store.readLibraryProject("newer")).fileName, "新图纸");
+  await store.removeLibraryProject("newer");
+  assert.equal(await store.readLibraryProject("newer"), null);
+  await store.clearAutosave();
+  assert.equal(await store.readAutosave(), null);
 });
 
 test("history snapshots compare grid content and editor state", async () => {
@@ -267,7 +431,7 @@ test("history payload supports more than 256 unique color identifiers", async ()
 
 test("autosave coalesces overlapping edits and skips unchanged revisions", async () => {
   const source = await appSource();
-  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "function openProjectDb");
+  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "async function writeAutosaveProject");
   const writes = [];
   let releaseFirstWrite;
   const state = {
@@ -352,7 +516,7 @@ test("a completed save does not clear edits made while saving", async () => {
 
 test("autosave from an older project session cannot update the new session", async () => {
   const source = await appSource();
-  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "function openProjectDb");
+  const helperSource = sourceBetween(source, "function scheduleProjectAutoSave", "async function writeAutosaveProject");
   let releaseWrite;
   const state = {
     projectRestoring: false,
