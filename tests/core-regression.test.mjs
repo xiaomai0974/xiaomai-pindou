@@ -5,7 +5,9 @@ import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
+const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
+const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
 
 async function appSource() {
@@ -65,6 +67,61 @@ test("color utilities preserve LAB matching behavior after extraction", async ()
     { l: 50, a: 0, b: -82.7485 },
   );
   assert.ok(Math.abs(referenceDeltaE - 2.0425) < 0.0002);
+});
+
+test("grid utilities preserve counts, bounds, lines, and selections after extraction", async () => {
+  const gridUtils = await browserUtilityContext(gridUtilsSourceUrl, "XiaomaiGridUtils", { Map });
+  const red = { code: "A1", hex: "#f00", empty: false };
+  const blue = { code: "B1", hex: "#00f", empty: false };
+  const empty = { code: "__EMPTY__", empty: true };
+  const before = [red, red, blue, empty];
+  const after = [blue, red, empty, blue];
+  const counts = gridUtils.buildCounts(before);
+
+  gridUtils.applyCountChanges(counts, [
+    { before: red, after: blue },
+    { before: blue, after: empty },
+    { before: empty, after: blue },
+  ]);
+  const expected = gridUtils.buildCounts(after);
+  assert.deepEqual(
+    [...counts.entries()].map(([code, item]) => [code, item.count]).sort(),
+    [...expected.entries()].map(([code, item]) => [code, item.count]).sort(),
+  );
+  assert.equal(gridUtils.totalBeadCount(after), 3);
+  assert.deepEqual(
+    { ...gridUtils.calculateUsedBounds([empty, red, empty, empty], 2) },
+    { minX: 1, minY: 0, maxX: 1, maxY: 0, width: 1, height: 1 },
+  );
+  assert.deepEqual(
+    Array.from(gridUtils.interpolateCells({ x: 0, y: 0 }, { x: 2, y: 2 }), (cell) => ({ ...cell })),
+    [
+      { x: 0, y: 0 },
+      { x: 1, y: 1 },
+      { x: 2, y: 2 },
+    ],
+  );
+  assert.equal(
+    gridUtils.pointInPolygon(1, 1, [
+      { x: 0, y: 0 },
+      { x: 2, y: 0 },
+      { x: 2, y: 2 },
+      { x: 0, y: 2 },
+    ]),
+    true,
+  );
+});
+
+test("PDF utilities preserve text encoding and create a valid document", async () => {
+  const pdfUtils = await browserUtilityContext(pdfUtilsSourceUrl, "XiaomaiPdfUtils");
+  assert.equal(pdfUtils.roundPdf(0.5), "0.5");
+  assert.equal(pdfUtils.pdfColor({ r: 255, g: 0, b: 128 }), "1 0 0.502");
+  assert.equal(pdfUtils.pdfTextToken("H7"), "(H7)");
+  assert.equal(pdfUtils.pdfTextToken("小麦"), "<5C0F9EA6>");
+  const bytes = pdfUtils.createPdf(100, 80, "BT /F1 12 Tf (H7) Tj ET");
+  const header = String.fromCharCode(...Array.from(bytes.slice(0, 8)));
+  assert.equal(header, "%PDF-1.4");
+  assert.ok(bytes.length > 500);
 });
 
 test("project codec preserves grid codes and binary masks after extraction", async () => {
@@ -350,37 +407,6 @@ test("bounded caches evict the least recently used entry", async () => {
 
   assert.deepEqual([...cache.keys()], ["A", "C"]);
   assert.equal(context.boundedCacheGet(cache, "B"), undefined);
-});
-
-test("incremental color counts match a full recount after edits", async () => {
-  const source = await appSource();
-  const helperSource = sourceBetween(source, "function buildCounts", "function displayPattern");
-  const context = {
-    Map,
-    samePatternColor(left, right) {
-      if (!left || !right) return false;
-      return Boolean(left.empty) === Boolean(right.empty) && (left.empty || left.code === right.code);
-    },
-  };
-  vm.runInNewContext(helperSource, context);
-  const red = { code: "A1", hex: "#f00", empty: false };
-  const blue = { code: "B1", hex: "#00f", empty: false };
-  const empty = { code: "__EMPTY__", empty: true };
-  const before = [red, red, blue, empty];
-  const after = [blue, red, empty, blue];
-  const counts = context.buildCounts(before);
-
-  context.applyCountChanges(counts, [
-    { before: red, after: blue },
-    { before: blue, after: empty },
-    { before: empty, after: blue },
-  ]);
-
-  const expected = context.buildCounts(after);
-  assert.deepEqual(
-    [...counts.entries()].map(([code, item]) => [code, item.count]).sort(),
-    [...expected.entries()].map(([code, item]) => [code, item.count]).sort(),
-  );
 });
 
 test("stale palette worker requests are aborted before a new preview", async () => {

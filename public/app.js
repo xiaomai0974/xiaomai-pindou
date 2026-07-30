@@ -12,6 +12,27 @@ const {
   rgbToLab,
 } = colorUtils;
 
+const gridUtils = window.XiaomaiGridUtils;
+if (!gridUtils) {
+  throw new Error("网格工具模块加载失败，请刷新页面后重试。");
+}
+const {
+  applyCountChanges,
+  boundsForCells,
+  buildCounts,
+  calculateUsedBounds: calculateGridUsedBounds,
+  countNeighborColors,
+  getEightNeighbors,
+  getFourNeighbors,
+  interpolateCells,
+  isBorderIndex,
+  mergeCellBounds,
+  pointInPolygon,
+  samePatternColor,
+  snapLineEnd,
+  totalBeadCount: countPatternBeads,
+} = gridUtils;
+
 const projectCodec = window.XiaomaiProjectCodec;
 if (!projectCodec) {
   throw new Error("项目编解码模块加载失败，请刷新页面后重试。");
@@ -22,6 +43,18 @@ const {
   maskToArray,
   serializeGrid,
 } = projectCodec;
+
+const pdfUtils = window.XiaomaiPdfUtils;
+if (!pdfUtils) {
+  throw new Error("PDF 工具模块加载失败，请刷新页面后重试。");
+}
+const {
+  createPdf,
+  pdfColor,
+  pdfTextToken,
+  pdfTextWidth,
+  roundPdf,
+} = pdfUtils;
 
 const fallbackPaletteData = [
   ["B1", "纯白", "#ffffff"],
@@ -5794,20 +5827,6 @@ function outlineColorCodes(pattern, size) {
   return codes;
 }
 
-function getEightNeighbors(x, y, size) {
-  const neighbors = [];
-  for (let dy = -1; dy <= 1; dy += 1) {
-    for (let dx = -1; dx <= 1; dx += 1) {
-      if (!dx && !dy) continue;
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
-      neighbors.push(ny * size + nx);
-    }
-  }
-  return neighbors;
-}
-
 function repairOutlines(pattern, size, strength = 1) {
   if (strength <= 1) return pattern;
   let repaired = closeOutlineGaps(pattern, size, strength);
@@ -6340,25 +6359,6 @@ function chooseRegionReplacement(pattern, size, region, analysis) {
   return entries[0].color;
 }
 
-function getFourNeighbors(x, y, size) {
-  const neighbors = [];
-  if (x > 0) neighbors.push(y * size + x - 1);
-  if (x < size - 1) neighbors.push(y * size + x + 1);
-  if (y > 0) neighbors.push((y - 1) * size + x);
-  if (y < size - 1) neighbors.push((y + 1) * size + x);
-  return neighbors;
-}
-
-function countNeighborColors(colors) {
-  const counted = new Map();
-  for (const color of colors) {
-    const entry = counted.get(color.code) || { color, count: 0 };
-    entry.count += 1;
-    counted.set(color.code, entry);
-  }
-  return [...counted.values()];
-}
-
 function detectBackgroundColor(pattern, size) {
   const borderColors = [];
   for (let i = 0; i < size; i += 1) {
@@ -6367,12 +6367,6 @@ function detectBackgroundColor(pattern, size) {
   const counted = countNeighborColors(borderColors);
   counted.sort((a, b) => b.count - a.count);
   return counted[0]?.color || whiteBeadColor();
-}
-
-function isBorderIndex(index, size) {
-  const x = index % size;
-  const y = Math.floor(index / size);
-  return x === 0 || y === 0 || x === size - 1 || y === size - 1;
 }
 
 function calculateQualityMetrics(pattern, size) {
@@ -7022,37 +7016,6 @@ function patternPreviewDataUrl(pattern, size) {
   return canvas.toDataURL("image/png");
 }
 
-function buildCounts(pattern) {
-  const counts = new Map();
-  pattern.forEach((item) => {
-    if (item.empty) return;
-    const current = counts.get(item.code) || { ...item, count: 0 };
-    current.count += 1;
-    counts.set(item.code, current);
-  });
-  return counts;
-}
-
-function applyCountChanges(counts, changes) {
-  const nextCounts = counts instanceof Map ? counts : new Map();
-  for (const change of changes) {
-    const before = change?.before;
-    const after = change?.after;
-    if (samePatternColor(before, after)) continue;
-    if (before && !before.empty) {
-      const current = nextCounts.get(before.code);
-      if (current?.count > 1) current.count -= 1;
-      else nextCounts.delete(before.code);
-    }
-    if (after && !after.empty) {
-      const current = nextCounts.get(after.code);
-      if (current) current.count += 1;
-      else nextCounts.set(after.code, { ...after, count: 1 });
-    }
-  }
-  return nextCounts;
-}
-
 function displayPattern() {
   if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   return state.pattern;
@@ -7068,28 +7031,11 @@ function displayQualityMetrics() {
 }
 
 function totalBeadCount(pattern = state.pattern) {
-  return pattern.reduce((sum, item) => sum + (item.empty ? 0 : 1), 0);
+  return countPatternBeads(pattern);
 }
 
 function calculateUsedBounds(pattern = state.pattern, size = state.gridSize) {
-  let minX = size;
-  let minY = size;
-  let maxX = -1;
-  let maxY = -1;
-  for (let index = 0; index < pattern.length; index += 1) {
-    const item = pattern[index];
-    if (item.empty) continue;
-    const x = index % size;
-    const y = Math.floor(index / size);
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x);
-    maxY = Math.max(maxY, y);
-  }
-  if (maxX < minX || maxY < minY) {
-    return { minX: 0, minY: 0, maxX: -1, maxY: -1, width: 0, height: 0 };
-  }
-  return { minX, minY, maxX, maxY, width: maxX - minX + 1, height: maxY - minY + 1 };
+  return calculateGridUsedBounds(pattern, size);
 }
 
 function renderPattern(options = {}) {
@@ -7200,33 +7146,6 @@ function configureCanvasForView() {
   elements.patternCanvas.style.aspectRatio = `${view.width} / ${view.height}`;
   setZoom(state.zoom, false);
   return resized;
-}
-
-function boundsForCells(cells) {
-  if (!cells?.length) return null;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const cell of cells) {
-    if (!cell || !Number.isFinite(cell.x) || !Number.isFinite(cell.y)) continue;
-    minX = Math.min(minX, cell.x);
-    minY = Math.min(minY, cell.y);
-    maxX = Math.max(maxX, cell.x);
-    maxY = Math.max(maxY, cell.y);
-  }
-  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
-}
-
-function mergeCellBounds(left, right) {
-  if (!left) return right;
-  if (!right) return left;
-  return {
-    minX: Math.min(left.minX, right.minX),
-    minY: Math.min(left.minY, right.minY),
-    maxX: Math.max(left.maxX, right.maxX),
-    maxY: Math.max(left.maxY, right.maxY),
-  };
 }
 
 function normalizeCellBounds(bounds) {
@@ -8650,11 +8569,6 @@ function eraseBrushCell(cell) {
   requestPatternRender(dirtyCells);
 }
 
-function samePatternColor(left, right) {
-  if (!left || !right) return false;
-  return Boolean(left.empty) === Boolean(right.empty) && (left.empty || left.code === right.code);
-}
-
 function commitStrokeHistory() {
   const snapshot = state.strokeHistorySnapshot;
   const changed = state.strokeChanged;
@@ -8791,15 +8705,6 @@ function mirrorPattern(direction) {
   markProjectDirty();
 }
 
-function snapLineEnd(start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  if (Math.abs(dx) > Math.abs(dy) * 2) return { x: end.x, y: start.y };
-  if (Math.abs(dy) > Math.abs(dx) * 2) return { x: start.x, y: end.y };
-  const step = Math.max(Math.abs(dx), Math.abs(dy));
-  return { x: start.x + Math.sign(dx) * step, y: start.y + Math.sign(dy) * step };
-}
-
 function drawLineBetweenCells(start, end, color) {
   if (state.isPreviewDirty || state.gridLocked) return;
   pushHistory();
@@ -8914,20 +8819,6 @@ function sampleReferenceImagePixel(x, y) {
     state.referenceSampler = { image: state.referenceImage, canvas, context };
   }
   return state.referenceSampler.context.getImageData(x, y, 1, 1).data;
-}
-
-function interpolateCells(start, end) {
-  const cells = [];
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
-  for (let step = 0; step <= steps; step += 1) {
-    cells.push({
-      x: Math.round(start.x + (dx * step) / steps),
-      y: Math.round(start.y + (dy * step) / steps),
-    });
-  }
-  return cells;
 }
 
 function handleCanvasWheel(event) {
@@ -9281,19 +9172,6 @@ function finishPenSelection() {
   updateSelectionLabel();
   renderPattern();
   elements.cellInfo.textContent = `钢笔选区已闭合，共选中 ${selected.size} 个像素，可直接填色或复制。`;
-}
-
-function pointInPolygon(x, y, polygon) {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const xi = polygon[i].x;
-    const yi = polygon[i].y;
-    const xj = polygon[j].x;
-    const yj = polygon[j].y;
-    const intersects = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi || 0.0001) + xi;
-    if (intersects) inside = !inside;
-  }
-  return inside;
 }
 
 function clearSelection() {
@@ -10286,61 +10164,6 @@ function buildVectorPdf(options = {}) {
   }
 
   return createPdf(page.width, page.height, commands.join("\n"));
-}
-
-function pdfColor(rgb) {
-  return `${roundPdf(rgb.r / 255)} ${roundPdf(rgb.g / 255)} ${roundPdf(rgb.b / 255)}`;
-}
-
-function roundPdf(value) {
-  return Number(value).toFixed(3).replace(/\.?0+$/, "");
-}
-
-function pdfEscape(value) {
-  return value.replace(/[^\x20-\x7e]/g, "?").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-}
-
-function pdfTextWidth(value, size) {
-  return Array.from(String(value)).reduce((sum, char) => sum + (/[\x20-\x7e]/.test(char) ? 0.5 : 0.9), 0) * size;
-}
-
-function pdfTextToken(value) {
-  return /[^\x20-\x7e]/.test(value) ? `<${pdfUtf16BeHex(value)}>` : `(${pdfEscape(value)})`;
-}
-
-function pdfUtf16BeHex(value) {
-  let hex = "";
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    hex += code.toString(16).padStart(4, "0").toUpperCase();
-  }
-  return hex;
-}
-
-function createPdf(width, height, stream) {
-  const objects = [
-    "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${roundPdf(width)} ${roundPdf(height)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
-    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    "<< /Type /Font /Subtype /Type0 /BaseFont /STSong-Light /Encoding /UniGB-UCS2-H /DescendantFonts [7 0 R] >>",
-    "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /STSong-Light /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 2 >> /FontDescriptor 8 0 R >>",
-    "<< /Type /FontDescriptor /FontName /STSong-Light /Flags 6 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 700 /StemV 80 >>",
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  objects.forEach((object, index) => {
-    offsets.push(pdf.length);
-    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  });
-  const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (let i = 1; i < offsets.length; i += 1) {
-    pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
-  }
-  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return new Uint8Array([...pdf].map((char) => char.charCodeAt(0)));
 }
 
 async function copyBeadList() {

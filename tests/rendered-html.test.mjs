@@ -45,9 +45,11 @@ test("serves the Xiaomai bead designer homepage", async () => {
   const html = await response.text();
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /color-utils\.js\?v=20260730-1/);
+  assert.match(html, /grid-utils\.js\?v=20260730-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
+  assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260730-7/);
+  assert.match(html, /app\.js\?v=20260730-8/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -127,29 +129,47 @@ test("serves the Xiaomai bead designer homepage", async () => {
 });
 
 test("serves the current application script, utilities, worker, and stylesheet", async () => {
-  const [scriptResponse, colorUtilsResponse, projectCodecResponse, historyUtilsResponse, workerResponse, styleResponse] =
-    await Promise.all([
+  const [
+    scriptResponse,
+    colorUtilsResponse,
+    gridUtilsResponse,
+    projectCodecResponse,
+    pdfUtilsResponse,
+    historyUtilsResponse,
+    workerResponse,
+    styleResponse,
+  ] = await Promise.all([
       fetchFromWorker("/app.js"),
       fetchFromWorker("/color-utils.js"),
+      fetchFromWorker("/grid-utils.js"),
       fetchFromWorker("/project-codec.js"),
+      fetchFromWorker("/pdf-utils.js"),
       fetchFromWorker("/history-utils.js"),
       fetchFromWorker("/palette-worker.js"),
       fetchFromWorker("/styles.css"),
     ]);
   assert.equal(scriptResponse.status, 200);
   assert.equal(colorUtilsResponse.status, 200);
+  assert.equal(gridUtilsResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
+  assert.equal(pdfUtilsResponse.status, 200);
   assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
   const script = await scriptResponse.text();
   const colorUtils = await colorUtilsResponse.text();
+  const gridUtils = await gridUtilsResponse.text();
   const projectCodec = await projectCodecResponse.text();
+  const pdfUtils = await pdfUtilsResponse.text();
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
+  assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
+  assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
+  assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
+  assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);
@@ -254,7 +274,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function invalidateImageProcessingState\(\)/);
   assert.match(script, /const requestVersion = \+\+previewUpdateVersion;\s*cancelPendingPaletteWorkerRequests\(\);/);
   assert.match(script, /const gridLinePathCache = \{/);
-  assert.match(script, /function applyCountChanges\(counts, changes\)/);
+  assert.doesNotMatch(script, /function applyCountChanges\(counts, changes\)/);
+  assert.match(gridUtils, /function applyCountChanges\(counts, changes\)/);
   assert.match(script, /function scheduleQualityMetricsRefresh\(\)/);
   assert.match(script, /if \(!dirtyBounds && typeof Path2D === "function"\)/);
   assert.match(script, /function patchPaletteRowsInPlace\(listRows, total\)/);
@@ -293,9 +314,11 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const exportCellSource = script.slice(script.indexOf("function drawReadableCells"), script.indexOf("function drawReadableLegend"));
   assert.match(exportCellSource, /const item = pattern\[y \* stride \+ x\]/);
   assert.doesNotMatch(exportCellSource, /state\.pattern\[y \* stride \+ x\]/);
-  const pdfSource = script.slice(script.indexOf("function buildVectorPdf"), script.indexOf("function pdfColor"));
+  const pdfSource = script.slice(script.indexOf("function buildVectorPdf"), script.indexOf("async function copyBeadList"));
   assert.match(pdfSource, /const item = pattern\[y \* stride \+ x\]/);
   assert.doesNotMatch(pdfSource, /state\.pattern\[y \* stride \+ x\]/);
+  assert.doesNotMatch(script, /function createPdf\(/);
+  assert.match(pdfUtils, /function createPdf\(/);
   assert.match(script, /state\.fitMode === "center"/);
   assert.match(script, /const renderDetailBefore/);
   assert.doesNotMatch(script, /function openAutosaveDb\(/);
