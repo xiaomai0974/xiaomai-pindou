@@ -4,6 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const appSourceUrl = new URL("../public/app.js", import.meta.url);
+const backgroundUtilsSourceUrl = new URL("../public/background-utils.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const editorGeometrySourceUrl = new URL("../public/editor-geometry.js", import.meta.url);
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
@@ -928,30 +929,35 @@ test("raw diagnostics sample the original source instead of the optimized base i
 });
 
 test("light high-contrast structures are protected from connected background removal", async () => {
-  const source = await appSource();
-  const helperSource = sourceBetween(source, "function buildBackgroundProtectionMask", "function applyBackgroundModeToGrid");
-  const light = { code: "F1", rgb: { r: 247, g: 242, b: 232 }, lab: { l: 94 } };
-  const dark = { code: "H7", rgb: { r: 20, g: 20, b: 20 }, lab: { l: 8 } };
+  const colorUtils = await browserUtilityContext(colorUtilsSourceUrl, "XiaomaiColorUtils");
+  const gridUtils = await browserUtilityContext(gridUtilsSourceUrl, "XiaomaiGridUtils", { Map });
+  const source = await readFile(backgroundUtilsSourceUrl, "utf8");
+  const window = { XiaomaiColorUtils: colorUtils, XiaomaiGridUtils: gridUtils };
+  vm.runInNewContext(source, { window, Map, Set, Math, Uint8Array });
+  const backgroundUtils = window.XiaomaiBackgroundUtils;
+  const lightRgb = { r: 247, g: 242, b: 232 };
+  const darkRgb = { r: 20, g: 20, b: 20 };
+  const light = { code: "F1", rgb: lightRgb, lab: colorUtils.rgbToLab(lightRgb) };
+  const dark = { code: "H7", rgb: darkRgb, lab: colorUtils.rgbToLab(darkRgb) };
   const pattern = Array(9).fill(light);
   pattern[1] = dark;
-  const context = {
-    Uint8Array,
-    colorDistance: (a, b) => Math.abs(a.lab.l - b.lab.l),
-    getEightNeighbors: (x, y, size) => {
-      const neighbors = [];
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (let dx = -1; dx <= 1; dx += 1) {
-          if (!dx && !dy) continue;
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx >= 0 && ny >= 0 && nx < size && ny < size) neighbors.push(ny * size + nx);
-        }
-      }
-      return neighbors;
-    },
-  };
-  vm.runInNewContext(helperSource, context);
-
-  const mask = context.buildBackgroundProtectionMask(pattern, 3);
+  const mask = backgroundUtils.buildBackgroundProtectionMask(pattern, 3);
   assert.equal(mask[4], 1);
+
+  const size = 7;
+  const protectedSubject = Array(size * size).fill(light);
+  for (let y = 2; y <= 4; y += 1) {
+    for (let x = 2; x <= 4; x += 1) {
+      if (x === 3 && y === 3) continue;
+      protectedSubject[y * size + x] = dark;
+    }
+  }
+  const backgroundMask = backgroundUtils.computeBackgroundMask(
+    protectedSubject,
+    protectedSubject,
+    size,
+    { force: true, emptyBackground: true },
+  );
+  assert.equal(backgroundMask[0], 1);
+  assert.equal(backgroundMask[3 * size + 3], 0);
 });

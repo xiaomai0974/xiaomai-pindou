@@ -46,6 +46,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /color-utils\.js\?v=20260730-1/);
   assert.match(html, /grid-utils\.js\?v=20260730-1/);
+  assert.match(html, /background-utils\.js\?v=20260731-1/);
   assert.match(html, /editor-geometry\.js\?v=20260730-1/);
   assert.match(html, /image-utils\.js\?v=20260730-1/);
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
@@ -55,7 +56,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260730-12/);
+  assert.match(html, /app\.js\?v=20260731-1/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -139,6 +140,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     scriptResponse,
     colorUtilsResponse,
     gridUtilsResponse,
+    backgroundUtilsResponse,
     editorGeometryResponse,
     imageUtilsResponse,
     preprocessUtilsResponse,
@@ -154,6 +156,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/app.js"),
       fetchFromWorker("/color-utils.js"),
       fetchFromWorker("/grid-utils.js"),
+      fetchFromWorker("/background-utils.js"),
       fetchFromWorker("/editor-geometry.js"),
       fetchFromWorker("/image-utils.js"),
       fetchFromWorker("/preprocess-utils.js"),
@@ -169,6 +172,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(scriptResponse.status, 200);
   assert.equal(colorUtilsResponse.status, 200);
   assert.equal(gridUtilsResponse.status, 200);
+  assert.equal(backgroundUtilsResponse.status, 200);
   assert.equal(editorGeometryResponse.status, 200);
   assert.equal(imageUtilsResponse.status, 200);
   assert.equal(preprocessUtilsResponse.status, 200);
@@ -183,6 +187,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const script = await scriptResponse.text();
   const colorUtils = await colorUtilsResponse.text();
   const gridUtils = await gridUtilsResponse.text();
+  const backgroundUtils = await backgroundUtilsResponse.text();
   const editorGeometry = await editorGeometryResponse.text();
   const imageUtils = await imageUtilsResponse.text();
   const preprocessUtils = await preprocessUtilsResponse.text();
@@ -194,6 +199,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
+  assert.match(script, /const backgroundUtils = window\.XiaomaiBackgroundUtils/);
   assert.match(script, /const editorGeometry = window\.XiaomaiEditorGeometry/);
   assert.match(script, /const imageUtils = window\.XiaomaiImageUtils/);
   assert.match(script, /const preprocessUtils = window\.XiaomaiPreprocessUtils/);
@@ -204,6 +210,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
   assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
+  assert.match(backgroundUtils, /global\.XiaomaiBackgroundUtils = Object\.freeze/);
   assert.match(editorGeometry, /global\.XiaomaiEditorGeometry = Object\.freeze/);
   assert.match(imageUtils, /global\.XiaomaiImageUtils = Object\.freeze/);
   assert.match(preprocessUtils, /global\.XiaomaiPreprocessUtils = Object\.freeze/);
@@ -286,7 +293,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(colorUtils, /function deltaE2000\(/);
   assert.match(script, /function refineAccuratePaletteMatches\(/);
   assert.match(script, /function calculateColorMatchMetrics\(/);
-  assert.match(script, /function buildBackgroundProtectionMask\(/);
+  assert.doesNotMatch(script, /function buildBackgroundProtectionMask\(/);
+  assert.match(backgroundUtils, /function buildBackgroundProtectionMask\(/);
   assert.doesNotMatch(script, /function buildConnectedBaseBackgroundMask\(/);
   assert.match(imageUtils, /function buildConnectedBaseBackgroundMask\(/);
   assert.doesNotMatch(script, /function cleanupBaseImageBackground\(/);
@@ -473,13 +481,15 @@ test("base-image background cleanup only removes edge-connected light pixels", a
 });
 
 test("edge background detection does not erase a dark subject touching one edge", async () => {
-  const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  const detectionSource = source.slice(
-    source.indexOf("function detectEdgeBackgroundColors"),
-    source.indexOf("function clampRange"),
-  );
-  const context = { Map, Set, Math };
-  vm.runInNewContext(detectionSource, context);
+  const colorSource = await readFile(new URL("../public/color-utils.js", import.meta.url), "utf8");
+  const gridSource = await readFile(new URL("../public/grid-utils.js", import.meta.url), "utf8");
+  const backgroundSource = await readFile(new URL("../public/background-utils.js", import.meta.url), "utf8");
+  const window = {};
+  const context = { window, Map, Set, Math, Uint8Array };
+  vm.runInNewContext(colorSource, context);
+  vm.runInNewContext(gridSource, context);
+  vm.runInNewContext(backgroundSource, context);
+  const { detectEdgeBackgroundColors } = window.XiaomaiBackgroundUtils;
   const color = (code, rgb, lightness) => ({ code, hex: code, rgb, lab: { l: lightness } });
   const skin = color("skin", { r: 220, g: 160, b: 135 }, 72);
   const black = color("black", { r: 15, g: 15, b: 15 }, 5);
@@ -489,10 +499,10 @@ test("edge background detection does not erase a dark subject touching one edge"
   for (let x = 1; x < size - 1; x += 1) oneEdgeSubject[x] = black;
   for (let x = 0; x < size; x += 1) oneEdgeSubject[(size - 1) * size + x] = white;
   for (let y = 0; y < size; y += 1) oneEdgeSubject[y * size] = white;
-  const detected = context.detectEdgeBackgroundColors(oneEdgeSubject, size).map((item) => item.code);
+  const detected = detectEdgeBackgroundColors(oneEdgeSubject, size).map((item) => item.code);
   assert.ok(detected.includes("white"));
   assert.ok(!detected.includes("black"));
 
   const darkBackground = Array(size * size).fill(black);
-  assert.ok(context.detectEdgeBackgroundColors(darkBackground, size).some((item) => item.code === "black"));
+  assert.ok(detectEdgeBackgroundColors(darkBackground, size).some((item) => item.code === "black"));
 });
