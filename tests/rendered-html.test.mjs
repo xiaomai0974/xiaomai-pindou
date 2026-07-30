@@ -57,8 +57,9 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
+  assert.match(html, /export-renderer\.js\?v=20260731-1/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260731-3/);
+  assert.match(html, /app\.js\?v=20260731-4/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -153,6 +154,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     projectCodecResponse,
     projectStoreResponse,
     pdfUtilsResponse,
+    exportRendererResponse,
     historyUtilsResponse,
     workerResponse,
     styleResponse,
@@ -171,6 +173,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/project-codec.js"),
       fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
+      fetchFromWorker("/export-renderer.js"),
       fetchFromWorker("/history-utils.js"),
       fetchFromWorker("/palette-worker.js"),
       fetchFromWorker("/styles.css"),
@@ -189,6 +192,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(projectCodecResponse.status, 200);
   assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
+  assert.equal(exportRendererResponse.status, 200);
   assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
@@ -206,6 +210,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const projectCodec = await projectCodecResponse.text();
   const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
+  const exportRenderer = await exportRendererResponse.text();
   const historyUtils = await historyUtilsResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
@@ -220,6 +225,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
   assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
+  assert.match(script, /const exportRenderer = window\.XiaomaiExportRenderer/);
   assert.match(colorUtils, /global\.XiaomaiColorUtils = Object\.freeze/);
   assert.match(gridUtils, /global\.XiaomaiGridUtils = Object\.freeze/);
   assert.match(backgroundUtils, /global\.XiaomaiBackgroundUtils = Object\.freeze/);
@@ -235,6 +241,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
   assert.match(projectStore, /global\.XiaomaiProjectStore = Object\.freeze/);
   assert.match(pdfUtils, /global\.XiaomaiPdfUtils = Object\.freeze/);
+  assert.match(exportRenderer, /global\.XiaomaiExportRenderer = Object\.freeze/);
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);
@@ -300,9 +307,9 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /state\.colorMode = paletteState\.colorConstraintMode === "fixedPalette" \? "fixedPalette" : "max"/);
   const targetLimitSource = script.slice(script.indexOf("function targetColorLimit"), script.indexOf("function isColorLocked"));
   assert.match(targetLimitSource, /state\.processingProfile === "photoColor"\) return palette\.length/);
-  assert.match(script, /function drawReadableExportWatermark\(/);
-  assert.match(script, /const includeWatermark = options\.includeWatermark !== false/);
-  assert.match(script, /const maxLegendRows = 45/);
+  assert.doesNotMatch(script, /function drawReadableExportWatermark\(/);
+  assert.match(exportRenderer, /function drawReadableExportWatermark\(/);
+  assert.match(exportRenderer, /const maxLegendRows = 45/);
   assert.match(script, /function capturePreviewCanvasSnapshot\(/);
   assert.match(script, /function restorePreviewCanvasSnapshot\(/);
   assert.doesNotMatch(script, /function deltaE2000\(/);
@@ -393,12 +400,15 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const exportSnapshotSource = script.slice(script.indexOf("function currentExportSnapshot"), script.indexOf("function renderPatternNow"));
   assert.match(exportSnapshotSource, /state\.isPreviewDirty && state\.previewPattern\.length/);
   assert.doesNotMatch(exportSnapshotSource, /displayPattern\(\)/);
-  const exportCellSource = script.slice(script.indexOf("function drawReadableCells"), script.indexOf("function drawReadableLegend"));
+  const exportCellSource = exportRenderer.slice(
+    exportRenderer.indexOf("function drawReadableCells"),
+    exportRenderer.indexOf("function drawReadableLegend"),
+  );
   assert.match(exportCellSource, /const item = pattern\[y \* stride \+ x\]/);
-  assert.doesNotMatch(exportCellSource, /state\.pattern\[y \* stride \+ x\]/);
-  const pdfSource = script.slice(script.indexOf("function buildVectorPdf"), script.indexOf("async function copyBeadList"));
+  assert.doesNotMatch(exportCellSource, /state\./);
+  const pdfSource = exportRenderer.slice(exportRenderer.indexOf("function buildVectorPdf"));
   assert.match(pdfSource, /const item = pattern\[y \* stride \+ x\]/);
-  assert.doesNotMatch(pdfSource, /state\.pattern\[y \* stride \+ x\]/);
+  assert.doesNotMatch(pdfSource, /state\./);
   assert.doesNotMatch(script, /function createPdf\(/);
   assert.match(pdfUtils, /function createPdf\(/);
   assert.match(script, /state\.fitMode === "center"/);

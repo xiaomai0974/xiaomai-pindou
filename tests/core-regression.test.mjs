@@ -9,6 +9,7 @@ const canvasRendererSourceUrl = new URL("../public/canvas-renderer.js", import.m
 const colorPostprocessSourceUrl = new URL("../public/color-postprocess.js", import.meta.url);
 const colorUtilsSourceUrl = new URL("../public/color-utils.js", import.meta.url);
 const editorGeometrySourceUrl = new URL("../public/editor-geometry.js", import.meta.url);
+const exportRendererSourceUrl = new URL("../public/export-renderer.js", import.meta.url);
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
@@ -396,6 +397,99 @@ test("canvas renderer keeps cells, labels, grid, reference, and selection layers
     isActiveCell: () => true,
   });
   assert.equal(calls.some(([name, color]) => name === "fillRect" && color === "rgba(232, 59, 100, 0.22)"), true);
+});
+
+test("export renderer uses one pattern snapshot for PNG and PDF output", async () => {
+  const colorUtils = await browserUtilityContext(colorUtilsSourceUrl, "XiaomaiColorUtils");
+  const exportRenderer = await browserUtilityContext(
+    exportRendererSourceUrl,
+    "XiaomaiExportRenderer",
+    { Map, Set },
+  );
+  const pdfUtils = await browserUtilityContext(pdfUtilsSourceUrl, "XiaomaiPdfUtils", {
+    TextEncoder,
+    Uint8Array,
+  });
+  const calls = [];
+  const exportCtx = {
+    save() {},
+    restore() {},
+    beginPath() {},
+    rect() {},
+    clip() {},
+    translate() {},
+    rotate() {},
+    fillRect(...args) { calls.push(["fillRect", ...args]); },
+    strokeRect(...args) { calls.push(["strokeRect", ...args]); },
+    moveTo() {},
+    lineTo() {},
+    stroke() {},
+    fillText(...args) { calls.push(["fillText", ...args]); },
+  };
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => exportCtx,
+  };
+  const document = {
+    createElement(tagName) {
+      assert.equal(tagName, "canvas");
+      return canvas;
+    },
+  };
+  const red = {
+    code: "A1",
+    name: "红",
+    hex: "#ff0000",
+    rgb: { r: 255, g: 0, b: 0 },
+    empty: false,
+    count: 2,
+  };
+  const empty = { code: "__EMPTY__", empty: true };
+  const pattern = [red, empty, red, empty];
+  const counts = new Map([["A1", red]]);
+  const rows = [red];
+
+  const rendered = exportRenderer.renderReadableExportCanvas({
+    document,
+    pattern,
+    counts,
+    rows,
+    widthCells: 2,
+    heightCells: 2,
+    stride: 2,
+    fileName: "test",
+    dimensionsLabel: "2 x 2",
+    contrastColor: colorUtils.contrastColor,
+    includeWatermark: true,
+  });
+  assert.equal(rendered, canvas);
+  assert.ok(canvas.width > 0 && canvas.height > 0);
+  assert.equal(calls.some(([name, value]) => name === "fillText" && value === "A1"), true);
+  assert.equal(calls.some(([name, value]) => name === "fillText" && value === "小麦拼豆"), true);
+
+  const pdf = exportRenderer.buildVectorPdf({
+    pattern,
+    counts,
+    rows,
+    widthCells: 2,
+    heightCells: 2,
+    stride: 2,
+    guideEvery: 5,
+    fileName: "test",
+    dimensionsLabel: "2 x 2",
+    paletteSize: 221,
+    contrastColor: colorUtils.contrastColor,
+    hexToRgb: colorUtils.hexToRgb,
+    pdfColor: pdfUtils.pdfColor,
+    pdfTextToken: pdfUtils.pdfTextToken,
+    pdfTextWidth: pdfUtils.pdfTextWidth,
+    roundPdf: pdfUtils.roundPdf,
+    createPdf: pdfUtils.createPdf,
+    includeWatermark: true,
+  });
+  assert.equal(new TextDecoder().decode(pdf.slice(0, 8)), "%PDF-1.4");
+  assert.ok(pdf.length > 500);
 });
 
 test("editor geometry preserves brush, symmetry, mirror, and selection behavior", async () => {
