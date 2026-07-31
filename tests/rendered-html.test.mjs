@@ -59,7 +59,8 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260731-2/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /app\.js\?v=20260731-5/);
+  assert.match(html, /styles\.css\?v=20260731-1/);
+  assert.match(html, /app\.js\?v=20260731-6/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -75,6 +76,9 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.doesNotMatch(html, /id="topExportModeButton"/);
   assert.doesNotMatch(html, /data-sidebar-target="export"/);
   assert.doesNotMatch(html, /id="smartOptimizeButton"/);
+  assert.doesNotMatch(html, /id="variantButton"/);
+  assert.doesNotMatch(html, /id="coverButton"/);
+  assert.doesNotMatch(html, /id="optimizePanel"/);
   assert.doesNotMatch(html, /data-sidebar-target="generate"/);
   assert.doesNotMatch(html, /id="generateButton"/);
   assert.doesNotMatch(html, /id="traceReferenceSnapToggle"/);
@@ -212,6 +216,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const pdfUtils = await pdfUtilsResponse.text();
   const exportRenderer = await exportRendererResponse.text();
   const historyUtils = await historyUtilsResponse.text();
+  const style = await styleResponse.text();
   assert.match(script, /const colorUtils = window\.XiaomaiColorUtils/);
   assert.match(script, /const gridUtils = window\.XiaomaiGridUtils/);
   assert.match(script, /const backgroundUtils = window\.XiaomaiBackgroundUtils/);
@@ -244,6 +249,12 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(exportRenderer, /global\.XiaomaiExportRenderer = Object\.freeze/);
   assert.doesNotMatch(exportRenderer, /function countBeads\(/);
   assert.doesNotMatch(script, /localPreprocessToolbar:\s*document\.querySelector/);
+  assert.doesNotMatch(script, /function showSmartOptimize\(/);
+  assert.doesNotMatch(script, /function showImageVariants\(/);
+  assert.doesNotMatch(script, /function runOptimizeCandidate\(/);
+  assert.doesNotMatch(script, /function finalPaletteSimplification\(/);
+  assert.doesNotMatch(script, /function compressColorFamilies\(/);
+  assert.doesNotMatch(style, /\.optimize-panel/);
   assert.match(script, /function renderPattern\(options = \{\}\)/);
   assert.match(script, /function activeGridWidth\(\)/);
   assert.match(script, /function activeGridHeight\(\)/);
@@ -417,7 +428,6 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const renderDetailBefore/);
   assert.doesNotMatch(script, /function openAutosaveDb\(/);
   assert.match(await workerResponse.text(), /function mapPaletteIndices\(/);
-  const style = await styleResponse.text();
   assert.match(style, /\.canvas-wrap/);
   assert.match(style, /\.workbench-mode-header/);
   assert.match(style, /\.pending-preview-bar/);

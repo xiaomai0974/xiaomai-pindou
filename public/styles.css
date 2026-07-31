@@ -1864,77 +1864,6 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
   font-size: 12px;
 }
 
-.optimize-panel {
-  display: grid;
-  gap: 10px;
-  border: 2px solid var(--ink);
-  background: #fff;
-  padding: 10px;
-}
-
-.optimize-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 2px solid var(--ink);
-  padding-bottom: 8px;
-}
-
-.optimize-body {
-  display: grid;
-  gap: 10px;
-}
-
-.optimize-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
-  gap: 8px;
-}
-
-.metric-pill {
-  border: 2px solid var(--ink);
-  background: var(--paper);
-  padding: 6px;
-  font-size: 12px;
-  font-weight: 850;
-}
-
-.plan-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.plan-card {
-  display: grid;
-  gap: 8px;
-  border: 2px solid var(--ink);
-  background: #fff;
-  padding: 8px;
-}
-
-.plan-card.is-recommended {
-  box-shadow: inset 0 0 0 3px var(--green);
-}
-
-.plan-card.is-risky {
-  border-color: #8a8a8a;
-  background: #f3f3f3;
-}
-
-.plan-preview {
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  border: 2px solid var(--ink);
-  image-rendering: pixelated;
-  background: #fff;
-}
-
-.plan-card button {
-  min-height: 34px;
-  font-weight: 950;
-}
-
 .legend-chip {
   display: grid;
   flex: 0 0 auto;
@@ -2338,8 +2267,7 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
 }
 
 .generation-card .group-title,
-.generation-card #generateButton,
-.generation-card #smartOptimizeButton {
+.generation-card #generateButton {
   grid-column: 1 / -1;
 }
 

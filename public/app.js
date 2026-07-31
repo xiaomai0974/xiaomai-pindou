@@ -454,7 +454,6 @@ const state = {
   toolboxLocked: false,
   exportInProgress: false,
   exportWatermarkEnabled: true,
-  pendingOptimizePlans: [],
 };
 
 const colorPostprocessApi = window.XiaomaiColorPostprocess;
@@ -483,8 +482,6 @@ const {
   analyzeColorRegions,
   cleanIsolatedPixels,
   cleanPatternRegions,
-  colorLuminance,
-  findProtectedColorCodes,
   forceMaxColors,
   isProtectedRegion,
   mergeLowUsageColors,
@@ -601,14 +598,12 @@ const elements = {
   traceReferenceFitButton: document.querySelector("#traceReferenceFitButton"),
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
   traceReferenceClearButton: document.querySelector("#traceReferenceClearButton"),
-  traceReferenceSnapToggle: document.querySelector("#traceReferenceSnapToggle"),
   pendingPreviewBar: document.querySelector("#pendingPreviewBar"),
   confirmPreviewButton: document.querySelector("#confirmPreviewButton"),
   discardPreviewButton: document.querySelector("#discardPreviewButton"),
   exportButton: document.querySelector("#exportButton"),
   exportFormat: document.querySelector("#exportFormat"),
   exportWatermarkToggle: document.querySelector("#exportWatermarkToggle"),
-  coverButton: document.querySelector("#coverButton"),
   resetButton: document.querySelector("#resetButton"),
   copyListButton: document.querySelector("#copyListButton"),
   zoomInButton: document.querySelector("#zoomInButton"),
@@ -681,11 +676,6 @@ const elements = {
   constraintPalette: document.querySelector("#constraintPalette"),
   paletteSearchInput: document.querySelector("#paletteSearchInput"),
   showSelectedColorsButton: document.querySelector("#showSelectedColorsButton"),
-  smartOptimizeButton: document.querySelector("#smartOptimizeButton"),
-  variantButton: document.querySelector("#variantButton"),
-  optimizePanel: document.querySelector("#optimizePanel"),
-  optimizeBody: document.querySelector("#optimizeBody"),
-  closeOptimizeButton: document.querySelector("#closeOptimizeButton"),
   accurateMatchToggle: document.querySelector("#accurateMatchToggle"),
   colorDebugToggle: document.querySelector("#colorDebugToggle"),
   colorDebugInfo: document.querySelector("#colorDebugInfo"),
@@ -1685,14 +1675,6 @@ function setupEvents() {
     markProjectDirty();
   });
   elements.traceReferenceClearButton.addEventListener("click", clearReferenceImage);
-  elements.traceReferenceSnapToggle?.addEventListener("change", () => {
-    state.traceReference.snapToGrid = elements.traceReferenceSnapToggle.checked;
-    if (state.traceReference.snapToGrid) {
-      state.traceReference.x = Math.round(state.traceReference.x || 0);
-      state.traceReference.y = Math.round(state.traceReference.y || 0);
-      renderPattern();
-    }
-  });
   document.addEventListener("click", (event) => {
     if (!elements.referenceMenu || elements.referenceMenu.hidden) return;
     if (event.target.closest("#referenceToolbar")) return;
@@ -1702,11 +1684,6 @@ function setupEvents() {
     if (!elements.localPreprocessPanel || elements.localPreprocessPanel.hidden) return;
     if (event.target.closest("#localPreprocessToolbar")) return;
     closeLocalPreprocessPanel();
-  });
-  elements.smartOptimizeButton?.addEventListener("click", showSmartOptimize);
-  elements.variantButton.addEventListener("click", showImageVariants);
-  elements.closeOptimizeButton.addEventListener("click", () => {
-    elements.optimizePanel.hidden = true;
   });
   elements.paletteSearchInput.addEventListener("input", () => {
     state.paletteSearch = elements.paletteSearchInput.value.trim().toLowerCase();
@@ -1731,7 +1708,6 @@ function setupEvents() {
     state.exportWatermarkEnabled = elements.exportWatermarkToggle.checked;
     markProjectDirty();
   });
-  elements.coverButton.addEventListener("click", exportPattern);
   elements.resetButton.addEventListener("click", () => {
     if (confirmReplaceCurrentProject("重置")) resetApp();
   });
@@ -1886,7 +1862,6 @@ function setupProjectDirtyTracking() {
     "#referenceOpacityProxy",
     "#traceReferenceToggle",
     "#traceReferenceOpacity",
-    "#traceReferenceSnapToggle",
     "#brushSizeInput",
     "#brushShapeSelect",
     "#symmetryModeSelect",
@@ -2559,10 +2534,6 @@ function syncTraceReferenceControls() {
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;
   elements.traceReferenceCenterButton.disabled = !hasReference;
-  if (elements.traceReferenceSnapToggle) {
-    elements.traceReferenceSnapToggle.checked = Boolean(trace.snapToGrid);
-    elements.traceReferenceSnapToggle.disabled = !hasReference;
-  }
   updateCanvasCursor();
 }
 
@@ -4746,17 +4717,6 @@ function baselinePipeline(pattern, size) {
   return validateColorConstraints(processed);
 }
 
-function finalPaletteSimplification(pattern, size, options = {}) {
-  let processed = validateColorConstraints(pattern);
-  const strength = options.strength || (size <= 48 ? "balanced" : "light");
-  processed = compressColorFamilies(processed, size, strength);
-  processed = capRegionPalettes(processed, size, strength);
-  processed = reduceNeighborhoodNoise(processed, size, strength);
-  processed = mergeLowUsageColors(processed, size, { strength });
-  processed = forceMaxColors(processed, size, targetColorLimit());
-  return validateColorConstraints(processed);
-}
-
 function outlineStrengthForSize() {
   if (!state.lineBoost) return 0;
   if (state.outlineMode === "off") return 0;
@@ -4803,58 +4763,6 @@ function colorFamilyCaps(size) {
     "black-gray-white": 7,
     other: 6,
   };
-}
-
-function compressColorFamilies(pattern, size, strength = "balanced") {
-  const counts = buildCounts(pattern);
-  if (!counts.size) return pattern;
-  const outlineCodes = outlineColorCodes(pattern, size);
-  const protectedCodes = findProtectedColorCodes(pattern, size);
-  const caps = colorFamilyCaps(size);
-  const replacements = new Map();
-  const byFamily = new Map();
-
-  for (const item of counts.values()) {
-    const family = colorFamily(item);
-    if (!byFamily.has(family)) byFamily.set(family, []);
-    byFamily.get(family).push(item);
-  }
-
-  for (const [family, colors] of byFamily.entries()) {
-    let cap = Math.max(1, caps[family] || caps.other || 4);
-    if (strength === "light") cap += 2;
-    if (strength === "balanced" && size >= 64) cap += 1;
-    if (size === 64) {
-      if (family === "red-pink") cap = Math.max(cap, 4);
-      if (family === "skin-beige") cap = Math.max(cap, 3);
-      if (family === "black-gray-white") cap = Math.max(cap, 4);
-    }
-    if (colors.length <= cap) continue;
-    const sorted = [...colors].sort((a, b) => {
-      const pa = colorProtectionRank(a, outlineCodes, protectedCodes);
-      const pb = colorProtectionRank(b, outlineCodes, protectedCodes);
-      return pb - pa || b.count - a.count || colorLuminance(a) - colorLuminance(b);
-    });
-    const keep = sorted.slice(0, cap);
-    const keepCodes = new Set(keep.map((item) => item.code));
-    for (const color of sorted) {
-      if (keepCodes.has(color.code)) continue;
-      if (state.lockedColorCodes.has(color.code) || outlineCodes.has(color.code)) continue;
-      const target = nearestColorFromList(color, keep.filter((item) => !item.empty));
-      if (target) replacements.set(color.code, target);
-    }
-  }
-
-  const compressed = replacements.size ? pattern.map((item) => replacements.get(item.code) || item) : pattern;
-  return strength === "strong" ? reduceNeighborhoodNoise(compressed, size, "balanced") : compressed;
-}
-
-function colorProtectionRank(color, outlineCodes, protectedCodes) {
-  if (state.lockedColorCodes.has(color.code)) return 1000;
-  if (outlineCodes.has(color.code)) return 900;
-  if (state.allowedColorCodes.has(color.code)) return 500;
-  if (protectedCodes.has(color.code)) return 300;
-  return 0;
 }
 
 function nearestColorFromList(color, candidates) {
@@ -5505,365 +5413,6 @@ function showQualityHint() {
       ? `颜色匹配评分 ${match.colorMatchScore}%（平均 ΔE00 ${match.averageDeltaE}），拼豆友好度 ${metrics.beadFriendlinessScore}/10。`
       : `拼豆友好度 ${metrics.beadFriendlinessScore}/10，适合继续手动修边。`;
   }
-}
-
-function showSmartOptimize() {
-  if (!state.pattern.length) {
-    elements.cellInfo.textContent = "请先上传图片生成图纸，再做智能优化。";
-    return;
-  }
-
-  const baseMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
-  const baselinePlan = {
-    key: "baseline",
-    name: "基础版本",
-    description: "不做强力优化，保留当前稳定效果",
-    minRegionSize: effectiveMinRegionSize(),
-    mergeDeltaE: 0,
-    lowUsage: false,
-    maxColors: targetColorLimit(),
-    baseline: true,
-  };
-  const candidates = [baselinePlan, ...(state.patternMode === "pixelPattern"
-    ? [
-        {
-          key: "light",
-          name: "轻度像素优化",
-          description: "只清孤点，最大程度保留像素细节",
-          minRegionSize: Math.max(1, effectiveMinRegionSize()),
-          mergeDeltaE: Math.max(4, mergeDeltaEForCurrentSettings() - 2),
-          lowUsage: false,
-          maxColors: targetColorLimit(),
-        },
-        {
-          key: "balanced",
-          name: "平衡像素优化",
-          description: "推荐：硬边缘、少杂色、不过度平滑",
-          minRegionSize: effectiveMinRegionSize(),
-          mergeDeltaE: mergeDeltaEForCurrentSettings(),
-          lowUsage: true,
-          maxColors: targetColorLimit(),
-        },
-        {
-          key: "strong",
-          name: "强力像素优化",
-          description: "更少颜色，但保留像素块感",
-          minRegionSize: Math.min(3, effectiveMinRegionSize() + 1),
-          mergeDeltaE: mergeDeltaEForCurrentSettings() + 2,
-          lowUsage: true,
-          maxColors: Math.max(4, Math.min(targetColorLimit(), state.colorLimit - 2)),
-        },
-      ]
-    : [
-    {
-      key: "light",
-      name: "轻度优化",
-      description: "少量清理，尽量保留细节",
-      minRegionSize: Math.max(2, effectiveMinRegionSize() - 2),
-      mergeDeltaE: Math.max(4, mergeDeltaEForCurrentSettings() - 3),
-      lowUsage: false,
-      maxColors: targetColorLimit(),
-    },
-    {
-      key: "balanced",
-      name: "平衡优化",
-      description: "推荐：清理碎点并压掉相近杂色",
-      minRegionSize: effectiveMinRegionSize(),
-      mergeDeltaE: mergeDeltaEForCurrentSettings(),
-      lowUsage: true,
-      maxColors: targetColorLimit(),
-    },
-    {
-      key: "strong",
-      name: "强力优化",
-      description: "更少颜色，更适合实际制作",
-      minRegionSize: Math.min(14, effectiveMinRegionSize() + 3),
-      mergeDeltaE: mergeDeltaEForCurrentSettings() + 3,
-      lowUsage: true,
-      maxColors: Math.max(4, Math.min(targetColorLimit(), state.colorLimit - 3)),
-    },
-  ])].map((plan) => runOptimizeCandidate(state.pattern, state.gridSize, plan, baseMetrics));
-
-  const validPlans = candidates.filter((plan) => plan.metrics.colorConstraintViolationCount === 0 && !plan.compare?.risky);
-  const recommendable = validPlans.filter((plan) => plan.key !== "strong");
-  const recommended = [...(validPlans.length ? validPlans : candidates)].sort(
-    (a, b) => b.metrics.beadFriendlinessScore - a.metrics.beadFriendlinessScore,
-  )[0];
-  const safeRecommended = [...(recommendable.length ? recommendable : candidates.filter((plan) => plan.key === "baseline"))].sort(
-    (a, b) => b.metrics.beadFriendlinessScore - a.metrics.beadFriendlinessScore,
-  )[0] || recommended;
-  state.pendingOptimizePlans = candidates.map((plan) => ({ ...plan, recommended: plan.key === safeRecommended.key }));
-  renderOptimizePanel("smart", baseMetrics, state.pendingOptimizePlans);
-}
-
-function showImageVariants() {
-  if (!state.image) {
-    elements.cellInfo.textContent = "请先上传图片，再生成多方案。";
-    return;
-  }
-
-  const baseMetrics = state.pattern.length
-    ? calculateQualityMetrics(state.pattern, state.gridSize)
-    : { totalColors: 0, isolatedPixelCount: 0, smallRegionCount: 0, lowUsageColorCount: 0, beadFriendlinessScore: 0 };
-  const allowedCount = effectiveAllowedPalette().length;
-  const variants = [
-    {
-      key: "simple",
-      name: "极简版",
-      description: "颜色最少，强清理，适合小尺寸",
-      colorLimit: Math.max(4, Math.min(8, state.colorLimit, allowedCount || 8)),
-      animeMode: true,
-      minRegionSize: Math.max(7, state.minRegionSize),
-      mergeBoost: 4,
-    },
-    {
-      key: "balanced",
-      name: "平衡版",
-      description: "默认推荐，识别度和制作难度平衡",
-      colorLimit: state.colorLimit,
-      animeMode: state.animeMode,
-      minRegionSize: state.minRegionSize,
-      mergeBoost: 0,
-    },
-    {
-      key: "fidelity",
-      name: "保真版",
-      description: "保留更多颜色和细节，适合 100x100 以上",
-      colorLimit: Math.min(palette.length, Math.max(state.colorLimit, state.colorLimit + 6)),
-      animeMode: false,
-      minRegionSize: Math.max(2, state.minRegionSize - 2),
-      mergeBoost: -3,
-    },
-    {
-      key: "outline",
-      name: "轮廓增强版",
-      description: "更重视深色轮廓，适合 Logo 和卡通图",
-      colorLimit: state.colorLimit,
-      animeMode: true,
-      lineBoost: true,
-      minRegionSize: Math.max(5, state.minRegionSize),
-      mergeBoost: 1,
-    },
-  ].map((variant) => generateVariantCandidate(variant, baseMetrics));
-
-  const validPlans = variants.filter((plan) => plan.metrics.colorConstraintViolationCount === 0);
-  const recommended = [...(validPlans.length ? validPlans : variants)].sort(
-    (a, b) => b.metrics.beadFriendlinessScore - a.metrics.beadFriendlinessScore,
-  )[0];
-  state.pendingOptimizePlans = variants.map((plan) => ({ ...plan, recommended: plan.key === recommended.key }));
-  renderOptimizePanel("variants", baseMetrics, state.pendingOptimizePlans);
-}
-
-function generateVariantCandidate(variant, baseMetrics) {
-  let pattern = generatePatternCandidate({
-    colorLimit: variant.colorLimit,
-    animeMode: variant.animeMode,
-    minRegionSize: variant.minRegionSize,
-    lineBoost: variant.lineBoost ?? state.lineBoost,
-    mergeBoost: variant.mergeBoost,
-  });
-  if (state.pattern.length === pattern.length) {
-    pattern = validateColorConstraints(restoreProtectedCells(state.pattern, pattern));
-  }
-  const metrics = calculateQualityMetrics(pattern, state.gridSize);
-  return {
-    ...variant,
-    pattern,
-    before: baseMetrics,
-    metrics,
-    preview: patternPreviewDataUrl(pattern, state.gridSize),
-  };
-}
-
-function generatePatternCandidate(overrides) {
-  const saved = {
-    colorLimit: state.colorLimit,
-    animeMode: state.animeMode,
-    minRegionSize: state.minRegionSize,
-    lineBoost: state.lineBoost,
-    mergeBoost: state.mergeBoost,
-  };
-  Object.assign(state, overrides);
-
-  const size = state.gridSize;
-  const pixels = buildPixelSamples(state.image, size);
-  const limitedPalette = adaptivePaletteForPixels(pixels);
-  const candidate = pixels.map((pixel) => nearestPaletteColor(pixel, limitedPalette));
-  const processed = postProcessPattern(candidate, size);
-
-  Object.assign(state, saved);
-  return validateColorConstraints(processed);
-}
-
-function runOptimizeCandidate(sourcePattern, size, plan, baseMetrics = null) {
-  if (plan.baseline) {
-    const metrics = baseMetrics || calculateQualityMetrics(sourcePattern, size);
-    return {
-      ...plan,
-      pattern: [...sourcePattern],
-      before: metrics,
-      metrics,
-      compare: compareOptimizationResult(sourcePattern, sourcePattern, size),
-      preview: patternPreviewDataUrl(sourcePattern, size),
-    };
-  }
-  let processed = validateColorConstraints(sourcePattern);
-  const strength = plan.key === "strong" ? "strong" : plan.key === "light" ? "light" : "balanced";
-  if (plan.key !== "light") {
-    processed = finalPaletteSimplification(processed, size, { strength });
-  } else {
-    processed = reduceNeighborhoodNoise(processed, size, "light");
-  }
-  processed = cleanIsolatedPixels(processed, size);
-  processed = cleanPatternRegions(processed, size, plan.minRegionSize);
-  processed = cleanIsolatedPixels(processed, size);
-  if (state.mergeSimilarColors) {
-    processed = mergeSimilarUsedColors(processed, size, plan.mergeDeltaE);
-  }
-  if (plan.lowUsage) {
-    processed = mergeLowUsageColors(processed, size, { strength });
-  }
-  processed = forceMaxColors(processed, size, plan.maxColors);
-  processed = repairOutlines(processed, size, plan.key === "strong" ? 3 : plan.key === "balanced" && size <= 48 ? 2 : 0);
-  processed = restoreProtectedCells(sourcePattern, processed);
-  processed = validateColorConstraints(processed);
-
-  const metrics = calculateQualityMetrics(processed, size);
-  const compare = compareOptimizationResult(sourcePattern, processed, size);
-  return {
-    ...plan,
-    pattern: processed,
-    before: baseMetrics || calculateQualityMetrics(sourcePattern, size),
-    metrics,
-    compare,
-    preview: patternPreviewDataUrl(processed, size),
-  };
-}
-
-function restoreProtectedCells(sourcePattern, candidatePattern) {
-  const restored = [...candidatePattern];
-  for (let index = 0; index < sourcePattern.length; index += 1) {
-    const source = sourcePattern[index];
-    if (!source) continue;
-    if (state.manualEditedCells.has(index) || isColorLocked(source)) {
-      restored[index] = source;
-    }
-  }
-  return restored;
-}
-
-function compareOptimizationResult(beforeGrid, afterGrid, size = state.gridSize) {
-  const before = calculateQualityMetrics(beforeGrid, size);
-  const after = calculateQualityMetrics(afterGrid, size);
-  const outlineNoiseDelta = after.outlineNoiseCount - before.outlineNoiseCount;
-  const continuityDelta = after.outlineContinuityScore - before.outlineContinuityScore;
-  const jumpDelta = after.colorJumpScore - before.colorJumpScore;
-  const chaosDelta = after.regionColorChaosScore - before.regionColorChaosScore;
-  const scoreDelta = after.beadFriendlinessScore - before.beadFriendlinessScore;
-  const risky =
-    outlineNoiseDelta > Math.max(3, before.outlineNoiseCount * 0.2) ||
-    continuityDelta < -0.35 ||
-    jumpDelta > 8 ||
-    chaosDelta > 8 ||
-    scoreDelta < -0.4;
-  const improved =
-    !risky &&
-    (after.totalColors < before.totalColors ||
-      after.colorJumpScore < before.colorJumpScore ||
-      after.regionColorChaosScore < before.regionColorChaosScore ||
-      after.outlineBreakCount < before.outlineBreakCount ||
-      after.beadFriendlinessScore >= before.beadFriendlinessScore);
-  return {
-    before,
-    after,
-    risky,
-    improved,
-    outlineNoiseDelta,
-    continuityDelta: Math.round(continuityDelta * 10) / 10,
-    jumpDelta,
-    chaosDelta,
-    scoreDelta: Math.round(scoreDelta * 10) / 10,
-  };
-}
-
-function renderOptimizePanel(mode, beforeMetrics, plans) {
-  elements.optimizePanel.hidden = false;
-  const title = mode === "variants" ? "多方案" : "智能优化建议";
-  const summary = `
-    <div class="optimize-summary">
-      ${metricPill("颜色", beforeMetrics.totalColors)}
-      ${metricPill("孤点", beforeMetrics.isolatedPixelCount)}
-      ${metricPill("小区域", beforeMetrics.smallRegionCount)}
-      ${metricPill("低用量色", beforeMetrics.lowUsageColorCount)}
-      ${metricPill("评分", beforeMetrics.beadFriendlinessScore)}
-    </div>
-  `;
-
-  elements.optimizeBody.innerHTML = `
-    <strong>${title}</strong>
-    ${summary}
-    <div class="plan-grid">
-      ${plans.map((plan, index) => renderPlanCard(plan, index)).join("")}
-    </div>
-  `;
-
-  document.querySelectorAll("[data-apply-plan]").forEach((button) => {
-    button.addEventListener("click", () => applyOptimizePlan(Number(button.dataset.applyPlan)));
-  });
-  window.lucide?.createIcons();
-}
-
-function metricPill(label, value) {
-  return `<span class="metric-pill">${label}: <strong>${value}</strong></span>`;
-}
-
-function renderPlanCard(plan, index) {
-  const before = plan.before;
-  const metrics = plan.metrics;
-  const riskLabel = plan.compare?.risky ? " · 有风险" : plan.compare?.improved ? " · 更稳" : "";
-  return `
-    <article class="plan-card${plan.recommended ? " is-recommended" : ""}${plan.compare?.risky ? " is-risky" : ""}">
-      <img class="plan-preview" src="${plan.preview}" alt="${plan.name}预览" />
-      <strong>${plan.name}${plan.recommended ? " · 推荐" : ""}${riskLabel}</strong>
-      <span>${plan.description}</span>
-      <span>颜色 ${before.totalColors} → ${metrics.totalColors}</span>
-      <span>颗数 ${before.effectiveBeadCount} → ${metrics.effectiveBeadCount}</span>
-      <span>孤点 ${before.isolatedPixelCount} → ${metrics.isolatedPixelCount}</span>
-      <span>杂色 ${before.regionColorChaosScore} → ${metrics.regionColorChaosScore}</span>
-      <span>描边连续 ${before.outlineContinuityScore} → ${metrics.outlineContinuityScore}</span>
-      <span>评分 ${before.beadFriendlinessScore} → ${metrics.beadFriendlinessScore}</span>
-      <button data-apply-plan="${index}" type="button">预览这个方案</button>
-    </article>
-  `;
-}
-
-function applyOptimizePlan(index) {
-  const plan = state.pendingOptimizePlans[index];
-  if (!plan) return;
-  setPendingPreview(validateColorConstraints(plan.pattern), {
-    backgroundMask: state.backgroundMask,
-    preservesManualEdits: true,
-    size: state.gridSize,
-  });
-  elements.optimizePanel.hidden = true;
-  renderPendingPreview();
-  elements.cellInfo.textContent = `${plan.name} 已生成预览，请确认应用。`;
-}
-
-function patternPreviewDataUrl(pattern, size) {
-  const canvas = document.createElement("canvas");
-  const cell = Math.max(2, Math.floor(180 / size));
-  canvas.width = size * cell;
-  canvas.height = size * cell;
-  const previewCtx = canvas.getContext("2d");
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const item = pattern[y * size + x];
-      previewCtx.fillStyle = item.empty ? "#ffffff" : item.hex;
-      previewCtx.fillRect(x * cell, y * cell, cell, cell);
-    }
-  }
-  return canvas.toDataURL("image/png");
 }
 
 function displayPattern() {
@@ -8449,9 +7998,7 @@ async function exportPattern() {
 
 function setExportBusy(isBusy) {
   state.exportInProgress = isBusy;
-  for (const button of [elements.exportButton, elements.coverButton]) {
-    if (button) button.disabled = isBusy;
-  }
+  elements.exportButton.disabled = isBusy;
 }
 
 function renderReadableExportCanvas(options = {}) {
