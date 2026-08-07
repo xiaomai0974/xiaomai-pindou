@@ -64,6 +64,7 @@ const {
   EMPTY_CODE: CLIPBOARD_EMPTY_CODE,
   createSelectionClipboard,
   planSelectionMirror,
+  planSelectionMove,
   planSelectionPaste,
 } = editorClipboard;
 
@@ -6911,6 +6912,34 @@ function mirrorSelectedRegion(direction) {
     stride: state.gridSize,
     direction,
   });
+  applySelectionTransformPlan(
+    plan,
+    direction === "horizontal" ? "选区已左右镜像。" : "选区已上下镜像。",
+  );
+}
+
+function moveSelectedRegion(dx, dy) {
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "当前是预览，请先应用或取消预览后再移动选区。";
+    return;
+  }
+  if (!state.pattern.length || state.gridLocked || !state.selection.size) return;
+
+  const plan = planSelectionMove(state.pattern, state.selection, {
+    stride: state.gridSize,
+    width: activeGridWidth(),
+    height: activeGridHeight(),
+    dx,
+    dy,
+  });
+  if (plan?.blocked === "boundary") {
+    elements.cellInfo.textContent = "选区已经到画布边缘，不能继续移动。";
+    return;
+  }
+  applySelectionTransformPlan(plan, "选区已移动 1 格。", "选区移动会修改锁定颜色，请先解锁或开启“允许改锁定色”。");
+}
+
+function applySelectionTransformPlan(plan, successMessage, lockedMessage = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。") {
   if (!plan?.changes?.length) return;
 
   const clearColor = eraserFillColor();
@@ -6922,7 +6951,7 @@ function mirrorSelectedRegion(direction) {
     .filter((change) => change.color && !samePatternColor(state.pattern[change.index], change.color));
 
   if (changes.some((change) => !canEditCell(change.index))) {
-    elements.cellInfo.textContent = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。";
+    elements.cellInfo.textContent = lockedMessage;
     return;
   }
 
@@ -6950,7 +6979,7 @@ function mirrorSelectedRegion(direction) {
   updateSelectionLabel();
   renderPattern();
   renderStats();
-  elements.cellInfo.textContent = direction === "horizontal" ? "选区已左右镜像。" : "选区已上下镜像。";
+  elements.cellInfo.textContent = successMessage;
 }
 
 function drawLineBetweenCells(start, end, color) {
@@ -7751,6 +7780,18 @@ function handleKeyboardShortcuts(event) {
   }
 
   if (state.isSpacePressed || state.isPanningCanvas) return;
+
+  const selectionMoves = {
+    arrowleft: [-1, 0],
+    arrowright: [1, 0],
+    arrowup: [0, -1],
+    arrowdown: [0, 1],
+  };
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && state.selection.size && selectionMoves[key]) {
+    event.preventDefault();
+    moveSelectedRegion(...selectionMoves[key]);
+    return;
+  }
 
   const shortcuts = {
     b: "brush",

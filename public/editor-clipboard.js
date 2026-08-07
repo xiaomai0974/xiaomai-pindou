@@ -115,10 +115,50 @@
     };
   }
 
+  function planSelectionMove(pattern, selection, options = {}) {
+    const stride = Math.max(1, Number(options.stride) || 1);
+    const width = Math.max(1, Number(options.width) || stride);
+    const height = Math.max(1, Number(options.height) || width);
+    const dx = Math.sign(Number(options.dx) || 0);
+    const dy = Math.sign(Number(options.dy) || 0);
+    if (Math.abs(dx) + Math.abs(dy) !== 1) return null;
+
+    const clipboard = createSelectionClipboard(pattern, selection, { stride });
+    if (!clipboard) return null;
+    const targetCells = clipboard.cells.map((cell) => ({
+      ...cell,
+      x: clipboard.sourceX + cell.dx + dx,
+      y: clipboard.sourceY + cell.dy + dy,
+    }));
+    if (targetCells.some((cell) => cell.x < 0 || cell.x >= width || cell.y < 0 || cell.y >= height)) {
+      return { blocked: "boundary", changes: [], selection: [...selection] };
+    }
+
+    const changesByIndex = new Map();
+    for (const cell of clipboard.cells) {
+      const index = (clipboard.sourceY + cell.dy) * stride + clipboard.sourceX + cell.dx;
+      changesByIndex.set(index, { index, code: EMPTY_CODE });
+    }
+
+    const targetIndexes = [];
+    for (const cell of targetCells) {
+      const index = cell.y * stride + cell.x;
+      changesByIndex.set(index, { index, code: cell.code });
+      targetIndexes.push(index);
+    }
+
+    return {
+      blocked: null,
+      changes: [...changesByIndex.values()],
+      selection: targetIndexes,
+    };
+  }
+
   global.XiaomaiEditorClipboard = Object.freeze({
     EMPTY_CODE,
     createSelectionClipboard,
     planSelectionMirror,
+    planSelectionMove,
     planSelectionPaste,
   });
 })(window);
