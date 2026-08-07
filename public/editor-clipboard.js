@@ -88,10 +88,37 @@
     };
   }
 
+  function planSelectionMirror(pattern, selection, options = {}) {
+    const stride = Math.max(1, Number(options.stride) || 1);
+    const clipboard = createSelectionClipboard(pattern, selection, { stride });
+    const mirrored = mirrorSelectionClipboard(clipboard, options.direction);
+    if (!clipboard || !mirrored) return null;
+
+    const changesByIndex = new Map();
+    for (const cell of clipboard.cells) {
+      const index = (clipboard.sourceY + cell.dy) * stride + clipboard.sourceX + cell.dx;
+      changesByIndex.set(index, { index, code: EMPTY_CODE });
+    }
+
+    const targetIndexes = [];
+    for (const cell of mirrored.cells) {
+      const x = clipboard.sourceX + cell.dx;
+      const y = clipboard.sourceY + cell.dy;
+      const index = y * stride + x;
+      changesByIndex.set(index, { index, code: cell.code });
+      targetIndexes.push(index);
+    }
+
+    return {
+      changes: [...changesByIndex.values()],
+      selection: targetIndexes,
+    };
+  }
+
   global.XiaomaiEditorClipboard = Object.freeze({
     EMPTY_CODE,
     createSelectionClipboard,
-    mirrorSelectionClipboard,
+    planSelectionMirror,
     planSelectionPaste,
   });
 })(window);

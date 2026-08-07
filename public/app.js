@@ -63,7 +63,7 @@ if (!editorClipboard) {
 const {
   EMPTY_CODE: CLIPBOARD_EMPTY_CODE,
   createSelectionClipboard,
-  mirrorSelectionClipboard,
+  planSelectionMirror,
   planSelectionPaste,
 } = editorClipboard;
 
@@ -642,8 +642,6 @@ const elements = {
   finishPenButton: document.querySelector("#finishPenButton"),
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
-  mirrorClipboardHorizontalButton: document.querySelector("#mirrorClipboardHorizontalButton"),
-  mirrorClipboardVerticalButton: document.querySelector("#mirrorClipboardVerticalButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   currentColorSwatch: document.querySelector("#currentColorSwatch"),
   currentColorName: document.querySelector("#currentColorName"),
@@ -1409,8 +1407,8 @@ function setupEvents() {
     renderPattern();
     markProjectDirty();
   });
-  elements.mirrorHorizontalButton.addEventListener("click", () => mirrorPattern("horizontal"));
-  elements.mirrorVerticalButton.addEventListener("click", () => mirrorPattern("vertical"));
+  elements.mirrorHorizontalButton.addEventListener("click", () => mirrorSelectionOrPattern("horizontal"));
+  elements.mirrorVerticalButton.addEventListener("click", () => mirrorSelectionOrPattern("vertical"));
   elements.allowLockedEditToggle.addEventListener("change", () => {
     state.allowEditLockedCells = elements.allowLockedEditToggle.checked;
     elements.cellInfo.textContent = state.allowEditLockedCells ? "已允许修改锁定色格子。" : "已保护锁定色格子，画笔不会改它们。";
@@ -1739,8 +1737,6 @@ function setupEvents() {
   elements.finishPenButton.addEventListener("click", finishPenSelection);
   elements.copySelectionButton.addEventListener("click", copySelectionPixels);
   elements.pasteSelectionButton.addEventListener("click", pasteSelectionPixels);
-  elements.mirrorClipboardHorizontalButton.addEventListener("click", () => mirrorCopiedSelection("horizontal"));
-  elements.mirrorClipboardVerticalButton.addEventListener("click", () => mirrorCopiedSelection("vertical"));
   elements.clearSelectionButton.addEventListener("click", clearSelection);
   document.querySelectorAll(".canvas-tool").forEach((button) => {
     button.addEventListener("click", () => setActiveTool(button.dataset.tool));
@@ -6896,6 +6892,67 @@ function mirrorPattern(direction) {
   markProjectDirty();
 }
 
+function mirrorSelectionOrPattern(direction) {
+  if (state.selection.size) {
+    mirrorSelectedRegion(direction);
+    return;
+  }
+  mirrorPattern(direction);
+}
+
+function mirrorSelectedRegion(direction) {
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "当前是预览，请先应用或取消预览后再调整选区。";
+    return;
+  }
+  if (!state.pattern.length || state.gridLocked || !state.selection.size) return;
+
+  const plan = planSelectionMirror(state.pattern, state.selection, {
+    stride: state.gridSize,
+    direction,
+  });
+  if (!plan?.changes?.length) return;
+
+  const clearColor = eraserFillColor();
+  const changes = plan.changes
+    .map((change) => ({
+      index: change.index,
+      color: change.code === CLIPBOARD_EMPTY_CODE ? clearColor : paletteColorByCode(change.code),
+    }))
+    .filter((change) => change.color && !samePatternColor(state.pattern[change.index], change.color));
+
+  if (changes.some((change) => !canEditCell(change.index))) {
+    elements.cellInfo.textContent = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。";
+    return;
+  }
+
+  if (changes.length) pushHistory();
+  const countChanges = [];
+  for (const change of changes) {
+    const before = state.pattern[change.index];
+    state.pattern[change.index] = change.color;
+    countChanges.push({ before, after: change.color });
+    state.manualEditedCells.add(change.index);
+    rememberPaletteColor(change.color);
+  }
+
+  state.selection = new Set(plan.selection);
+  state.penPoints = [];
+  if (countChanges.length) {
+    applyCountChanges(state.counts, countChanges);
+    state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
+    state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
+    state.hasConfirmedGrid = true;
+    state.manualEditCount += 1;
+    state.editGridVersion += 1;
+    markProjectDirty();
+  }
+  updateSelectionLabel();
+  renderPattern();
+  renderStats();
+  elements.cellInfo.textContent = direction === "horizontal" ? "选区已左右镜像。" : "选区已上下镜像。";
+}
+
 function drawLineBetweenCells(start, end, color) {
   if (state.isPreviewDirty || state.gridLocked) return;
   pushHistory();
@@ -7355,8 +7412,6 @@ function updateSelectionLabel() {
   elements.selectionLabel.textContent = state.selection.size ? `${state.selection.size} 格` : state.penPoints.length ? `${state.penPoints.length} 点` : "未选区";
   elements.copySelectionButton.disabled = !state.selection.size;
   elements.pasteSelectionButton.disabled = !state.selectionClipboard;
-  elements.mirrorClipboardHorizontalButton.disabled = !state.selectionClipboard;
-  elements.mirrorClipboardVerticalButton.disabled = !state.selectionClipboard;
 }
 
 function copySelectionPixels() {
@@ -7370,20 +7425,6 @@ function copySelectionPixels() {
   if (!state.selectionClipboard) return;
   updateSelectionLabel();
   elements.cellInfo.textContent = `已复制 ${state.selectionClipboard.cells.length} 个像素，可点击“粘贴选区”或按 Ctrl + V。`;
-}
-
-function mirrorCopiedSelection(direction) {
-  if (!state.selectionClipboard) {
-    elements.cellInfo.textContent = "请先选中区域并复制。";
-    return;
-  }
-  const mirrored = mirrorSelectionClipboard(state.selectionClipboard, direction);
-  if (!mirrored) return;
-  state.selectionClipboard = mirrored;
-  updateSelectionLabel();
-  elements.cellInfo.textContent = direction === "horizontal"
-    ? "复制内容已左右对称，可移动鼠标后按 Ctrl + V 粘贴。"
-    : "复制内容已上下对称，可移动鼠标后按 Ctrl + V 粘贴。";
 }
 
 function pasteSelectionPixels() {
