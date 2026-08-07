@@ -3,10 +3,6 @@
 
   const EMPTY_CODE = "__EMPTY__";
 
-  function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-  }
-
   function createSelectionClipboard(pattern, selection, options = {}) {
     const stride = Math.max(1, Number(options.stride) || 1);
     if (!Array.isArray(pattern) || !selection?.size) return null;
@@ -47,32 +43,27 @@
     const stride = Math.max(1, Number(options.stride) || 1);
     const width = Math.max(1, Number(options.width) || stride);
     const height = Math.max(1, Number(options.height) || width);
-    const offset = Math.max(1, Number(clipboard.pasteCount) + 1 || 1);
     const hoverX = options.hoverCell?.x;
     const hoverY = options.hoverCell?.y;
-    const hoverInsideSource =
-      Number.isFinite(hoverX) &&
-      Number.isFinite(hoverY) &&
-      hoverX >= clipboard.sourceX &&
-      hoverX < clipboard.sourceX + clipboard.width &&
-      hoverY >= clipboard.sourceY &&
-      hoverY < clipboard.sourceY + clipboard.height;
-    const useHover = Number.isFinite(hoverX) && Number.isFinite(hoverY) && !hoverInsideSource;
-    const preferredX = useHover ? hoverX : clipboard.sourceX + offset;
-    const preferredY = useHover ? hoverY : clipboard.sourceY + offset;
-    const anchorX = clamp(Math.round(preferredX), 0, Math.max(0, width - clipboard.width));
-    const anchorY = clamp(Math.round(preferredY), 0, Math.max(0, height - clipboard.height));
+    const anchorX = Math.round(Number.isFinite(hoverX) ? hoverX : clipboard.sourceX);
+    const anchorY = Math.round(Number.isFinite(hoverY) ? hoverY : clipboard.sourceY);
     const canPaste = typeof options.canPaste === "function" ? options.canPaste : () => true;
 
-    const changes = clipboard.cells
-      .map((cell) => {
-        const x = anchorX + cell.dx;
-        const y = anchorY + cell.dy;
-        return { ...cell, x, y, index: y * stride + x };
-      })
-      .filter((cell) => cell.x >= 0 && cell.x < width && cell.y >= 0 && cell.y < height && canPaste(cell.index));
+    const positionedCells = clipboard.cells.map((cell) => {
+      const x = anchorX + cell.dx;
+      const y = anchorY + cell.dy;
+      return { ...cell, x, y, index: y * stride + x };
+    });
+    const visibleCells = positionedCells.filter((cell) => cell.x >= 0 && cell.x < width && cell.y >= 0 && cell.y < height);
+    const changes = visibleCells.filter((cell) => canPaste(cell.index));
 
-    return { anchorX, anchorY, changes };
+    return {
+      anchorX,
+      anchorY,
+      changes,
+      clippedCount: positionedCells.length - visibleCells.length,
+      blockedCount: visibleCells.length - changes.length,
+    };
   }
 
   function mirrorSelectionClipboard(clipboard, direction) {
@@ -154,11 +145,54 @@
     };
   }
 
+  function planSelectionRotate(pattern, selection, options = {}) {
+    const stride = Math.max(1, Number(options.stride) || 1);
+    const width = Math.max(1, Number(options.width) || stride);
+    const height = Math.max(1, Number(options.height) || width);
+    const direction = options.direction;
+    if (!["clockwise", "counterclockwise"].includes(direction)) return null;
+
+    const clipboard = createSelectionClipboard(pattern, selection, { stride });
+    if (!clipboard) return null;
+    const rotatedCells = clipboard.cells.map((cell) => ({
+      ...cell,
+      dx: direction === "clockwise" ? clipboard.height - 1 - cell.dy : cell.dy,
+      dy: direction === "clockwise" ? cell.dx : clipboard.width - 1 - cell.dx,
+    }));
+    const rotatedWidth = clipboard.height;
+    const rotatedHeight = clipboard.width;
+    if (clipboard.sourceX + rotatedWidth > width || clipboard.sourceY + rotatedHeight > height) {
+      return { blocked: "boundary", changes: [], selection: [...selection] };
+    }
+
+    const changesByIndex = new Map();
+    for (const cell of clipboard.cells) {
+      const index = (clipboard.sourceY + cell.dy) * stride + clipboard.sourceX + cell.dx;
+      changesByIndex.set(index, { index, code: EMPTY_CODE });
+    }
+
+    const targetIndexes = [];
+    for (const cell of rotatedCells) {
+      const x = clipboard.sourceX + cell.dx;
+      const y = clipboard.sourceY + cell.dy;
+      const index = y * stride + x;
+      changesByIndex.set(index, { index, code: cell.code });
+      targetIndexes.push(index);
+    }
+
+    return {
+      blocked: null,
+      changes: [...changesByIndex.values()],
+      selection: targetIndexes,
+    };
+  }
+
   global.XiaomaiEditorClipboard = Object.freeze({
     EMPTY_CODE,
     createSelectionClipboard,
     planSelectionMirror,
     planSelectionMove,
     planSelectionPaste,
+    planSelectionRotate,
   });
 })(window);

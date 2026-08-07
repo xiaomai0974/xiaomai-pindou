@@ -12,7 +12,7 @@
     <script src="grid-utils.js?v=20260730-1" defer></script>
     <script src="background-utils.js?v=20260731-1" defer></script>
     <script src="editor-geometry.js?v=20260730-1" defer></script>
-    <script src="editor-clipboard.js?v=20260808-2" defer></script>
+    <script src="editor-clipboard.js?v=20260808-3" defer></script>
     <script src="image-utils.js?v=20260730-1" defer></script>
     <script src="preprocess-utils.js?v=20260730-1" defer></script>
     <script src="sampling-utils.js?v=20260730-1" defer></script>
@@ -24,7 +24,7 @@
     <script src="pdf-utils.js?v=20260730-1" defer></script>
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
-    <script src="app.js?v=20260808-2" defer></script>
+    <script src="app.js?v=20260808-3" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -508,6 +508,8 @@
             <div class="mirror-actions" role="group" aria-label="选区或整图镜像">
               <button id="mirrorHorizontalButton" type="button">左右镜像</button>
               <button id="mirrorVerticalButton" type="button">上下镜像</button>
+              <button id="rotateSelectionLeftButton" type="button">左转 90°</button>
+              <button id="rotateSelectionRightButton" type="button">右转 90°</button>
             </div>
             <div class="tool-actions">
               <button id="undoButton" type="button">撤回</button>

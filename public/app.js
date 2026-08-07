@@ -66,6 +66,7 @@ const {
   planSelectionMirror,
   planSelectionMove,
   planSelectionPaste,
+  planSelectionRotate,
 } = editorClipboard;
 
 const imageUtils = window.XiaomaiImageUtils;
@@ -638,6 +639,8 @@ const elements = {
   symmetryModeSelect: document.querySelector("#symmetryModeSelect"),
   mirrorHorizontalButton: document.querySelector("#mirrorHorizontalButton"),
   mirrorVerticalButton: document.querySelector("#mirrorVerticalButton"),
+  rotateSelectionLeftButton: document.querySelector("#rotateSelectionLeftButton"),
+  rotateSelectionRightButton: document.querySelector("#rotateSelectionRightButton"),
   allowLockedEditToggle: document.querySelector("#allowLockedEditToggle"),
   fillSelectionButton: document.querySelector("#fillSelectionButton"),
   finishPenButton: document.querySelector("#finishPenButton"),
@@ -1410,6 +1413,8 @@ function setupEvents() {
   });
   elements.mirrorHorizontalButton.addEventListener("click", () => mirrorSelectionOrPattern("horizontal"));
   elements.mirrorVerticalButton.addEventListener("click", () => mirrorSelectionOrPattern("vertical"));
+  elements.rotateSelectionLeftButton.addEventListener("click", () => rotateSelectedRegion("counterclockwise"));
+  elements.rotateSelectionRightButton.addEventListener("click", () => rotateSelectedRegion("clockwise"));
   elements.allowLockedEditToggle.addEventListener("change", () => {
     state.allowEditLockedCells = elements.allowLockedEditToggle.checked;
     elements.cellInfo.textContent = state.allowEditLockedCells ? "已允许修改锁定色格子。" : "已保护锁定色格子，画笔不会改它们。";
@@ -6939,6 +6944,33 @@ function moveSelectedRegion(dx, dy) {
   applySelectionTransformPlan(plan, "选区已移动 1 格。", "选区移动会修改锁定颜色，请先解锁或开启“允许改锁定色”。");
 }
 
+function rotateSelectedRegion(direction) {
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "当前是预览，请先应用或取消预览后再旋转选区。";
+    return;
+  }
+  if (!state.pattern.length || state.gridLocked || !state.selection.size) {
+    elements.cellInfo.textContent = "请先框选要旋转的区域。";
+    return;
+  }
+
+  const plan = planSelectionRotate(state.pattern, state.selection, {
+    stride: state.gridSize,
+    width: activeGridWidth(),
+    height: activeGridHeight(),
+    direction,
+  });
+  if (plan?.blocked === "boundary") {
+    elements.cellInfo.textContent = "旋转后的选区会超出画布，请先向内移动选区。";
+    return;
+  }
+  applySelectionTransformPlan(
+    plan,
+    direction === "clockwise" ? "选区已向右旋转 90°。" : "选区已向左旋转 90°。",
+    "选区旋转会修改锁定颜色，请先解锁或开启“允许改锁定色”。",
+  );
+}
+
 function applySelectionTransformPlan(plan, successMessage, lockedMessage = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。") {
   if (!plan?.changes?.length) return;
 
@@ -7506,7 +7538,9 @@ function pasteSelectionPixels() {
   renderPattern();
   renderStats();
   markProjectDirty();
-  elements.cellInfo.textContent = `已粘贴 ${pastedSelection.size} 个像素，粘贴结果已自动选中。`;
+  const clippedHint = pastePlan.clippedCount ? `，另有 ${pastePlan.clippedCount} 个像素超出画布未粘贴` : "";
+  const lockedHint = pastePlan.blockedCount ? `，${pastePlan.blockedCount} 个锁定格未修改` : "";
+  elements.cellInfo.textContent = `已从鼠标所在格粘贴 ${pastedSelection.size} 个像素${clippedHint}${lockedHint}，结果已自动选中。`;
 }
 
 function snapshotPattern() {
@@ -7806,7 +7840,11 @@ function handleKeyboardShortcuts(event) {
   }
 
   if (!event.ctrlKey && !event.metaKey) return;
-  if (key === "c" && state.selection.size) {
+  if (key === "d") {
+    event.preventDefault();
+    clearSelection();
+    elements.cellInfo.textContent = "选区已清空。";
+  } else if (key === "c" && state.selection.size) {
     event.preventDefault();
     copySelectionPixels();
   } else if (key === "v" && state.selectionClipboard) {
