@@ -75,9 +75,23 @@
     return { anchorX, anchorY, changes };
   }
 
+  function mirrorSelectionClipboard(clipboard, direction) {
+    if (!clipboard?.cells?.length || !["horizontal", "vertical"].includes(direction)) return null;
+    return {
+      ...clipboard,
+      pasteCount: 0,
+      cells: clipboard.cells.map((cell) => ({
+        ...cell,
+        dx: direction === "horizontal" ? clipboard.width - 1 - cell.dx : cell.dx,
+        dy: direction === "vertical" ? clipboard.height - 1 - cell.dy : cell.dy,
+      })),
+    };
+  }
+
   global.XiaomaiEditorClipboard = Object.freeze({
     EMPTY_CODE,
     createSelectionClipboard,
+    mirrorSelectionClipboard,
     planSelectionPaste,
   });
 })(window);

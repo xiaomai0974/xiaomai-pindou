@@ -63,6 +63,7 @@ if (!editorClipboard) {
 const {
   EMPTY_CODE: CLIPBOARD_EMPTY_CODE,
   createSelectionClipboard,
+  mirrorSelectionClipboard,
   planSelectionPaste,
 } = editorClipboard;
 
@@ -641,6 +642,8 @@ const elements = {
   finishPenButton: document.querySelector("#finishPenButton"),
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
+  mirrorClipboardHorizontalButton: document.querySelector("#mirrorClipboardHorizontalButton"),
+  mirrorClipboardVerticalButton: document.querySelector("#mirrorClipboardVerticalButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   currentColorSwatch: document.querySelector("#currentColorSwatch"),
   currentColorName: document.querySelector("#currentColorName"),
@@ -1736,6 +1739,8 @@ function setupEvents() {
   elements.finishPenButton.addEventListener("click", finishPenSelection);
   elements.copySelectionButton.addEventListener("click", copySelectionPixels);
   elements.pasteSelectionButton.addEventListener("click", pasteSelectionPixels);
+  elements.mirrorClipboardHorizontalButton.addEventListener("click", () => mirrorCopiedSelection("horizontal"));
+  elements.mirrorClipboardVerticalButton.addEventListener("click", () => mirrorCopiedSelection("vertical"));
   elements.clearSelectionButton.addEventListener("click", clearSelection);
   document.querySelectorAll(".canvas-tool").forEach((button) => {
     button.addEventListener("click", () => setActiveTool(button.dataset.tool));
@@ -7350,6 +7355,8 @@ function updateSelectionLabel() {
   elements.selectionLabel.textContent = state.selection.size ? `${state.selection.size} 格` : state.penPoints.length ? `${state.penPoints.length} 点` : "未选区";
   elements.copySelectionButton.disabled = !state.selection.size;
   elements.pasteSelectionButton.disabled = !state.selectionClipboard;
+  elements.mirrorClipboardHorizontalButton.disabled = !state.selectionClipboard;
+  elements.mirrorClipboardVerticalButton.disabled = !state.selectionClipboard;
 }
 
 function copySelectionPixels() {
@@ -7363,6 +7370,20 @@ function copySelectionPixels() {
   if (!state.selectionClipboard) return;
   updateSelectionLabel();
   elements.cellInfo.textContent = `已复制 ${state.selectionClipboard.cells.length} 个像素，可点击“粘贴选区”或按 Ctrl + V。`;
+}
+
+function mirrorCopiedSelection(direction) {
+  if (!state.selectionClipboard) {
+    elements.cellInfo.textContent = "请先选中区域并复制。";
+    return;
+  }
+  const mirrored = mirrorSelectionClipboard(state.selectionClipboard, direction);
+  if (!mirrored) return;
+  state.selectionClipboard = mirrored;
+  updateSelectionLabel();
+  elements.cellInfo.textContent = direction === "horizontal"
+    ? "复制内容已左右对称，可移动鼠标后按 Ctrl + V 粘贴。"
+    : "复制内容已上下对称，可移动鼠标后按 Ctrl + V 粘贴。";
 }
 
 function pasteSelectionPixels() {

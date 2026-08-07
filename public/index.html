@@ -12,7 +12,7 @@
     <script src="grid-utils.js?v=20260730-1" defer></script>
     <script src="background-utils.js?v=20260731-1" defer></script>
     <script src="editor-geometry.js?v=20260730-1" defer></script>
-    <script src="editor-clipboard.js?v=20260807-1" defer></script>
+    <script src="editor-clipboard.js?v=20260808-1" defer></script>
     <script src="image-utils.js?v=20260730-1" defer></script>
     <script src="preprocess-utils.js?v=20260730-1" defer></script>
     <script src="sampling-utils.js?v=20260730-1" defer></script>
@@ -24,7 +24,7 @@
     <script src="pdf-utils.js?v=20260730-1" defer></script>
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
-    <script src="app.js?v=20260807-1" defer></script>
+    <script src="app.js?v=20260808-1" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -516,6 +516,8 @@
               <button id="finishPenButton" type="button" hidden>完成钢笔</button>
               <button id="copySelectionButton" type="button" disabled>复制选区</button>
               <button id="pasteSelectionButton" type="button" disabled>粘贴选区</button>
+              <button id="mirrorClipboardHorizontalButton" type="button" disabled>复制左右对称</button>
+              <button id="mirrorClipboardVerticalButton" type="button" disabled>复制上下对称</button>
               <button id="clearSelectionButton" type="button">清空选区</button>
             </div>
           </details>
