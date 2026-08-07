@@ -56,6 +56,16 @@ const {
   symmetryPointsFor,
 } = editorGeometry;
 
+const editorClipboard = window.XiaomaiEditorClipboard;
+if (!editorClipboard) {
+  throw new Error("编辑剪贴板模块加载失败，请刷新页面后重试。");
+}
+const {
+  EMPTY_CODE: CLIPBOARD_EMPTY_CODE,
+  createSelectionClipboard,
+  planSelectionPaste,
+} = editorClipboard;
+
 const imageUtils = window.XiaomaiImageUtils;
 if (!imageUtils) {
   throw new Error("图片工具模块加载失败，请刷新页面后重试。");
@@ -7347,31 +7357,12 @@ function copySelectionPixels() {
     elements.cellInfo.textContent = "请先用框选或钢笔选择要复制的像素。";
     return;
   }
-  const points = [...state.selection]
-    .filter((index) => index >= 0 && index < state.pattern.length)
-    .map((index) => ({ index, x: index % state.gridSize, y: Math.floor(index / state.gridSize) }));
-  if (!points.length) return;
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
-  state.selectionClipboard = {
-    width: maxX - minX + 1,
-    height: maxY - minY + 1,
-    sourceX: minX,
-    sourceY: minY,
-    pasteCount: 0,
-    cells: points.map((point) => {
-      const color = state.pattern[point.index];
-      return {
-        dx: point.x - minX,
-        dy: point.y - minY,
-        code: color?.empty ? "__EMPTY__" : color?.code || "__EMPTY__",
-      };
-    }),
-  };
+  state.selectionClipboard = createSelectionClipboard(state.pattern, state.selection, {
+    stride: state.gridSize,
+  });
+  if (!state.selectionClipboard) return;
   updateSelectionLabel();
-  elements.cellInfo.textContent = `已复制 ${points.length} 个像素，可点击“粘贴选区”或按 Ctrl + V。`;
+  elements.cellInfo.textContent = `已复制 ${state.selectionClipboard.cells.length} 个像素，可点击“粘贴选区”或按 Ctrl + V。`;
 }
 
 function pasteSelectionPixels() {
@@ -7386,23 +7377,14 @@ function pasteSelectionPixels() {
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
 
-  const offset = clipboard.pasteCount + 1;
-  const preferredX = state.brushHoverCell?.x ?? clipboard.sourceX + offset;
-  const preferredY = state.brushHoverCell?.y ?? clipboard.sourceY + offset;
-  const anchorX = Math.max(0, Math.min(activeGridWidth() - clipboard.width, preferredX));
-  const anchorY = Math.max(0, Math.min(activeGridHeight() - clipboard.height, preferredY));
-  const changes = clipboard.cells
-    .map((cell) => {
-      const x = anchorX + cell.dx;
-      const y = anchorY + cell.dy;
-      const index = y * state.gridSize + x;
-      return { ...cell, index };
-    })
-    .filter((cell) => {
-      const x = cell.index % state.gridSize;
-      const y = Math.floor(cell.index / state.gridSize);
-      return cell.index >= 0 && cell.index < state.pattern.length && isActiveGridCell(x, y) && canEditCell(cell.index);
-    });
+  const pastePlan = planSelectionPaste(clipboard, {
+    stride: state.gridSize,
+    width: activeGridWidth(),
+    height: activeGridHeight(),
+    hoverCell: state.brushHoverCell,
+    canPaste: (index) => index >= 0 && index < state.pattern.length && canEditCell(index),
+  });
+  const changes = pastePlan?.changes || [];
   if (!changes.length) {
     elements.cellInfo.textContent = "粘贴位置没有可编辑的格子，请解锁相关颜色后再试。";
     return;
@@ -7412,7 +7394,7 @@ function pasteSelectionPixels() {
   const pastedSelection = new Set();
   const countChanges = [];
   for (const change of changes) {
-    const color = change.code === "__EMPTY__" ? EMPTY_CELL : paletteColorByCode(change.code);
+    const color = change.code === CLIPBOARD_EMPTY_CODE ? EMPTY_CELL : paletteColorByCode(change.code);
     if (!color) continue;
     const before = state.pattern[change.index];
     state.pattern[change.index] = color;
