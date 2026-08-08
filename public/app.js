@@ -2063,10 +2063,6 @@ function setupWorkbenchLayout() {
 
 const WORKBENCH_MODE_STORAGE_KEY = "xiaomai-workbench-mode-v1";
 
-function isCompactWorkbench() {
-  return window.matchMedia("(max-width: 700px)").matches;
-}
-
 function syncModeHeaderProject() {
   const topName = document.querySelector("#topProjectName");
   const topStatus = document.querySelector("#topProjectStatus");
@@ -2124,7 +2120,7 @@ function setWorkbenchMode(mode, options = {}) {
   });
 
   const propertiesButton = document.querySelector("#toolPropertiesButton");
-  if (mode === "edit" && !isCompactWorkbench()) {
+  if (mode === "edit") {
     elements.editToolPanel?.classList.add("is-properties-open");
     propertiesButton?.setAttribute("aria-expanded", "true");
   } else {
@@ -2135,14 +2131,11 @@ function setWorkbenchMode(mode, options = {}) {
   const statsPanel = document.querySelector(".stats-panel");
   const statsCollapseButton = document.querySelector("#statsCollapseButton");
   if (mode === "export" && statsPanel) {
-    const collapsed = isCompactWorkbench();
-    document.body.classList.toggle("stats-panel-collapsed", collapsed);
-    statsPanel.classList.toggle("is-collapsed", collapsed);
+    document.body.classList.remove("stats-panel-collapsed");
+    statsPanel.classList.remove("is-collapsed");
     if (statsCollapseButton) {
-      statsCollapseButton.title = collapsed ? "展开用豆清单与导出" : "收起右侧面板";
-      statsCollapseButton.innerHTML = collapsed
-        ? '<i data-lucide="panel-right-open" aria-hidden="true"></i>'
-        : '<i data-lucide="panel-right-close" aria-hidden="true"></i>';
+      statsCollapseButton.title = "收起右侧面板";
+      statsCollapseButton.innerHTML = '<i data-lucide="panel-right-close" aria-hidden="true"></i>';
     }
     document.querySelector('.stats-tab[data-stats-tab="beads"]')?.click();
   }
