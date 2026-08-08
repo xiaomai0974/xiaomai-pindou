@@ -2062,6 +2062,28 @@ function setupWorkbenchLayout() {
 }
 
 const WORKBENCH_MODE_STORAGE_KEY = "xiaomai-workbench-mode-v1";
+const mobileLayoutMedia = window.matchMedia("(max-width: 768px)");
+
+function isMobileLayout() {
+  return mobileLayoutMedia.matches;
+}
+
+function syncMobileLayout(options = {}) {
+  const mobile = isMobileLayout();
+  document.body.classList.toggle("is-mobile-layout", mobile);
+  if (mobile) {
+    elements.editToolPanel?.classList.remove("is-properties-open");
+    document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "false");
+  }
+  if (options.fit !== false) {
+    window.setTimeout(() => fitCanvasToScreen(), 80);
+  }
+}
+
+function setupMobileLayout() {
+  syncMobileLayout({ fit: false });
+  mobileLayoutMedia.addEventListener?.("change", () => syncMobileLayout());
+}
 
 function syncModeHeaderProject() {
   const topName = document.querySelector("#topProjectName");
@@ -2120,7 +2142,7 @@ function setWorkbenchMode(mode, options = {}) {
   });
 
   const propertiesButton = document.querySelector("#toolPropertiesButton");
-  if (mode === "edit") {
+  if (mode === "edit" && !isMobileLayout()) {
     elements.editToolPanel?.classList.add("is-properties-open");
     propertiesButton?.setAttribute("aria-expanded", "true");
   } else {
@@ -8303,6 +8325,7 @@ function resetApp() {
 }
 
 function init() {
+  setupMobileLayout();
   organizeWorkbenchSidebar();
   elevateToolboxLayer();
   setupWorkbenchLayout();
@@ -8320,6 +8343,7 @@ function init() {
   syncDiagnosticControls();
   renderConstraintPalette();
   setZoom(1);
+  if (isMobileLayout()) window.setTimeout(() => fitCanvasToScreen(), 80);
   renderPattern();
   renderStats();
   updateProjectSaveStatus("未保存");

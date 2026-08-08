@@ -4272,27 +4272,446 @@ body[data-workbench-mode="edit"].focus-canvas-mode .workspace > .sheet-chrome {
   }
 }
 
-/* Keep the conversion preview visible while adjusting settings on phones. */
+/* Mobile workbench. Every rule is scoped so the desktop layout stays intact. */
 @media (max-width: 768px) {
-  body[data-workbench-mode="transform"] .control-panel > .workbench-drawer-panel.is-sidebar-open {
-    top: auto;
-    right: 8px;
-    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-    left: 8px;
-    width: auto;
-    max-height: min(46vh, 420px);
-    overflow-y: auto;
-    border: 1px solid #d7d7d7;
-    border-radius: 10px 10px 6px 6px;
-    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.16);
-    overscroll-behavior: contain;
+  html,
+  body.is-mobile-layout {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
 
-  body[data-workbench-mode="transform"] .workspace {
+  body.is-mobile-layout .workbench-mode-header {
+    position: relative;
+    z-index: 3000;
+    width: 100%;
+    height: 52px;
+    grid-template-columns: 42px minmax(0, 1fr) 40px;
+    gap: 6px;
+    border-bottom: 1px solid var(--line);
+    padding: 0 8px;
+  }
+
+  body.is-mobile-layout .mode-header-brand strong,
+  body.is-mobile-layout .mode-project-copy,
+  body.is-mobile-layout .mode-header-action span {
+    display: none;
+  }
+
+  body.is-mobile-layout .mode-header-mark {
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: 7px;
+    box-shadow: none;
+    font-size: 18px;
+  }
+
+  body.is-mobile-layout .workbench-mode-tabs {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 0;
+  }
+
+  body.is-mobile-layout .workbench-mode-button {
+    min-width: 0;
+    min-height: 38px;
+    overflow: hidden;
+    padding: 0 8px;
+    font-size: 13px;
+    text-overflow: ellipsis;
+  }
+
+  body.is-mobile-layout .mode-header-project {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
+  body.is-mobile-layout .mode-header-action {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0;
+  }
+
+  body.is-mobile-layout .pending-preview-bar {
+    position: fixed;
+    z-index: 3400;
+    top: 112px;
+    right: 6px;
+    left: auto;
+    width: max-content;
+    max-width: calc(100vw - 12px);
+    min-width: 0;
+    min-height: 44px;
+    justify-content: flex-end;
+    border: 1px solid #f2a5b8;
+    border-radius: 8px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+    padding: 5px;
+  }
+
+  body.is-mobile-layout .pending-preview-bar span {
+    display: none;
+  }
+
+  body.is-mobile-layout .pending-preview-bar button {
+    min-height: 32px;
+    padding: 0 12px;
+  }
+
+  body.is-mobile-layout .app-shell,
+  body.is-mobile-layout.stats-panel-collapsed .app-shell {
+    display: block;
+    width: 100%;
+    height: calc(100dvh - 52px);
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  body.is-mobile-layout .workspace,
+  body.is-mobile-layout .workspace > .sheet-chrome {
+    min-width: 0;
     min-height: 0;
   }
 
-  body[data-workbench-mode="transform"] .canvas-wrap {
-    scroll-padding-bottom: calc(46vh + env(safe-area-inset-bottom, 0px));
+  body.is-mobile-layout .workspace > .sheet-chrome {
+    width: 100%;
+    height: 100%;
+    padding: 0;
+  }
+
+  body.is-mobile-layout .sheet-chrome {
+    grid-template-rows: 44px minmax(0, 1fr);
+  }
+
+  body.is-mobile-layout .sheet-title,
+  body.is-mobile-layout .sheet-legend,
+  body.is-mobile-layout .privacy-note {
+    display: none;
+  }
+
+  body.is-mobile-layout .editor-toolbar {
+    min-height: 44px;
+    flex-basis: 44px;
+    justify-content: center;
+    gap: 4px;
+    overflow: hidden;
+    border-bottom: 1px solid var(--line);
+    padding: 4px 7px;
+  }
+
+  body.is-mobile-layout .editor-toolbar .top-parameter-toggles,
+  body.is-mobile-layout .editor-toolbar .view-tools,
+  body.is-mobile-layout .editor-toolbar #editToggle,
+  body.is-mobile-layout .editor-toolbar #lockGridButton,
+  body.is-mobile-layout .editor-toolbar .current-color,
+  body.is-mobile-layout .editor-toolbar #cellInfo,
+  body.is-mobile-layout .editor-toolbar .reference-toolbar,
+  body.is-mobile-layout .editor-toolbar .trace-reference-toolbar,
+  body.is-mobile-layout .editor-toolbar #focusCanvasButton {
+    display: none !important;
+  }
+
+  body.is-mobile-layout .zoom-tools {
+    justify-content: center;
+  }
+
+  body.is-mobile-layout .editor-toolbar .zoom-tools button {
+    min-width: 36px;
+    min-height: 34px;
+    padding: 0 8px;
+  }
+
+  body.is-mobile-layout .editor-toolbar .zoom-tools output {
+    min-width: 54px;
+    padding: 6px 7px;
+  }
+
+  body.is-mobile-layout .canvas-wrap {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    overflow: auto;
+    border: 0;
+    padding: 8px;
+    scrollbar-gutter: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.is-mobile-layout #patternCanvas {
+    margin: 0 auto;
+    touch-action: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .control-panel {
+    position: fixed;
+    z-index: 2200;
+    top: 52px;
+    right: 0;
+    left: 0;
+    display: flex;
+    width: 100%;
+    height: 56px;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    overflow: visible;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: #fff;
+    padding: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .control-panel > .brand,
+  body.is-mobile-layout[data-workbench-mode="transform"] .reference-controls-host {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-nav {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0;
+    overflow: visible;
+    border: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .rail-group-label,
+  body.is-mobile-layout[data-workbench-mode="transform"] .rail-spacer {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-button,
+  body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-button.rail-generate-button {
+    width: auto;
+    min-width: 0;
+    min-height: 56px;
+    gap: 2px;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    margin: 0;
+    padding: 5px 2px 3px;
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-button.is-active {
+    border-bottom-color: var(--accent);
+    background: #fff2f6;
+    color: var(--accent);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .control-panel > .workbench-drawer-panel.is-sidebar-open {
+    position: fixed;
+    z-index: 2600;
+    top: auto;
+    right: 6px;
+    bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+    left: 6px;
+    display: block;
+    width: auto;
+    height: auto;
+    max-height: min(44dvh, 390px);
+    overflow-y: auto;
+    border: 1px solid #d7d7d7;
+    border-radius: 12px 12px 7px 7px;
+    background: #fff;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.17);
+    padding: 12px;
+    overscroll-behavior: contain;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .workspace {
+    position: fixed;
+    top: 108px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .canvas-wrap {
+    scroll-padding-bottom: calc(44dvh + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .workspace {
+    position: fixed;
+    top: 52px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .sheet-chrome {
+    padding-bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar {
+    justify-content: space-between;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .toolbar-history {
+    display: flex;
+    gap: 2px;
+    border: 0;
+    padding: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .toolbar-history button span,
+  body.is-mobile-layout[data-workbench-mode="edit"] .zoom-tools #zoomResetButton {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .edit-tool-panel {
+    position: fixed;
+    z-index: 2500;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    width: 100%;
+    height: calc(62px + env(safe-area-inset-bottom, 0px));
+    grid-template-columns: minmax(0, 1fr) 52px;
+    gap: 0;
+    overflow: visible;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: #fff;
+    padding: 4px 4px env(safe-area-inset-bottom, 0px);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button {
+    width: auto;
+    min-width: 0;
+    min-height: 52px;
+    gap: 2px;
+    margin: 0;
+    border-radius: 6px;
+    padding: 3px 1px;
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button svg,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
+    position: fixed;
+    z-index: 2700;
+    top: auto;
+    right: 6px;
+    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
+    left: 6px;
+    display: none;
+    width: auto;
+    max-height: min(58dvh, 500px);
+    overflow-y: auto;
+    border: 1px solid #d7d7d7;
+    border-radius: 12px 12px 7px 7px;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.17);
+    padding: 12px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover {
+    display: block;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .app-shell {
+    display: block;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .workspace {
+    position: fixed;
+    top: 52px;
+    right: 0;
+    bottom: 43dvh;
+    left: 0;
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .workspace > .sheet-chrome {
+    grid-template-rows: 44px minmax(0, 1fr);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .stats-panel {
+    position: fixed;
+    z-index: 2300;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    width: 100%;
+    height: 43dvh;
+    max-height: 430px;
+    overflow: hidden;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: #fff;
+    padding: 8px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .stats-collapse-button {
+    display: none;
+  }
+
+  body.is-mobile-layout .crop-modal {
+    padding: 6px;
+  }
+
+  body.is-mobile-layout .crop-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - 12px);
+    padding: 10px;
+  }
+
+  body.is-mobile-layout #cropCanvas {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: 58dvh;
+  }
+
+  body.is-mobile-layout .crop-header span {
+    display: none;
+  }
+
+  body.is-mobile-layout .crop-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  body.is-mobile-layout .crop-controls label {
+    grid-column: 1 / -1;
   }
 }
