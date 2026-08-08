@@ -4271,3 +4271,28 @@ body[data-workbench-mode="edit"].focus-canvas-mode .workspace > .sheet-chrome {
     top: 62px;
   }
 }
+
+/* Keep the conversion preview visible while adjusting settings on phones. */
+@media (max-width: 768px) {
+  body[data-workbench-mode="transform"] .control-panel > .workbench-drawer-panel.is-sidebar-open {
+    top: auto;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    left: 8px;
+    width: auto;
+    max-height: min(46vh, 420px);
+    overflow-y: auto;
+    border: 1px solid #d7d7d7;
+    border-radius: 10px 10px 6px 6px;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.16);
+    overscroll-behavior: contain;
+  }
+
+  body[data-workbench-mode="transform"] .workspace {
+    min-height: 0;
+  }
+
+  body[data-workbench-mode="transform"] .canvas-wrap {
+    scroll-padding-bottom: calc(46vh + env(safe-area-inset-bottom, 0px));
+  }
+}
