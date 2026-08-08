@@ -679,8 +679,16 @@ const elements = {
   cropModal: document.querySelector("#cropModal"),
   cropCanvas: document.querySelector("#cropCanvas"),
   cropZoom: document.querySelector("#cropZoom"),
+  mobileCropZoom: document.querySelector("#mobileCropZoom"),
   confirmCropButton: document.querySelector("#confirmCropButton"),
+  mobileConfirmCropButton: document.querySelector("#mobileConfirmCropButton"),
   skipCropButton: document.querySelector("#skipCropButton"),
+  cropCloseButton: document.querySelector("#cropCloseButton"),
+  cropZoomOutButton: document.querySelector("#cropZoomOutButton"),
+  cropZoomInButton: document.querySelector("#cropZoomInButton"),
+  cropResetButton: document.querySelector("#cropResetButton"),
+  cropMirrorButton: document.querySelector("#cropMirrorButton"),
+  cropReplaceButton: document.querySelector("#cropReplaceButton"),
   emptyState: document.querySelector("#emptyState"),
   projectName: document.querySelector("#projectName"),
   projectMeta: document.querySelector("#projectMeta"),
@@ -881,7 +889,9 @@ const cropState = {
   baseScale: 1,
   offsetX: 0,
   offsetY: 0,
-  crop: { x: 120, y: 70, size: 380 },
+  crop: { x: 120, y: 70, width: 380, height: 380 },
+  ratio: null,
+  mirrored: false,
   dragMode: null,
   pointerId: null,
   startX: 0,
@@ -889,6 +899,18 @@ const cropState = {
   startOffsetX: 0,
   startOffsetY: 0,
   startCrop: null,
+};
+
+const mobileCanvasGesture = {
+  pointers: new Map(),
+  pendingEvent: null,
+  pendingTimer: null,
+  drawingPointerId: null,
+  pinching: false,
+  consumed: false,
+  startDistance: 0,
+  startZoom: 1,
+  suppressClickUntil: 0,
 };
 state.colorLimit = Math.min(state.colorLimit, palette.length);
 state.selectedColor = palette.find((item) => item.code === "H7") || palette.find((item) => item.lab.l < 20) || palette[0];
@@ -1980,7 +2002,7 @@ function setupWorkbenchLayout() {
     });
   });
 
-  if (window.innerWidth > 760 && drawerPanels.has("size")) {
+  if (drawerPanels.has("size")) {
     openSidebarDrawer("size");
   }
 
@@ -3516,10 +3538,16 @@ function loadImageFile(file) {
   const image = new Image();
   image.onload = () => {
     elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，正在适配 ${gridDimensionsLabel()} 画布`;
-    elements.cellInfo.textContent = "图片会完整适配当前画布，不会强制裁成正方形。";
+    elements.cellInfo.textContent = isMobileLayout()
+      ? "请先调整裁剪范围，确认后再生成图纸。"
+      : "图片会完整适配当前画布，不会强制裁成正方形。";
     URL.revokeObjectURL(image.src);
     state.libraryProjectId = null;
     state.projectCreatedAt = null;
+    if (isMobileLayout()) {
+      openCropper(image, file);
+      return;
+    }
     acceptSourceImage(image, file, {
       skipped: true,
       originalWidth: image.width,
@@ -3652,41 +3680,109 @@ function openCropper(image, file) {
     acceptSourceImage(image, file, { skipped: true });
     return;
   }
-  const canvas = elements.cropCanvas;
-  const fitScale = Math.min((canvas.width * 0.86) / image.width, (canvas.height * 0.86) / image.height);
   cropState.image = image;
   cropState.file = file;
-  cropState.zoom = 1;
-  cropState.baseScale = Math.max(0.05, fitScale);
-  const drawW = image.width * cropState.baseScale;
-  const drawH = image.height * cropState.baseScale;
-  cropState.offsetX = (canvas.width - drawW) / 2;
-  cropState.offsetY = (canvas.height - drawH) / 2;
-  const size = Math.min(canvas.width, canvas.height) * 0.72;
-  cropState.crop = {
-    x: (canvas.width - size) / 2,
-    y: (canvas.height - size) / 2,
-    size,
-  };
-  cropState.dragMode = null;
-  cropState.pointerId = null;
-  elements.cropZoom.value = "1";
   elements.cropModal.hidden = false;
-  drawCropper();
+  resetCropperView();
 }
 
 function setupCropEvents() {
   if (!elements.cropCanvas) return;
   elements.confirmCropButton.addEventListener("click", confirmCrop);
+  elements.mobileConfirmCropButton?.addEventListener("click", confirmCrop);
   elements.skipCropButton.addEventListener("click", skipCrop);
   elements.cropZoom.addEventListener("input", () => {
     zoomCropper(Number(elements.cropZoom.value), elements.cropCanvas.width / 2, elements.cropCanvas.height / 2);
+  });
+  elements.mobileCropZoom?.addEventListener("input", () => {
+    zoomCropper(Number(elements.mobileCropZoom.value), elements.cropCanvas.width / 2, elements.cropCanvas.height / 2);
+  });
+  elements.cropZoomOutButton?.addEventListener("click", () => {
+    zoomCropper(cropState.zoom - 0.12, elements.cropCanvas.width / 2, elements.cropCanvas.height / 2);
+  });
+  elements.cropZoomInButton?.addEventListener("click", () => {
+    zoomCropper(cropState.zoom + 0.12, elements.cropCanvas.width / 2, elements.cropCanvas.height / 2);
+  });
+  elements.cropResetButton?.addEventListener("click", resetCropperView);
+  elements.cropMirrorButton?.addEventListener("click", () => {
+    cropState.mirrored = !cropState.mirrored;
+    elements.cropMirrorButton.classList.toggle("is-active", cropState.mirrored);
+    drawCropper();
+  });
+  elements.cropCloseButton?.addEventListener("click", cancelCrop);
+  elements.cropReplaceButton?.addEventListener("click", () => elements.imageInput.click());
+  document.querySelectorAll(".crop-ratio-option").forEach((button) => {
+    button.addEventListener("click", () => setCropRatio(button.dataset.cropRatio));
   });
   elements.cropCanvas.addEventListener("pointerdown", handleCropPointerDown);
   elements.cropCanvas.addEventListener("pointermove", handleCropPointerMove);
   elements.cropCanvas.addEventListener("pointerup", endCropDrag);
   elements.cropCanvas.addEventListener("pointercancel", endCropDrag);
   elements.cropCanvas.addEventListener("wheel", handleCropWheel, { passive: false });
+}
+
+function resetCropperView() {
+  if (!cropState.image) return;
+  const canvas = elements.cropCanvas;
+  const image = cropState.image;
+  const fitScale = Math.min((canvas.width * 0.86) / image.width, (canvas.height * 0.86) / image.height);
+  cropState.zoom = 1;
+  cropState.baseScale = Math.max(0.05, fitScale);
+  const drawW = image.width * cropState.baseScale;
+  const drawH = image.height * cropState.baseScale;
+  cropState.offsetX = (canvas.width - drawW) / 2;
+  cropState.offsetY = (canvas.height - drawH) / 2;
+  cropState.ratio = null;
+  cropState.mirrored = false;
+  cropState.crop = cropRectForRatio(activeGridWidth() / Math.max(1, activeGridHeight()));
+  cropState.dragMode = null;
+  cropState.pointerId = null;
+  syncCropControlState();
+  drawCropper();
+}
+
+function cropRectForRatio(ratio, center = null) {
+  const canvas = elements.cropCanvas;
+  const safeRatio = clampRange(Number(ratio) || 1, 0.25, 4);
+  const maxWidth = canvas.width * 0.76;
+  const maxHeight = canvas.height * 0.72;
+  let width = maxWidth;
+  let height = width / safeRatio;
+  if (height > maxHeight) {
+    height = maxHeight;
+    width = height * safeRatio;
+  }
+  const centerX = center?.x ?? canvas.width / 2;
+  const centerY = center?.y ?? canvas.height / 2;
+  return {
+    x: clampRange(centerX - width / 2, 0, canvas.width - width),
+    y: clampRange(centerY - height / 2, 0, canvas.height - height),
+    width,
+    height,
+  };
+}
+
+function syncCropControlState() {
+  const zoom = String(cropState.zoom);
+  if (elements.cropZoom) elements.cropZoom.value = zoom;
+  if (elements.mobileCropZoom) elements.mobileCropZoom.value = zoom;
+  elements.cropMirrorButton?.classList.toggle("is-active", cropState.mirrored);
+  document.querySelectorAll(".crop-ratio-option").forEach((button) => {
+    const value = button.dataset.cropRatio === "free" ? null : Number(button.dataset.cropRatio);
+    button.classList.toggle("is-active", value === cropState.ratio);
+  });
+}
+
+function setCropRatio(value) {
+  const nextRatio = value === "free" ? null : clampRange(Number(value), 0.25, 4);
+  const center = {
+    x: cropState.crop.x + cropState.crop.width / 2,
+    y: cropState.crop.y + cropState.crop.height / 2,
+  };
+  cropState.ratio = nextRatio;
+  if (nextRatio) cropState.crop = cropRectForRatio(nextRatio, center);
+  syncCropControlState();
+  drawCropper();
 }
 
 function cropScale() {
@@ -3700,51 +3796,56 @@ function drawCropper() {
   cropCtx.clearRect(0, 0, canvas.width, canvas.height);
   cropCtx.fillStyle = "#f3f4f5";
   cropCtx.fillRect(0, 0, canvas.width, canvas.height);
-  cropCtx.drawImage(
-    cropState.image,
-    cropState.offsetX,
-    cropState.offsetY,
-    cropState.image.width * scale,
-    cropState.image.height * scale,
-  );
+  const drawWidth = cropState.image.width * scale;
+  const drawHeight = cropState.image.height * scale;
+  cropCtx.save();
+  if (cropState.mirrored) {
+    cropCtx.translate(cropState.offsetX + drawWidth, cropState.offsetY);
+    cropCtx.scale(-1, 1);
+    cropCtx.drawImage(cropState.image, 0, 0, drawWidth, drawHeight);
+  } else {
+    cropCtx.drawImage(cropState.image, cropState.offsetX, cropState.offsetY, drawWidth, drawHeight);
+  }
+  cropCtx.restore();
 
-  const { x, y, size } = cropState.crop;
+  const { x, y, width, height } = cropState.crop;
   cropCtx.save();
   cropCtx.fillStyle = "rgba(0, 0, 0, 0.48)";
   cropCtx.beginPath();
   cropCtx.rect(0, 0, canvas.width, canvas.height);
-  cropCtx.rect(x, y, size, size);
+  cropCtx.rect(x, y, width, height);
   cropCtx.fill("evenodd");
   cropCtx.restore();
 
   cropCtx.strokeStyle = "#e83b64";
   cropCtx.lineWidth = 3;
-  cropCtx.strokeRect(x, y, size, size);
+  cropCtx.strokeRect(x, y, width, height);
   cropCtx.strokeStyle = "rgba(255,255,255,0.78)";
   cropCtx.lineWidth = 1;
   for (let i = 1; i < 3; i += 1) {
-    const pos = x + (size / 3) * i;
+    const pos = x + (width / 3) * i;
     cropCtx.beginPath();
     cropCtx.moveTo(pos, y);
-    cropCtx.lineTo(pos, y + size);
+    cropCtx.lineTo(pos, y + height);
     cropCtx.stroke();
-    const row = y + (size / 3) * i;
+    const row = y + (height / 3) * i;
     cropCtx.beginPath();
     cropCtx.moveTo(x, row);
-    cropCtx.lineTo(x + size, row);
+    cropCtx.lineTo(x + width, row);
     cropCtx.stroke();
   }
 
-  cropCtx.fillStyle = "#ffffff";
-  cropCtx.strokeStyle = "#111111";
+  cropCtx.fillStyle = "#ffd966";
+  cropCtx.strokeStyle = "#7b4f2c";
+  cropCtx.lineWidth = 3;
   for (const [hx, hy] of [
     [x, y],
-    [x + size, y],
-    [x, y + size],
-    [x + size, y + size],
+    [x + width, y],
+    [x, y + height],
+    [x + width, y + height],
   ]) {
     cropCtx.beginPath();
-    cropCtx.rect(hx - 5, hy - 5, 10, 10);
+    cropCtx.arc(hx, hy, 10, 0, Math.PI * 2);
     cropCtx.fill();
     cropCtx.stroke();
   }
@@ -3760,11 +3861,13 @@ function cropPointerPosition(event) {
 
 function handleCropPointerDown(event) {
   if (!cropState.image) return;
+  event.preventDefault();
   const point = cropPointerPosition(event);
   const crop = cropState.crop;
+  const corner = cropCornerAtPoint(point);
   const insideCrop =
-    point.x >= crop.x && point.x <= crop.x + crop.size && point.y >= crop.y && point.y <= crop.y + crop.size;
-  cropState.dragMode = insideCrop ? "crop" : "image";
+    point.x >= crop.x && point.x <= crop.x + crop.width && point.y >= crop.y && point.y <= crop.y + crop.height;
+  cropState.dragMode = corner ? `resize-${corner}` : insideCrop ? "crop" : "image";
   cropState.pointerId = event.pointerId;
   cropState.startX = point.x;
   cropState.startY = point.y;
@@ -3776,18 +3879,59 @@ function handleCropPointerDown(event) {
 
 function handleCropPointerMove(event) {
   if (!cropState.dragMode || cropState.pointerId !== event.pointerId) return;
+  event.preventDefault();
   const point = cropPointerPosition(event);
   const dx = point.x - cropState.startX;
   const dy = point.y - cropState.startY;
   if (cropState.dragMode === "image") {
     cropState.offsetX = cropState.startOffsetX + dx;
     cropState.offsetY = cropState.startOffsetY + dy;
-  } else {
-    const size = cropState.startCrop.size;
-    cropState.crop.x = clampRange(cropState.startCrop.x + dx, 0, elements.cropCanvas.width - size);
-    cropState.crop.y = clampRange(cropState.startCrop.y + dy, 0, elements.cropCanvas.height - size);
+  } else if (cropState.dragMode === "crop") {
+    const { width, height } = cropState.startCrop;
+    cropState.crop.x = clampRange(cropState.startCrop.x + dx, 0, elements.cropCanvas.width - width);
+    cropState.crop.y = clampRange(cropState.startCrop.y + dy, 0, elements.cropCanvas.height - height);
+  } else if (cropState.dragMode.startsWith("resize-")) {
+    resizeCropFromCorner(cropState.dragMode.slice(7), point);
   }
   drawCropper();
+}
+
+function cropCornerAtPoint(point) {
+  const { x, y, width, height } = cropState.crop;
+  const corners = {
+    nw: { x, y },
+    ne: { x: x + width, y },
+    sw: { x, y: y + height },
+    se: { x: x + width, y: y + height },
+  };
+  const radius = 26;
+  return Object.entries(corners).find(([, corner]) => Math.hypot(point.x - corner.x, point.y - corner.y) <= radius)?.[0] || null;
+}
+
+function resizeCropFromCorner(corner, point) {
+  const start = cropState.startCrop;
+  const fromLeft = corner.includes("w");
+  const fromTop = corner.includes("n");
+  const anchorX = fromLeft ? start.x + start.width : start.x;
+  const anchorY = fromTop ? start.y + start.height : start.y;
+  const directionX = fromLeft ? -1 : 1;
+  const directionY = fromTop ? -1 : 1;
+  const maxWidth = directionX < 0 ? anchorX : elements.cropCanvas.width - anchorX;
+  const maxHeight = directionY < 0 ? anchorY : elements.cropCanvas.height - anchorY;
+  const minSize = 54;
+  let width = clampRange(Math.abs(point.x - anchorX), minSize, maxWidth);
+  let height = clampRange(Math.abs(point.y - anchorY), minSize, maxHeight);
+  if (cropState.ratio) {
+    width = Math.max(width, height * cropState.ratio);
+    width = clampRange(width, minSize, Math.min(maxWidth, maxHeight * cropState.ratio));
+    height = width / cropState.ratio;
+  }
+  cropState.crop = {
+    x: directionX < 0 ? anchorX - width : anchorX,
+    y: directionY < 0 ? anchorY - height : anchorY,
+    width,
+    height,
+  };
 }
 
 function endCropDrag(event) {
@@ -3815,31 +3959,51 @@ function zoomCropper(nextZoom, pivotX, pivotY) {
   const nextScale = cropScale();
   cropState.offsetX = pivotX - imageX * nextScale;
   cropState.offsetY = pivotY - imageY * nextScale;
+  syncCropControlState();
   drawCropper();
 }
 
 function selectedCropInImageSpace() {
   const scale = cropScale();
   const image = cropState.image;
-  const requestedX = (cropState.crop.x - cropState.offsetX) / scale;
+  const requestedX = cropState.mirrored
+    ? image.width - (cropState.crop.x + cropState.crop.width - cropState.offsetX) / scale
+    : (cropState.crop.x - cropState.offsetX) / scale;
   const requestedY = (cropState.crop.y - cropState.offsetY) / scale;
-  const requestedSize = cropState.crop.size / scale;
-  const size = clampRange(requestedSize, 1, Math.min(image.width, image.height));
-  const x = clampRange(requestedX, 0, Math.max(0, image.width - size));
-  const y = clampRange(requestedY, 0, Math.max(0, image.height - size));
-  return { x, y, size };
+  const width = clampRange(cropState.crop.width / scale, 1, image.width);
+  const height = clampRange(cropState.crop.height / scale, 1, image.height);
+  const x = clampRange(requestedX, 0, Math.max(0, image.width - width));
+  const y = clampRange(requestedY, 0, Math.max(0, image.height - height));
+  return { x, y, width, height, mirrored: cropState.mirrored };
 }
 
 function confirmCrop() {
   if (!cropState.image || !cropState.file) return;
   const source = selectedCropInImageSpace();
-  const outputSize = Math.round(clampRange(source.size, 512, 1600));
+  const sourceLongSide = Math.max(source.width, source.height);
+  const outputLongSide = Math.round(clampRange(sourceLongSide, 512, 1600));
+  const outputWidth = Math.max(1, Math.round((source.width / sourceLongSide) * outputLongSide));
+  const outputHeight = Math.max(1, Math.round((source.height / sourceLongSide) * outputLongSide));
   const canvas = document.createElement("canvas");
-  canvas.width = outputSize;
-  canvas.height = outputSize;
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
   const canvasCtx = canvas.getContext("2d");
   canvasCtx.imageSmoothingEnabled = true;
-  canvasCtx.drawImage(cropState.image, source.x, source.y, source.size, source.size, 0, 0, outputSize, outputSize);
+  if (source.mirrored) {
+    canvasCtx.translate(outputWidth, 0);
+    canvasCtx.scale(-1, 1);
+  }
+  canvasCtx.drawImage(
+    cropState.image,
+    source.x,
+    source.y,
+    source.width,
+    source.height,
+    0,
+    0,
+    outputWidth,
+    outputHeight,
+  );
   const croppedImage = new Image();
   croppedImage.onload = () => {
     elements.cropModal.hidden = true;
@@ -3854,6 +4018,14 @@ function confirmCrop() {
   const croppedDataUrl = canvas.toDataURL("image/png");
   releaseCanvasMemory(canvas);
   croppedImage.src = croppedDataUrl;
+}
+
+function cancelCrop() {
+  if (elements.cropModal) elements.cropModal.hidden = true;
+  cropState.image = null;
+  cropState.file = null;
+  cropState.dragMode = null;
+  cropState.pointerId = null;
 }
 
 function skipCrop() {
@@ -6547,6 +6719,7 @@ function handleCanvasMove(event) {
 }
 
 function handleCanvasClick(event) {
+  if (isMobileLayout() && performance.now() < mobileCanvasGesture.suppressClickUntil) return;
   if (state.colorDebugEnabled && event.altKey) {
     const debugCell = getCellFromPointer(event);
     if (debugCell) showColorDebugForCell(debugCell);
@@ -6633,7 +6806,110 @@ function showColorDebugForCell(cell) {
   );
 }
 
+function isMobileCanvasTouch(event) {
+  return isMobileLayout() && event.pointerType === "touch";
+}
+
+function canvasPointerSnapshot(event) {
+  return {
+    pointerId: event.pointerId,
+    pointerType: event.pointerType,
+    button: event.button,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    shiftKey: event.shiftKey,
+    target: elements.patternCanvas,
+    preventDefault() {},
+  };
+}
+
+function clearMobileCanvasGesture() {
+  window.clearTimeout(mobileCanvasGesture.pendingTimer);
+  mobileCanvasGesture.pointers.clear();
+  mobileCanvasGesture.pendingEvent = null;
+  mobileCanvasGesture.pendingTimer = null;
+  mobileCanvasGesture.drawingPointerId = null;
+  mobileCanvasGesture.pinching = false;
+  mobileCanvasGesture.consumed = false;
+  mobileCanvasGesture.startDistance = 0;
+}
+
+function cancelCanvasEditForPinch() {
+  const snapshot = state.strokeHistorySnapshot;
+  if (snapshot && (state.isBrushPainting || state.isErasing)) {
+    const codes = historySnapshotCodes(snapshot);
+    const byCode = new Map(palette.map((item) => [item.code, item]));
+    state.pattern = codes.map((code) =>
+      code === "__EMPTY__" ? EMPTY_CELL : byCode.get(code) || fallbackPaletteColor(),
+    );
+    state.manualEditedCells = new Set(snapshot.manualEditedCells || []);
+    state.counts = buildCounts(state.pattern);
+  }
+  state.strokeHistorySnapshot = null;
+  state.strokeChanged = false;
+  state.isBrushPainting = false;
+  state.isErasing = false;
+  state.lastBrushIndex = null;
+  state.lastBrushCell = null;
+  state.lastEraseIndex = null;
+  state.lastEraseCell = null;
+  state.strokeVisited = new Set();
+  state.dragStartCell = null;
+  state.dragPreview = null;
+  if (state.traceReference.dragging) {
+    state.traceReference.dragging = false;
+    state.traceReference.pointerId = null;
+  }
+  requestPatternRender();
+}
+
+function mobilePinchMetrics() {
+  const points = [...mobileCanvasGesture.pointers.values()].slice(0, 2);
+  if (points.length < 2) return null;
+  return {
+    distance: Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)),
+    centerX: (points[0].x + points[1].x) / 2,
+    centerY: (points[0].y + points[1].y) / 2,
+  };
+}
+
+function beginPendingMobileDraw() {
+  if (!mobileCanvasGesture.pendingEvent || mobileCanvasGesture.pinching || mobileCanvasGesture.consumed) return;
+  const event = mobileCanvasGesture.pendingEvent;
+  mobileCanvasGesture.pendingEvent = null;
+  mobileCanvasGesture.pendingTimer = null;
+  mobileCanvasGesture.drawingPointerId = event.pointerId;
+  handleCanvasPointerDownCore(event);
+}
+
 function handleCanvasPointerDown(event) {
+  if (!isMobileCanvasTouch(event)) {
+    handleCanvasPointerDownCore(event);
+    return;
+  }
+  event.preventDefault();
+  mobileCanvasGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  elements.patternCanvas.setPointerCapture?.(event.pointerId);
+  if (mobileCanvasGesture.pointers.size === 1) {
+    mobileCanvasGesture.consumed = false;
+    mobileCanvasGesture.pendingEvent = canvasPointerSnapshot(event);
+    mobileCanvasGesture.pendingTimer = window.setTimeout(beginPendingMobileDraw, 90);
+    return;
+  }
+  if (mobileCanvasGesture.pointers.size === 2) {
+    window.clearTimeout(mobileCanvasGesture.pendingTimer);
+    mobileCanvasGesture.pendingTimer = null;
+    mobileCanvasGesture.pendingEvent = null;
+    mobileCanvasGesture.consumed = true;
+    cancelCanvasEditForPinch();
+    const pinch = mobilePinchMetrics();
+    mobileCanvasGesture.pinching = true;
+    mobileCanvasGesture.startDistance = pinch?.distance || 1;
+    mobileCanvasGesture.startZoom = state.zoom;
+  }
+}
+
+function handleCanvasPointerDownCore(event) {
   elements.patternCanvas.focus?.({ preventScroll: true });
   if (beginCanvasPan(event)) return;
   if (tryStartTraceReferenceDrag(event)) return;
@@ -6687,6 +6963,34 @@ function handleCanvasPointerDown(event) {
 }
 
 function handleCanvasPointerMove(event) {
+  if (!isMobileCanvasTouch(event)) {
+    handleCanvasPointerMoveCore(event);
+    return;
+  }
+  if (!mobileCanvasGesture.pointers.has(event.pointerId)) return;
+  event.preventDefault();
+  mobileCanvasGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  if (mobileCanvasGesture.pinching) {
+    const pinch = mobilePinchMetrics();
+    if (!pinch) return;
+    const wrapRect = elements.canvasWrap.getBoundingClientRect();
+    setZoom(mobileCanvasGesture.startZoom * (pinch.distance / mobileCanvasGesture.startDistance), {
+      anchorX: clampRange(pinch.centerX - wrapRect.left, 0, elements.canvasWrap.clientWidth),
+      anchorY: clampRange(pinch.centerY - wrapRect.top, 0, elements.canvasWrap.clientHeight),
+    });
+    return;
+  }
+  if (mobileCanvasGesture.consumed) return;
+  if (mobileCanvasGesture.pendingEvent?.pointerId === event.pointerId) {
+    const start = mobileCanvasGesture.pendingEvent;
+    if (Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY) < 5) return;
+    window.clearTimeout(mobileCanvasGesture.pendingTimer);
+    beginPendingMobileDraw();
+  }
+  if (mobileCanvasGesture.drawingPointerId === event.pointerId) handleCanvasPointerMoveCore(event);
+}
+
+function handleCanvasPointerMoveCore(event) {
   if (state.traceReference.dragging) {
     moveTraceReferenceDrag(event);
     return;
@@ -6714,6 +7018,35 @@ function handleCanvasPointerMove(event) {
 }
 
 function handleCanvasPointerUp(event) {
+  if (!isMobileCanvasTouch(event)) {
+    handleCanvasPointerUpCore(event);
+    return;
+  }
+  event.preventDefault();
+  const wasPending = mobileCanvasGesture.pendingEvent?.pointerId === event.pointerId;
+  const wasDrawing = mobileCanvasGesture.drawingPointerId === event.pointerId;
+  if (mobileCanvasGesture.pinching || mobileCanvasGesture.consumed) {
+    mobileCanvasGesture.suppressClickUntil = performance.now() + 450;
+    mobileCanvasGesture.pointers.delete(event.pointerId);
+    if (mobileCanvasGesture.pointers.size < 2) mobileCanvasGesture.pinching = false;
+    if (!mobileCanvasGesture.pointers.size) clearMobileCanvasGesture();
+    return;
+  }
+  if (wasPending) {
+    window.clearTimeout(mobileCanvasGesture.pendingTimer);
+    mobileCanvasGesture.pendingTimer = null;
+    if (event.type !== "pointercancel") {
+      beginPendingMobileDraw();
+      handleCanvasPointerUpCore(event);
+    }
+  } else if (wasDrawing) {
+    handleCanvasPointerUpCore(event);
+  }
+  mobileCanvasGesture.pointers.delete(event.pointerId);
+  if (!mobileCanvasGesture.pointers.size) clearMobileCanvasGesture();
+}
+
+function handleCanvasPointerUpCore(event) {
   if (state.traceReference.dragging) {
     finishTraceReferenceDrag(event);
     return;

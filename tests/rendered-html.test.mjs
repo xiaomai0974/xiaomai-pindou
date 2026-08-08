@@ -59,8 +59,8 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260731-2/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /styles\.css\?v=20260809-4/);
-  assert.match(html, /app\.js\?v=20260809-1/);
+  assert.match(html, /styles\.css\?v=20260809-5/);
+  assert.match(html, /app\.js\?v=20260809-2/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -128,6 +128,15 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="minRegionSize"[^>]+value="2"/);
   assert.match(html, /id="customSizeInput"[^>]+type="number"[^>]+value="64"/);
   assert.match(html, /id="customHeightInput"[^>]+type="number"[^>]+value="64"/);
+  [29, 54, 64, 100].forEach((size) => {
+    assert.match(html, new RegExp(`class="seg-option(?: is-active)?" data-size="${size}"[^>]*>${size} x ${size}<`));
+  });
+  assert.match(html, /id="mobileCropZoom"/);
+  assert.match(html, /id="cropMirrorButton"/);
+  assert.match(html, /id="cropReplaceButton"/);
+  assert.match(html, /id="mobileConfirmCropButton"/);
+  assert.match(html, /data-crop-ratio="free"/);
+  assert.match(html, /data-crop-ratio="1\.777778"/);
   assert.match(html, /id="colorLimit"[^>]+type="range"[^>]+value="24"/);
   assert.match(html, /id="colorLimitValue"[^>]*>24 色<\/output>/);
   assert.doesNotMatch(html, /id="customColorLimitInput"/);

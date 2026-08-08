@@ -1240,3 +1240,14 @@ test("light high-contrast structures are protected from connected background rem
   assert.equal(backgroundMask[0], 1);
   assert.equal(backgroundMask[3 * size + 3], 0);
 });
+
+test("mobile canvas gestures reserve two fingers for zooming", async () => {
+  const source = await appSource();
+  const pointerDown = sourceBetween(source, "function handleCanvasPointerDown(event)", "function handleCanvasPointerDownCore");
+  const pointerMove = sourceBetween(source, "function handleCanvasPointerMove(event)", "function handleCanvasPointerMoveCore");
+
+  assert.match(pointerDown, /mobileCanvasGesture\.pointers\.size === 2/);
+  assert.match(pointerDown, /cancelCanvasEditForPinch\(\)/);
+  assert.match(pointerMove, /mobileCanvasGesture\.pinching/);
+  assert.match(pointerMove, /setZoom\(/);
+});

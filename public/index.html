@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=20260809-4" />
+    <link rel="stylesheet" href="styles.css?v=20260809-5" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
@@ -24,7 +24,7 @@
     <script src="pdf-utils.js?v=20260730-1" defer></script>
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
-    <script src="app.js?v=20260809-1" defer></script>
+    <script src="app.js?v=20260809-2" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -131,6 +131,12 @@
           <div class="group-title">
             <span><b class="workflow-step">1</b>画布尺寸</span>
             <output id="sizeLabel">64 x 64</output>
+          </div>
+          <div class="mobile-size-presets" role="group" aria-label="常用画布尺寸">
+            <button class="seg-option" data-size="29" type="button">29 x 29</button>
+            <button class="seg-option" data-size="54" type="button">54 x 54</button>
+            <button class="seg-option is-active" data-size="64" type="button">64 x 64</button>
+            <button class="seg-option" data-size="100" type="button">100 x 100</button>
           </div>
           <div class="segmented hidden-presets" role="group" aria-label="拼豆尺寸" hidden>
             <button class="seg-option pixel-size" data-size="30" type="button">30</button>
@@ -775,15 +781,40 @@
         <div class="crop-header">
           <strong>裁剪图片</strong>
           <span>拖动方框裁剪，拖动画布移动图片，滚轮或滑杆缩放</span>
+          <button id="cropCloseButton" class="crop-close-button mobile-only" type="button" aria-label="关闭裁剪">×</button>
         </div>
         <canvas id="cropCanvas" width="720" height="520" aria-label="图片裁剪画布"></canvas>
-        <div class="crop-controls">
+        <div class="crop-controls crop-desktop-controls">
           <label>
             缩放
             <input id="cropZoom" type="range" min="0.6" max="3" value="1" step="0.02" />
           </label>
           <button id="confirmCropButton" class="primary" type="button">确认裁剪</button>
           <button id="skipCropButton" type="button">跳过裁剪</button>
+        </div>
+        <div class="crop-mobile-controls mobile-only">
+          <div class="crop-mobile-zoom-row">
+            <button id="cropZoomOutButton" type="button" aria-label="缩小图片">−</button>
+            <input id="mobileCropZoom" type="range" min="0.6" max="3" value="1" step="0.02" aria-label="图片缩放" />
+            <button id="cropZoomInButton" type="button" aria-label="放大图片">＋</button>
+            <button id="cropResetButton" type="button">复原</button>
+            <button id="cropMirrorButton" type="button">镜像</button>
+          </div>
+          <div class="crop-ratio-section">
+            <strong>裁剪比例</strong>
+            <div class="crop-ratio-options" role="group" aria-label="裁剪比例">
+              <button class="crop-ratio-option is-active" data-crop-ratio="free" type="button">自由</button>
+              <button class="crop-ratio-option" data-crop-ratio="1" type="button">1:1</button>
+              <button class="crop-ratio-option" data-crop-ratio="0.75" type="button">3:4</button>
+              <button class="crop-ratio-option" data-crop-ratio="1.333333" type="button">4:3</button>
+              <button class="crop-ratio-option" data-crop-ratio="0.5625" type="button">9:16</button>
+              <button class="crop-ratio-option" data-crop-ratio="1.777778" type="button">16:9</button>
+            </div>
+          </div>
+          <div class="crop-mobile-actions">
+            <button id="cropReplaceButton" type="button">替换照片</button>
+            <button id="mobileConfirmCropButton" class="primary" type="button">使用图片</button>
+          </div>
         </div>
       </div>
     </div>
