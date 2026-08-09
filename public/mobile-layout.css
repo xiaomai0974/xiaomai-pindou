@@ -529,6 +529,95 @@
     display: initial;
   }
 
+  body.is-mobile-layout .mobile-canvas-actions {
+    position: fixed;
+    z-index: 2450;
+    top: 160px;
+    right: 8px;
+    display: grid !important;
+    gap: 6px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-canvas-actions {
+    top: 104px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="export"] .mobile-canvas-actions {
+    display: none !important;
+  }
+
+  body.is-mobile-layout .mobile-canvas-actions button {
+    display: grid;
+    width: 48px;
+    height: 48px;
+    min-width: 0;
+    min-height: 0;
+    place-items: center;
+    gap: 0;
+    border: 1px solid #cfcfcf;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.14);
+    padding: 3px;
+    color: var(--ink);
+  }
+
+  body.is-mobile-layout .mobile-canvas-actions button svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  body.is-mobile-layout .mobile-canvas-actions button span {
+    font-size: 9px;
+    font-weight: 850;
+  }
+
+  body.is-mobile-layout .mobile-canvas-actions button.is-active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  body.is-mobile-layout.mobile-reference-controls-open .editor-toolbar .trace-reference-toolbar {
+    position: fixed;
+    z-index: 2750;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    display: flex !important;
+    width: auto;
+    max-height: min(42dvh, 260px);
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    overflow-y: auto;
+    border: 1px solid #d2d2d2;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.18);
+    padding: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"].mobile-reference-controls-open .editor-toolbar .trace-reference-toolbar {
+    bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control {
+    min-width: min(100%, 220px);
+    flex: 1 1 180px;
+  }
+
+  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  body.is-mobile-layout .canvas-wrap.is-mobile-pan,
+  body.is-mobile-layout .canvas-wrap.is-mobile-pan #patternCanvas {
+    cursor: grab;
+  }
+
   body.is-mobile-layout .crop-close-button {
     position: absolute;
     top: 0;

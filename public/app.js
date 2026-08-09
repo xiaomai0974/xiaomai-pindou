@@ -415,6 +415,7 @@ const state = {
   symmetryMode: "none",
   allowEditLockedCells: false,
   isSpacePressed: false,
+  mobileCanvasPanMode: false,
   isPanningCanvas: false,
   panPointerId: null,
   panStartX: 0,
@@ -623,6 +624,8 @@ const elements = {
   zoomOutButton: document.querySelector("#zoomOutButton"),
   zoomResetButton: document.querySelector("#zoomResetButton"),
   fitButton: document.querySelector("#fitButton"),
+  mobileReferenceControlsButton: document.querySelector("#mobileReferenceControlsButton"),
+  mobileCanvasPanButton: document.querySelector("#mobileCanvasPanButton"),
   zoomLabel: document.querySelector("#zoomLabel"),
   editToggle: document.querySelector("#editToggle"),
   lockGridButton: document.querySelector("#lockGridButton"),
@@ -1673,6 +1676,7 @@ function setupEvents() {
   elements.traceReferenceAdjustButton.addEventListener("click", () => {
     state.traceReference.adjustMode = !state.traceReference.adjustMode;
     if (state.traceReference.adjustMode) {
+      setMobileCanvasPanMode(false);
       state.traceReference.enabled = true;
       state.traceReference.visible = true;
     }
@@ -1745,6 +1749,10 @@ function setupEvents() {
   elements.zoomOutButton.addEventListener("click", () => setZoom(state.zoom - state.zoomState.step));
   elements.zoomResetButton.addEventListener("click", () => setZoom(1, { center: true }));
   elements.fitButton.addEventListener("click", fitCanvasToScreen);
+  elements.mobileReferenceControlsButton?.addEventListener("click", toggleMobileReferenceControls);
+  elements.mobileCanvasPanButton?.addEventListener("click", () => {
+    setMobileCanvasPanMode(!state.mobileCanvasPanMode);
+  });
   elements.editToggle.addEventListener("click", toggleEditing);
   elements.lockGridButton.addEventListener("click", toggleGridLock);
   setupCropEvents();
@@ -2086,7 +2094,11 @@ function syncMobileLayout(options = {}) {
   if (mobile) {
     elements.editToolPanel?.classList.remove("is-properties-open");
     document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "false");
+  } else {
+    state.mobileCanvasPanMode = false;
+    document.body.classList.remove("mobile-reference-controls-open");
   }
+  syncMobileCanvasControls();
   if (options.fit !== false) {
     window.setTimeout(() => fitCanvasToScreen(), 80);
   }
@@ -2564,6 +2576,50 @@ function syncControlsFromState() {
   syncDiagnosticControls();
 }
 
+function syncMobileCanvasControls() {
+  const referenceOpen = document.body.classList.contains("mobile-reference-controls-open");
+  if (!state.referenceImage && referenceOpen) {
+    document.body.classList.remove("mobile-reference-controls-open");
+  }
+  elements.mobileReferenceControlsButton?.classList.toggle(
+    "is-active",
+    Boolean(state.referenceImage && document.body.classList.contains("mobile-reference-controls-open")),
+  );
+  elements.mobileReferenceControlsButton?.setAttribute(
+    "aria-expanded",
+    String(Boolean(state.referenceImage && document.body.classList.contains("mobile-reference-controls-open"))),
+  );
+  elements.mobileCanvasPanButton?.classList.toggle("is-active", state.mobileCanvasPanMode);
+  elements.mobileCanvasPanButton?.setAttribute("aria-pressed", String(state.mobileCanvasPanMode));
+}
+
+function toggleMobileReferenceControls() {
+  if (!isMobileLayout()) return;
+  if (!state.referenceImage) {
+    elements.referenceInput?.click();
+    return;
+  }
+  setMobileCanvasPanMode(false);
+  document.body.classList.toggle("mobile-reference-controls-open");
+  syncMobileCanvasControls();
+}
+
+function setMobileCanvasPanMode(enabled) {
+  state.mobileCanvasPanMode = Boolean(enabled && isMobileLayout());
+  if (state.mobileCanvasPanMode) {
+    document.body.classList.remove("mobile-reference-controls-open");
+    state.traceReference.adjustMode = false;
+    mobileCanvasGestureController?.reset?.();
+  }
+  syncMobileCanvasControls();
+  updateCanvasCursor();
+  if (isMobileLayout()) {
+    elements.cellInfo.textContent = state.mobileCanvasPanMode
+      ? "移动画布已开启：单指拖动查看放大后的区域；关闭后可继续编辑和双指缩放。"
+      : "移动画布已关闭，可以继续编辑格子或双指缩放。";
+  }
+}
+
 function syncTraceReferenceControls() {
   const trace = state.traceReference;
   const hasReference = Boolean(state.referenceImage);
@@ -2585,6 +2641,7 @@ function syncTraceReferenceControls() {
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;
   elements.traceReferenceCenterButton.disabled = !hasReference;
+  syncMobileCanvasControls();
   updateCanvasCursor();
 }
 
@@ -6848,6 +6905,10 @@ function getMobileCanvasGestureController() {
 }
 
 function handleCanvasPointerDown(event) {
+  if (isMobileLayout() && state.mobileCanvasPanMode && event.pointerType === "touch") {
+    if (beginCanvasPan(event)) event.stopPropagation();
+    return;
+  }
   if (getMobileCanvasGestureController().handlePointerDown(event)) return;
   handleCanvasPointerDownCore(event);
 }
@@ -6906,6 +6967,11 @@ function handleCanvasPointerDownCore(event) {
 }
 
 function handleCanvasPointerMove(event) {
+  if (isMobileLayout() && state.mobileCanvasPanMode && state.panPointerId === event.pointerId) {
+    handleCanvasPanPointerMove(event);
+    event.stopPropagation();
+    return;
+  }
   if (getMobileCanvasGestureController().handlePointerMove(event)) return;
   handleCanvasPointerMoveCore(event);
 }
@@ -6938,6 +7004,11 @@ function handleCanvasPointerMoveCore(event) {
 }
 
 function handleCanvasPointerUp(event) {
+  if (isMobileLayout() && state.mobileCanvasPanMode && state.panPointerId === event.pointerId) {
+    handleCanvasPanPointerUp(event);
+    event.stopPropagation();
+    return;
+  }
   if (getMobileCanvasGestureController().handlePointerUp(event)) return;
   handleCanvasPointerUpCore(event);
 }
@@ -7421,7 +7492,8 @@ function isTypingTarget(target) {
 }
 
 function beginCanvasPan(event) {
-  if (!state.isSpacePressed || event.button !== 0 || isTypingTarget(event.target)) return false;
+  const mobilePan = isMobileLayout() && state.mobileCanvasPanMode && event.pointerType === "touch";
+  if ((!state.isSpacePressed && !mobilePan) || event.button !== 0 || isTypingTarget(event.target)) return false;
   if (!elements.canvasWrap.contains(event.target)) return false;
   if (state.isPanningCanvas) return true;
   event.preventDefault();
@@ -7662,7 +7734,7 @@ function updateCanvasCursor() {
   let cursor = "default";
   if (state.isPanningCanvas) {
     cursor = "grabbing";
-  } else if (state.isSpacePressed) {
+  } else if (state.isSpacePressed || (isMobileLayout() && state.mobileCanvasPanMode)) {
     cursor = "grab";
   } else if (state.traceReference.adjustMode) {
     cursor = state.traceReference.locked ? "not-allowed" : "move";
@@ -7674,6 +7746,7 @@ function updateCanvasCursor() {
   elements.patternCanvas.style.cursor = cursor;
   elements.canvasWrap.style.cursor = cursor;
   elements.canvasWrap.classList.toggle("is-space-pan", state.isSpacePressed && !state.isPanningCanvas);
+  elements.canvasWrap.classList.toggle("is-mobile-pan", state.mobileCanvasPanMode && !state.isPanningCanvas);
   elements.canvasWrap.classList.toggle("is-panning", state.isPanningCanvas);
 }
 
@@ -8065,6 +8138,12 @@ function handleKeyboardShortcuts(event) {
   }
 
   if (state.isSpacePressed || state.isPanningCanvas) return;
+
+  if (!event.ctrlKey && !event.metaKey && !event.altKey && state.selection.size && (key === "delete" || key === "backspace")) {
+    event.preventDefault();
+    eraseCurrentSelection();
+    return;
+  }
 
   const selectionMoves = {
     arrowleft: [-1, 0],
