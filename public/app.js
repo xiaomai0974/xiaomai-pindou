@@ -182,6 +182,7 @@ const fallbackPaletteData = [
 const PALETTE_NAME = "MARD 221";
 const PALETTE_LIMIT = 221;
 const DEFAULT_COLOR_LIMIT = 24;
+const REFERENCE_FEATURE_ENABLED = true;
 const DEFAULT_LOCAL_PREPROCESS_SETTINGS = Object.freeze({
   enabled: true,
   flatColorSimplification: false,
@@ -337,7 +338,7 @@ const state = {
   referenceImage: null,
   referenceImageUrl: "",
   referenceName: "",
-  referenceVisible: true,
+  referenceVisible: false,
   referenceAbove: false,
   referenceOpacity: 0.35,
   referenceLocked: false,
@@ -355,8 +356,8 @@ const state = {
     startPanelY: 0,
   },
   traceReference: {
-    enabled: true,
-    visible: true,
+    enabled: false,
+    visible: false,
     opacity: 0.35,
     zMode: "aboveGrid",
     scale: 1,
@@ -560,6 +561,10 @@ const elements = {
   customSizeInput: document.querySelector("#customSizeInput"),
   customHeightInput: document.querySelector("#customHeightInput"),
   applyCustomSizeButton: document.querySelector("#applyCustomSizeButton"),
+  uploadWidthInput: document.querySelector("#uploadWidthInput"),
+  uploadHeightInput: document.querySelector("#uploadHeightInput"),
+  uploadSizeLabel: document.querySelector("#uploadSizeLabel"),
+  applyUploadSizeButton: document.querySelector("#applyUploadSizeButton"),
   recropButton: document.querySelector("#recropButton"),
   appModeLabel: document.querySelector("#appModeLabel"),
   appModeOptions: document.querySelectorAll(".app-mode-option"),
@@ -629,6 +634,7 @@ const elements = {
   fitButton: document.querySelector("#fitButton"),
   mobileReferenceControlsButton: document.querySelector("#mobileReferenceControlsButton"),
   mobileCanvasPanButton: document.querySelector("#mobileCanvasPanButton"),
+  mobileToolPanButton: document.querySelector("#mobileToolPanButton"),
   zoomLabel: document.querySelector("#zoomLabel"),
   editToggle: document.querySelector("#editToggle"),
   lockGridButton: document.querySelector("#lockGridButton"),
@@ -640,6 +646,13 @@ const elements = {
   toolColorSearchInput: document.querySelector("#toolColorSearchInput"),
   toolPaletteAllButton: document.querySelector("#toolPaletteAllButton"),
   toolColorPalette: document.querySelector("#toolColorPalette"),
+  toolPropertiesTitle: document.querySelector("#toolPropertiesTitle"),
+  mobileColorActions: document.querySelector("#mobileColorActions"),
+  mobileColorActionSwatch: document.querySelector("#mobileColorActionSwatch"),
+  mobileColorActionCode: document.querySelector("#mobileColorActionCode"),
+  mobileReplaceColorInput: document.querySelector("#mobileReplaceColorInput"),
+  mobileReplaceColorButton: document.querySelector("#mobileReplaceColorButton"),
+  mobileColorLockButton: document.querySelector("#mobileColorLockButton"),
   brushSizeInput: document.querySelector("#brushSizeInput"),
   brushShapeSelect: document.querySelector("#brushShapeSelect"),
   symmetryModeSelect: document.querySelector("#symmetryModeSelect"),
@@ -650,11 +663,13 @@ const elements = {
   allowLockedEditToggle: document.querySelector("#allowLockedEditToggle"),
   fillSelectionButton: document.querySelector("#fillSelectionButton"),
   finishPenButton: document.querySelector("#finishPenButton"),
+  mobileConfirmSelectionButton: document.querySelector("#mobileConfirmSelectionButton"),
   copySelectionButton: document.querySelector("#copySelectionButton"),
   pasteSelectionButton: document.querySelector("#pasteSelectionButton"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   currentColorSwatch: document.querySelector("#currentColorSwatch"),
   currentColorName: document.querySelector("#currentColorName"),
+  currentColorControl: document.querySelector("#currentColorControl"),
   cellInfo: document.querySelector("#cellInfo"),
   patternCanvas: document.querySelector("#patternCanvas"),
   canvasWrap: document.querySelector("#canvasWrap"),
@@ -694,6 +709,8 @@ const elements = {
   cropZoomInButton: document.querySelector("#cropZoomInButton"),
   cropResetButton: document.querySelector("#cropResetButton"),
   cropMirrorButton: document.querySelector("#cropMirrorButton"),
+  desktopCropResetButton: document.querySelector("#desktopCropResetButton"),
+  desktopCropMirrorButton: document.querySelector("#desktopCropMirrorButton"),
   cropReplaceButton: document.querySelector("#cropReplaceButton"),
   emptyState: document.querySelector("#emptyState"),
   projectName: document.querySelector("#projectName"),
@@ -1394,12 +1411,18 @@ function setupEvents() {
   elements.colorLimit.addEventListener("input", handleColorLimitChange);
   elements.colorLimit.addEventListener("change", flushColorLimitPreview);
   elements.applyCustomSizeButton.addEventListener("click", applyCustomSize);
+  elements.applyUploadSizeButton?.addEventListener("click", applyUploadSize);
   elements.customSizeInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") applyCustomSize();
   });
   elements.customHeightInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") applyCustomSize();
   });
+  for (const input of [elements.uploadWidthInput, elements.uploadHeightInput].filter(Boolean)) {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyUploadSize();
+    });
+  }
   elements.pixelModeOptions.forEach((button) => {
     button.addEventListener("click", () => setPatternMode(button.dataset.patternMode));
   });
@@ -1412,9 +1435,7 @@ function setupEvents() {
   elements.appModeOptions.forEach((button) => {
     button.addEventListener("click", () => setAppMode(button.dataset.appMode));
   });
-  elements.newBlankCanvasButton.addEventListener("click", () =>
-    createBlankCanvas({ confirmReplace: true, resetLibraryIdentity: true }),
-  );
+  elements.newBlankCanvasButton.addEventListener("click", createBlankCanvasFromUpload);
   elements.brushSizeInput.addEventListener("input", () => setBrushSize(Number(elements.brushSizeInput.value)));
   document.querySelectorAll(".brush-size-preset").forEach((button) => {
     button.addEventListener("click", () => setBrushSize(Number(button.dataset.brushSize)));
@@ -1739,6 +1760,21 @@ function setupEvents() {
     state.toolPaletteSearch = elements.toolColorSearchInput.value.trim().toLowerCase();
     scheduleToolPaletteRender();
   });
+  elements.toolColorSearchInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !["brush", "paintColor"].includes(elements.editToolPanel?.dataset.mobileMenu)) return;
+    event.preventDefault();
+    const code = elements.toolColorSearchInput.value.trim().toUpperCase();
+    const color = paletteColorByCode(code);
+    if (!color) {
+      elements.cellInfo.textContent = code ? `没有找到颜色 ${code}。` : "请输入色号，例如 F3、B12。";
+      return;
+    }
+    activatePaintColor(color, { addToAllowed: state.colorMode === "fixedPalette" });
+    setActiveTool("brush");
+    elements.editToolPanel?.classList.remove("is-properties-open");
+    document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "false");
+    resetMobileToolMenu();
+  });
   elements.toolPaletteAllButton?.addEventListener("click", () => {
     state.toolPaletteShowAll = !state.toolPaletteShowAll;
     renderToolColorPalette();
@@ -1766,6 +1802,9 @@ function setupEvents() {
   elements.mobileCanvasPanButton?.addEventListener("click", () => {
     setMobileCanvasPanMode(!state.mobileCanvasPanMode);
   });
+  elements.mobileToolPanButton?.addEventListener("click", () => {
+    setMobileCanvasPanMode(!state.mobileCanvasPanMode);
+  });
   elements.editToggle.addEventListener("click", toggleEditing);
   elements.lockGridButton.addEventListener("click", toggleGridLock);
   setupCropEvents();
@@ -1774,15 +1813,20 @@ function setupEvents() {
   elements.redoButton.addEventListener("click", redoEdit);
   elements.fillSelectionButton.addEventListener("click", fillSelectionWithCurrentColor);
   elements.finishPenButton.addEventListener("click", finishPenSelection);
+  elements.mobileConfirmSelectionButton?.addEventListener("click", confirmMobileSelection);
   elements.copySelectionButton.addEventListener("click", copySelectionPixels);
   elements.pasteSelectionButton.addEventListener("click", pasteSelectionPixels);
   elements.clearSelectionButton.addEventListener("click", clearSelection);
   document.querySelectorAll(".canvas-tool").forEach((button) => {
-    button.addEventListener("click", () => setActiveTool(button.dataset.tool));
-    button.addEventListener("dblclick", () => {
-      if (button.dataset.tool === "eraser") eraseCurrentSelection();
+    button.addEventListener("click", () => {
+      if (state.mobileCanvasPanMode) setMobileCanvasPanMode(false);
+      setActiveTool(button.dataset.tool);
     });
+    button.addEventListener("dblclick", () => handleCanvasToolDoubleClick(button.dataset.tool));
+    setupMobileDoubleTap(button, () => handleCanvasToolDoubleClick(button.dataset.tool));
   });
+  elements.currentColorControl?.addEventListener("dblclick", openMobilePaintColorMenu);
+  if (elements.currentColorControl) setupMobileDoubleTap(elements.currentColorControl, openMobilePaintColorMenu);
   elements.patternCanvas.addEventListener("pointerdown", handleCanvasPointerDown);
   elements.patternCanvas.addEventListener("pointermove", handleCanvasPointerMove);
   elements.patternCanvas.addEventListener("pointerup", handleCanvasPointerUp);
@@ -1801,6 +1845,13 @@ function setupEvents() {
     if (state.activeTool === "eraser") eraseCurrentSelection();
   });
   elements.patternCanvas.addEventListener("click", handleCanvasClick);
+  elements.mobileReplaceColorButton?.addEventListener("click", applyMobileColorReplacement);
+  elements.mobileColorLockButton?.addEventListener("click", toggleMobileColorLock);
+  elements.mobileReplaceColorInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    applyMobileColorReplacement();
+  });
   window.addEventListener("keydown", handleKeyboardShortcuts);
   window.addEventListener("keyup", handleKeyboardKeyUp);
   window.addEventListener("beforeunload", handleBeforeUnload);
@@ -2080,6 +2131,7 @@ function setupWorkbenchLayout() {
     if (!force && document.body.dataset.workbenchMode === "edit") return;
     elements.editToolPanel?.classList.remove("is-properties-open");
     propertiesButton?.setAttribute("aria-expanded", "false");
+    resetMobileToolMenu();
   };
   propertiesButton?.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -2103,15 +2155,20 @@ function isMobileLayout() {
 
 function syncMobileLayout(options = {}) {
   const mobile = isMobileLayout();
+  mobileCanvasGestureController?.reset?.();
+  state.isPanningCanvas = false;
+  state.panPointerId = null;
   document.body.classList.toggle("is-mobile-layout", mobile);
   if (mobile) {
     elements.editToolPanel?.classList.remove("is-properties-open");
     document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "false");
+    resetMobileToolMenu();
   } else {
     state.mobileCanvasPanMode = false;
     document.body.classList.remove("mobile-reference-controls-open");
   }
   syncMobileCanvasControls();
+  updateCanvasCursor();
   if (options.fit !== false) {
     window.setTimeout(() => fitCanvasToScreen(), 80);
   }
@@ -2185,6 +2242,7 @@ function setWorkbenchMode(mode, options = {}) {
   } else {
     elements.editToolPanel?.classList.remove("is-properties-open");
     propertiesButton?.setAttribute("aria-expanded", "false");
+    resetMobileToolMenu();
   }
 
   const statsPanel = document.querySelector(".stats-panel");
@@ -2399,12 +2457,11 @@ function setAppMode(mode) {
     state.gridLocked = false;
     state.colorMode = "auto";
     state.allowedColorCodes = new Set(palette.map((item) => item.code));
-    state.traceReference.enabled = true;
-    state.traceReference.visible = true;
+    state.traceReference.enabled = false;
+    state.traceReference.visible = false;
     document.querySelectorAll(".color-mode-option").forEach((option) => option.classList.toggle("is-active", option.dataset.colorMode === state.colorMode));
     elements.colorModeLabel.textContent = "自动颜色";
     setActiveTool("brush");
-    if (state.referenceImage && !Number.isFinite(state.traceReference.x)) fitTraceReferenceToCanvas();
     if (!state.pattern.length) {
       createBlankCanvas({ confirmReplace: false });
     } else {
@@ -2457,6 +2514,25 @@ function createBlankCanvas(options = {}) {
   elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / 空白画布`;
   elements.cellInfo.textContent = `已新建 ${gridDimensionsLabel()} 空白画布，背景为 ${fill.empty ? "空背景" : fill.code}。`;
   markProjectDirty();
+}
+
+function createBlankCanvasFromUpload() {
+  if (state.pattern.length && !window.confirm("新建空白画布会覆盖当前正式图纸，确定继续吗？")) return;
+  state.autosaveSessionVersion += 1;
+  invalidateImageProcessingState();
+  state.image = null;
+  state.sourceImageState = null;
+  state.appMode = "draw";
+  state.referenceImage = null;
+  state.referenceImageUrl = "";
+  state.referenceName = "";
+  state.referenceVisible = false;
+  state.traceReference.enabled = false;
+  state.traceReference.visible = false;
+  state.traceReference.adjustMode = false;
+  createBlankCanvas({ confirmReplace: false, resetLibraryIdentity: true });
+  syncControlsFromState();
+  setWorkbenchMode("edit");
 }
 
 function setBrushSize(value) {
@@ -2538,6 +2614,7 @@ function syncControlsFromState() {
   elements.sizeLabel.textContent = gridDimensionsLabel();
   elements.customSizeInput.value = activeGridWidth();
   elements.customHeightInput.value = activeGridHeight();
+  syncUploadSizeControls();
   elements.appModeLabel.textContent = state.appMode === "draw" ? "画图模式" : "自动转图";
   elements.appModeOptions.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.appMode === state.appMode);
@@ -2604,6 +2681,8 @@ function syncMobileCanvasControls() {
   );
   elements.mobileCanvasPanButton?.classList.toggle("is-active", state.mobileCanvasPanMode);
   elements.mobileCanvasPanButton?.setAttribute("aria-pressed", String(state.mobileCanvasPanMode));
+  elements.mobileToolPanButton?.classList.toggle("is-active", state.mobileCanvasPanMode);
+  elements.mobileToolPanButton?.setAttribute("aria-pressed", String(state.mobileCanvasPanMode));
 }
 
 function toggleMobileReferenceControls() {
@@ -2618,7 +2697,7 @@ function toggleMobileReferenceControls() {
 }
 
 function setMobileCanvasPanMode(enabled) {
-  state.mobileCanvasPanMode = Boolean(enabled && isMobileLayout());
+  state.mobileCanvasPanMode = Boolean(enabled);
   if (state.mobileCanvasPanMode) {
     document.body.classList.remove("mobile-reference-controls-open");
     state.traceReference.adjustMode = false;
@@ -2626,11 +2705,11 @@ function setMobileCanvasPanMode(enabled) {
   }
   syncMobileCanvasControls();
   updateCanvasCursor();
-  if (isMobileLayout()) {
-    elements.cellInfo.textContent = state.mobileCanvasPanMode
+  elements.cellInfo.textContent = state.mobileCanvasPanMode
+    ? isMobileLayout()
       ? "移动画布已开启：单指拖动查看放大后的区域；关闭后可继续编辑和双指缩放。"
-      : "移动画布已关闭，可以继续编辑格子或双指缩放。";
-  }
+      : "移动画布已开启：按住鼠标左键拖动画布；也可以继续使用空格临时拖动。"
+    : "移动画布已关闭，可以继续编辑格子。";
 }
 
 function syncTraceReferenceControls() {
@@ -2822,7 +2901,10 @@ function buildProjectData() {
   const croppedImageData = state.sourceImageState?.croppedImageData || sourceImageData;
   const storedOriginalImageData = state.sourceImageState?.originalImageData || "";
   const originalImageData = storedOriginalImageData === croppedImageData ? "" : storedOriginalImageData;
-  const referenceImageData = state.referenceImageUrl || (state.referenceImage ? imageToDataUrl(state.referenceImage, 2200) : "");
+  const referenceUsesSourceImage = Boolean(state.referenceImage && state.referenceImage === state.image);
+  const referenceImageData = referenceUsesSourceImage
+    ? ""
+    : state.referenceImageUrl || (state.referenceImage ? imageToDataUrl(state.referenceImage, 2200) : "");
   if (referenceImageData && !state.referenceImageUrl) state.referenceImageUrl = referenceImageData;
   const usedColors = [...state.counts.values()].map((item) => ({
     code: item.code,
@@ -2913,6 +2995,7 @@ function buildProjectData() {
     },
     referenceImageState: {
       imageData: referenceImageData,
+      usesSourceImage: referenceUsesSourceImage,
       name: state.referenceName,
       visible: state.referenceVisible,
       above: state.referenceAbove,
@@ -3130,15 +3213,15 @@ async function restoreProjectData(projectData, options = {}) {
     state.exportWatermarkEnabled = exportSettings.watermarkEnabled !== false;
     elements.exportWatermarkToggle.checked = state.exportWatermarkEnabled;
 
-    state.referenceImage = await loadImageFromDataUrl(referenceData);
-    state.referenceImageUrl = referenceData;
-    state.referenceName = reference.name || state.fileName || "";
-    state.referenceVisible = reference.visible !== false;
+    const useSourceAsReference = Boolean(reference.usesSourceImage || (!referenceData && state.image));
+    state.referenceImage = useSourceAsReference ? state.image : await loadImageFromDataUrl(referenceData);
+    state.referenceImageUrl = useSourceAsReference ? "" : referenceData;
+    state.referenceName = reference.name || (state.referenceImage ? state.fileName : "");
+    state.referenceVisible = Boolean(state.referenceImage && (useSourceAsReference || reference.visible !== false));
     state.referenceAbove = Boolean(reference.above);
-    state.referenceOpacity = Number(reference.opacity ?? 0.35);
+    state.referenceOpacity = Number(reference.opacity ?? trace.opacity ?? 0.35);
     state.referenceLocked = Boolean(reference.locked);
     state.referencePanel = { ...state.referencePanel, ...(reference.panel || {}), dragging: false, pointerId: null };
-
     state.traceReference = {
       ...state.traceReference,
       ...trace,
@@ -3147,9 +3230,9 @@ async function restoreProjectData(projectData, options = {}) {
       pointerId: null,
       startClientX: 0,
       startClientY: 0,
-      enabled: trace.enabled !== false,
-      visible: trace.visible !== false,
-      opacity: Number(trace.opacity ?? 0.35),
+      enabled: Boolean(state.referenceImage && (useSourceAsReference || trace.enabled !== false)),
+      visible: Boolean(state.referenceImage && (useSourceAsReference || trace.visible !== false)),
+      opacity: Number(trace.opacity ?? reference.opacity ?? 0.35),
       zMode: "aboveGrid",
       scale: Number(trace.scale || 1),
       locked: trace.locked !== false,
@@ -3318,8 +3401,7 @@ function projectDataHasContent(projectData) {
   return Boolean(
     projectData?.gridState?.editGrid?.length ||
       projectData?.sourceImageState?.croppedImageData ||
-      projectData?.sourceImageState?.originalImageData ||
-      projectData?.referenceImageState?.imageData,
+      projectData?.sourceImageState?.originalImageData,
   );
 }
 
@@ -3604,22 +3686,12 @@ function loadImageFile(file) {
 
   const image = new Image();
   image.onload = () => {
-    elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，正在适配 ${gridDimensionsLabel()} 画布`;
-    elements.cellInfo.textContent = isMobileLayout()
-      ? "请先调整裁剪范围，确认后再生成图纸。"
-      : "图片会完整适配当前画布，不会强制裁成正方形。";
+    elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，请先裁剪后适配 ${gridDimensionsLabel()} 画布`;
+    elements.cellInfo.textContent = "请先调整裁剪范围，确认后再生成图纸。";
     URL.revokeObjectURL(image.src);
     state.libraryProjectId = null;
     state.projectCreatedAt = null;
-    if (isMobileLayout()) {
-      openCropper(image, file);
-      return;
-    }
-    acceptSourceImage(image, file, {
-      skipped: true,
-      originalWidth: image.width,
-      originalHeight: image.height,
-    });
+    openCropper(image, file);
   };
   image.onerror = () => {
     elements.projectMeta.textContent = "图片读取失败，请换 JPG、PNG 或 WebP";
@@ -3647,33 +3719,11 @@ function acceptSourceImage(image, file, cropInfo = {}) {
   try {
     state.autosaveSessionVersion += 1;
     invalidateImageProcessingState();
-    if (state.appMode === "draw") {
-      state.referenceImage = image;
-      state.referenceImageUrl = imageToDataUrl(image);
-      state.referenceName = file.name.replace(/\.[^.]+$/, "");
-      state.referenceVisible = true;
-      state.traceReference.enabled = true;
-      state.traceReference.visible = true;
-      state.traceReference.locked = true;
-      state.traceReference.adjustMode = false;
-      elements.referenceVisibleToggle.checked = true;
-      elements.referenceStatus.textContent = state.referenceName;
-      resetReferencePanelPosition();
-      fitTraceReferenceToCanvas();
-      updateReferenceMenuState();
-      syncTraceReferenceControls();
-      renderReferenceFloatPanel();
-      if (!state.pattern.length) createBlankCanvas({ confirmReplace: false });
-      else renderPattern();
-      elements.projectMeta.textContent = `参考图已导入：${image.width} x ${image.height}，画图模式不会自动转图。`;
-      elements.cellInfo.textContent = "参考图已放到透明描图层；使用顶部工具可调整位置、层级和透明度。";
-      markProjectDirty();
-      return;
-    }
+    state.appMode = "auto";
     elements.projectMeta.textContent = `图片已读取：${image.width} x ${image.height}，正在生成图纸...`;
     state.image = image;
     state.referenceImage = image;
-    state.referenceImageUrl = imageToDataUrl(image);
+    state.referenceImageUrl = "";
     state.sourceImageState = {
       fileName: file.name,
       width: image.width,
@@ -3687,8 +3737,13 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.fileName = file.name.replace(/\.[^.]+$/, "");
     state.referenceName = state.fileName;
     state.referenceVisible = true;
+    const nextReferenceOpacity = Number(state.traceReference.opacity) > 0
+      ? clampRange(Number(state.traceReference.opacity), 0.05, 1)
+      : 0.35;
+    state.referenceOpacity = nextReferenceOpacity;
     state.traceReference.enabled = true;
     state.traceReference.visible = true;
+    state.traceReference.opacity = nextReferenceOpacity;
     state.traceReference.adjustMode = false;
     state.traceReference.locked = true;
     state.traceReference.x = null;
@@ -3710,12 +3765,11 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     clearHistory();
     state.suspendHistory = true;
     elements.projectName.textContent = state.fileName || "小麦拼豆";
-    elements.referenceStatus.textContent = state.referenceName;
     updateBackgroundHint();
-    updateReferenceMenuState();
+    elements.referenceVisibleToggle.checked = true;
+    elements.referenceStatus.textContent = state.referenceName;
     fitTraceReferenceToCanvas();
-    syncTraceReferenceControls();
-    renderReferenceFloatPanel();
+    syncControlsFromState();
     renderPattern();
     markProjectDirty();
     window.setTimeout(generatePattern, 20);
@@ -3770,12 +3824,12 @@ function setupCropEvents() {
   elements.cropZoomInButton?.addEventListener("click", () => {
     zoomCropper(cropState.zoom + 0.12, elements.cropCanvas.width / 2, elements.cropCanvas.height / 2);
   });
-  elements.cropResetButton?.addEventListener("click", resetCropperView);
-  elements.cropMirrorButton?.addEventListener("click", () => {
-    cropState.mirrored = !cropState.mirrored;
-    elements.cropMirrorButton.classList.toggle("is-active", cropState.mirrored);
-    drawCropper();
-  });
+  for (const button of [elements.cropResetButton, elements.desktopCropResetButton].filter(Boolean)) {
+    button.addEventListener("click", resetCropperView);
+  }
+  for (const button of [elements.cropMirrorButton, elements.desktopCropMirrorButton].filter(Boolean)) {
+    button.addEventListener("click", toggleCropMirror);
+  }
   elements.cropCloseButton?.addEventListener("click", cancelCrop);
   elements.cropReplaceButton?.addEventListener("click", () => elements.imageInput.click());
   document.querySelectorAll(".crop-ratio-option").forEach((button) => {
@@ -3834,10 +3888,17 @@ function syncCropControlState() {
   if (elements.cropZoom) elements.cropZoom.value = zoom;
   if (elements.mobileCropZoom) elements.mobileCropZoom.value = zoom;
   elements.cropMirrorButton?.classList.toggle("is-active", cropState.mirrored);
+  elements.desktopCropMirrorButton?.classList.toggle("is-active", cropState.mirrored);
   document.querySelectorAll(".crop-ratio-option").forEach((button) => {
     const value = button.dataset.cropRatio === "free" ? null : Number(button.dataset.cropRatio);
     button.classList.toggle("is-active", value === cropState.ratio);
   });
+}
+
+function toggleCropMirror() {
+  cropState.mirrored = !cropState.mirrored;
+  syncCropControlState();
+  drawCropper();
 }
 
 function setCropRatio(value) {
@@ -3916,6 +3977,20 @@ function drawCropper() {
     cropCtx.fill();
     cropCtx.stroke();
   }
+}
+
+function applyUploadSize() {
+  if (!elements.uploadWidthInput || !elements.uploadHeightInput) return;
+  elements.customSizeInput.value = elements.uploadWidthInput.value;
+  elements.customHeightInput.value = elements.uploadHeightInput.value;
+  applyCustomSize();
+  syncUploadSizeControls();
+}
+
+function syncUploadSizeControls() {
+  if (elements.uploadWidthInput) elements.uploadWidthInput.value = activeGridWidth();
+  if (elements.uploadHeightInput) elements.uploadHeightInput.value = activeGridHeight();
+  if (elements.uploadSizeLabel) elements.uploadSizeLabel.textContent = gridDimensionsLabel();
 }
 
 function cropPointerPosition(event) {
@@ -4108,6 +4183,10 @@ function skipCrop() {
 }
 
 function handleReferenceUpload(event) {
+  if (!REFERENCE_FEATURE_ENABLED) {
+    event.target.value = "";
+    return;
+  }
   const [file] = event.target.files;
   if (!file || !file.type.startsWith("image/")) return;
 
@@ -4118,8 +4197,13 @@ function handleReferenceUpload(event) {
     state.referenceImageUrl = image.src;
     state.referenceName = file.name.replace(/\.[^.]+$/, "");
     state.referenceVisible = true;
+    const nextReferenceOpacity = Number(state.traceReference.opacity) > 0
+      ? clampRange(Number(state.traceReference.opacity), 0.05, 1)
+      : 0.35;
+    state.referenceOpacity = nextReferenceOpacity;
     state.traceReference.enabled = true;
     state.traceReference.visible = true;
+    state.traceReference.opacity = nextReferenceOpacity;
     state.traceReference.adjustMode = false;
     state.traceReference.locked = true;
     elements.referenceVisibleToggle.checked = true;
@@ -4180,6 +4264,7 @@ function clearReferenceSampler() {
 }
 
 function toggleReferenceMenu() {
+  if (!REFERENCE_FEATURE_ENABLED) return;
   if (state.referenceImage && !state.traceReference.visible) {
     state.traceReference.visible = true;
     state.traceReference.enabled = true;
@@ -4227,7 +4312,7 @@ function clearReferenceImage() {
   state.referenceImage = null;
   state.referenceImageUrl = "";
   state.referenceName = "";
-  state.referenceVisible = true;
+  state.referenceVisible = false;
   state.referenceLocked = false;
   state.traceReference.enabled = false;
   state.traceReference.visible = false;
@@ -4282,6 +4367,7 @@ function setReferenceZoom(value) {
 }
 
 function fitReferencePanel() {
+  if (!REFERENCE_FEATURE_ENABLED) return;
   state.referenceVisible = true;
   state.traceReference.enabled = Boolean(state.referenceImage);
   state.traceReference.visible = true;
@@ -6011,6 +6097,7 @@ function drawReferenceLayer() {
 }
 
 function shouldDrawTraceReference(layer) {
+  if (!REFERENCE_FEATURE_ENABLED) return false;
   const trace = state.traceReference;
   return Boolean(
     state.editorView === "grid" &&
@@ -6063,6 +6150,7 @@ function traceReferenceGeometry() {
 }
 
 function fitTraceReferenceToCanvas() {
+  if (!REFERENCE_FEATURE_ENABLED) return;
   if (!state.referenceImage) {
     elements.cellInfo.textContent = "请先上传参考图。";
     return;
@@ -6564,11 +6652,8 @@ function toolPaletteRows() {
 
 function renderToolColorPalette(sourceRows = null) {
   if (!elements.toolColorPalette) return;
-  const rows = sourceRows
-    ? sourceRows
-      .filter((item) => item.count > 0 || item.isLocked || item.isActive)
-      .slice(0, state.toolPaletteShowAll ? 96 : 40)
-    : toolPaletteRows();
+  const sourcePaletteRows = sourceRows?.filter((item) => item.count > 0 || item.isLocked || item.isActive) || null;
+  const rows = sourcePaletteRows || toolPaletteRows();
   const signature = [
     state.toolPaletteSearch,
     Number(state.toolPaletteShowAll),
@@ -6607,6 +6692,7 @@ function setupPaletteEventDelegation() {
     root.addEventListener("click", handlePaletteClick);
     root.addEventListener("dblclick", handlePaletteDoubleClick);
   }
+  setupMobilePaletteDoubleTap();
   elements.constraintPalette.addEventListener("click", handleConstraintPaletteClick);
   elements.constraintPalette.addEventListener("dblclick", handleConstraintPaletteDoubleClick);
   elements.constraintPalette.addEventListener("contextmenu", handleConstraintPaletteContextMenu);
@@ -6648,6 +6734,16 @@ function handlePaletteDoubleClick(event) {
   if (event.target.closest("[data-replace-code]")) return;
   const button = paletteButtonFromEvent(event);
   if (!button) return;
+  if (isMobileLayout() && event.currentTarget === elements.toolColorPalette) {
+    event.preventDefault();
+    openMobileColorMenu(button.dataset.code);
+    return;
+  }
+  if (event.currentTarget === elements.toolColorPalette) {
+    event.preventDefault();
+    promptReplaceColor(button.dataset.code);
+    return;
+  }
   if (event.target.closest("[data-edit-code]")) {
     promptReplaceColor(button.dataset.code);
     return;
@@ -6900,6 +6996,174 @@ function cancelCanvasEditForPinch() {
     state.traceReference.pointerId = null;
   }
   requestPatternRender();
+}
+
+const mobileDoubleActionTimes = new Map();
+
+function runMobileDoubleAction(key, action) {
+  const now = Date.now();
+  const previous = mobileDoubleActionTimes.get(key) || 0;
+  if (now - previous < 220) return;
+  mobileDoubleActionTimes.set(key, now);
+  action();
+}
+
+function setupMobileDoubleTap(element, action) {
+  let lastTapAt = 0;
+  element.addEventListener("pointerup", (event) => {
+    if (!isMobileLayout() || event.pointerType === "mouse") return;
+    const now = Date.now();
+    if (now - lastTapAt <= 340) {
+      lastTapAt = 0;
+      event.preventDefault();
+      action(event);
+      return;
+    }
+    lastTapAt = now;
+  });
+}
+
+function setupMobilePaletteDoubleTap() {
+  if (!elements.toolColorPalette) return;
+  let lastCode = "";
+  let lastTapAt = 0;
+  elements.toolColorPalette.addEventListener("pointerup", (event) => {
+    if (!isMobileLayout() || event.pointerType === "mouse") return;
+    const button = event.target.closest("[data-code]");
+    if (!button || !elements.toolColorPalette.contains(button)) return;
+    const code = button.dataset.code;
+    const now = Date.now();
+    if (code === lastCode && now - lastTapAt <= 340) {
+      lastCode = "";
+      lastTapAt = 0;
+      event.preventDefault();
+      openMobileColorMenu(code);
+      return;
+    }
+    lastCode = code;
+    lastTapAt = now;
+  });
+}
+
+function selectedRegionColorCode() {
+  const firstSelectedIndex = state.selection.values().next().value;
+  const selectedCellColor = Number.isInteger(firstSelectedIndex) ? state.pattern[firstSelectedIndex] : null;
+  return selectedCellColor && !selectedCellColor.empty ? selectedCellColor.code : state.selectedColor?.code;
+}
+
+function handleCanvasToolDoubleClick(tool) {
+  if (!isMobileLayout()) {
+    if (tool === "eraser") eraseCurrentSelection();
+    return;
+  }
+  runMobileDoubleAction(`tool:${tool}`, () => {
+    if (tool === "brush") openMobileToolMenu("brush");
+    else if (tool === "rect") openMobileToolMenu("selection");
+    else if (tool === "sameColor") openMobileColorMenu(selectedRegionColorCode());
+    else if (tool === "eraser") eraseCurrentSelection();
+  });
+}
+
+function resetMobileToolMenu() {
+  if (!elements.editToolPanel) return;
+  delete elements.editToolPanel.dataset.mobileMenu;
+  if (elements.mobileColorActions) elements.mobileColorActions.hidden = true;
+}
+
+function openMobileToolMenu(mode, colorCode = "") {
+  if (!isMobileLayout() || !elements.editToolPanel) return;
+  elements.editToolPanel.dataset.mobileMenu = mode;
+  elements.editToolPanel.classList.add("is-properties-open");
+  document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "true");
+  if (elements.mobileColorActions) elements.mobileColorActions.hidden = mode !== "color";
+  const advancedActions = elements.editToolPanel.querySelector(".tool-advanced-actions");
+  if (advancedActions && mode === "selection") advancedActions.open = true;
+  if (elements.toolPropertiesTitle) {
+    elements.toolPropertiesTitle.textContent = mode === "color" ? "颜色操作" : mode === "selection" ? "选区操作" : mode === "paintColor" ? "选择画笔颜色" : "画笔设置";
+  }
+  if (elements.toolColorSearchInput) {
+    elements.toolColorSearchInput.placeholder = ["brush", "paintColor"].includes(mode) ? "输入色号，如 F3、B12；回车使用" : "搜索色号 / 颜色名";
+  }
+  if (mode === "color") syncMobileColorAction(colorCode);
+}
+
+function openMobilePaintColorMenu() {
+  if (isMobileLayout()) {
+    openMobileToolMenu("paintColor");
+  } else {
+    elements.editToolPanel.dataset.mobileMenu = "paintColor";
+    elements.editToolPanel.classList.add("is-properties-open");
+    document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "true");
+    if (elements.toolPropertiesTitle) elements.toolPropertiesTitle.textContent = "选择画笔颜色";
+    if (elements.toolColorSearchInput) elements.toolColorSearchInput.placeholder = "输入色号，如 F3、B12；回车使用";
+  }
+  state.toolPaletteSearch = "";
+  if (elements.toolColorSearchInput) elements.toolColorSearchInput.value = "";
+  renderToolColorPalette();
+  window.setTimeout(() => elements.toolColorSearchInput?.focus(), 0);
+}
+
+function confirmMobileSelection() {
+  if (state.penPoints.length) {
+    finishPenSelection();
+    return;
+  }
+  if (state.selection.size) {
+    elements.cellInfo.textContent = `已确定选取 ${state.selection.size} 格，可以继续填色、复制或移动。`;
+    renderPattern();
+    return;
+  }
+  elements.cellInfo.textContent = "请先用钢笔或框选工具选择区域。";
+}
+
+function openMobileColorMenu(code) {
+  const color = paletteColorByCode(code) || state.selectedColor;
+  if (!color) return;
+  runMobileDoubleAction(`color:${color.code}`, () => openMobileToolMenu("color", color.code));
+}
+
+function syncMobileColorAction(code = "") {
+  const color = paletteColorByCode(code) || state.selectedColor;
+  if (!color || !elements.mobileColorActions) return;
+  elements.mobileColorActions.dataset.sourceCode = color.code;
+  if (elements.mobileColorActionSwatch) elements.mobileColorActionSwatch.style.background = color.hex;
+  if (elements.mobileColorActionCode) {
+    elements.mobileColorActionCode.textContent = color.name && color.name !== color.code ? `${color.code} ${color.name}` : color.code;
+  }
+  if (elements.mobileReplaceColorInput) elements.mobileReplaceColorInput.value = "";
+  if (elements.mobileColorLockButton) {
+    const locked = state.lockedColorCodes.has(color.code);
+    elements.mobileColorLockButton.textContent = locked ? "取消锁定" : "锁定颜色";
+    elements.mobileColorLockButton.classList.toggle("is-active", locked);
+  }
+}
+
+function applyMobileColorReplacement() {
+  const oldCode = elements.mobileColorActions?.dataset.sourceCode;
+  const nextCode = elements.mobileReplaceColorInput?.value.trim().toUpperCase();
+  if (!oldCode || !nextCode) {
+    elements.mobileReplaceColorInput?.focus();
+    return;
+  }
+  if (replaceColorInGrid(oldCode, nextCode)) syncMobileColorAction(nextCode);
+}
+
+function toggleMobileColorLock() {
+  const code = elements.mobileColorActions?.dataset.sourceCode;
+  const color = paletteColorByCode(code);
+  if (!color) return;
+  state.disabledColorCodes.delete(code);
+  state.allowedColorCodes.add(code);
+  if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
+  else state.lockedColorCodes.add(code);
+  renderConstraintPalette();
+  renderStats();
+  renderToolColorPalette();
+  syncMobileColorAction(code);
+  elements.cellInfo.textContent = state.lockedColorCodes.has(code)
+    ? `${code} 已锁定，不会被自动减色或合并。`
+    : `${code} 已取消锁定。`;
+  markProjectDirty();
 }
 
 function getMobileCanvasGestureController() {
@@ -7512,9 +7776,9 @@ function isTypingTarget(target) {
 }
 
 function beginCanvasPan(event) {
-  const mobilePan = isMobileLayout() && state.mobileCanvasPanMode && event.pointerType === "touch";
+  const explicitPan = state.mobileCanvasPanMode;
   const primaryPointer = event.pointerType === "touch" || event.button === 0;
-  if ((!state.isSpacePressed && !mobilePan) || !primaryPointer || isTypingTarget(event.target)) return false;
+  if ((!state.isSpacePressed && !explicitPan) || !primaryPointer || isTypingTarget(event.target)) return false;
   if (!elements.canvasWrap.contains(event.target)) return false;
   if (state.isPanningCanvas) return true;
   event.preventDefault();
@@ -7628,6 +7892,7 @@ function getGridPointFromPointer(event) {
 }
 
 function tryStartTraceReferenceDrag(event) {
+  if (!REFERENCE_FEATURE_ENABLED) return false;
   const trace = state.traceReference;
   if (
     state.editorView !== "grid" ||
@@ -7691,6 +7956,7 @@ function finishTraceReferenceDrag(event) {
 }
 
 function pickColorFromTraceReference(event) {
+  if (!REFERENCE_FEATURE_ENABLED) return false;
   if (state.activeTool !== "eyedropper" || !state.referenceImage) return false;
   if (!state.traceReference.enabled || !state.traceReference.visible || state.traceReference.opacity <= 0) return false;
   const geometry = traceReferenceGeometry();
@@ -7755,7 +8021,7 @@ function updateCanvasCursor() {
   let cursor = "default";
   if (state.isPanningCanvas) {
     cursor = "grabbing";
-  } else if (state.isSpacePressed || (isMobileLayout() && state.mobileCanvasPanMode)) {
+  } else if (state.isSpacePressed || state.mobileCanvasPanMode) {
     cursor = "grab";
   } else if (state.traceReference.adjustMode) {
     cursor = state.traceReference.locked ? "not-allowed" : "move";
@@ -7777,7 +8043,7 @@ function toolHint(tool) {
     brush: "画笔：先选颜色，按住拖动，路过的格子会改成当前颜色；按住 Shift 可拉直。",
     bucket: "填充：点击一个区域，用当前颜色填充相同颜色的连通区域。",
     line: "直线：点击起点，再点击终点绘制直线；Shift 会吸附水平、垂直或 45 度。",
-    eyedropper: "吸管：点击图纸格子吸色；画图模式下也可以点击画布参考图或参考图浮窗吸取并匹配 MARD 色。",
+    eyedropper: "吸管：点击图纸格子吸取颜色，并设为当前画笔颜色。",
     rect: "框选：拖出矩形选区。",
     hline: "横线：拖动选择一段横向格子。",
     pen: "钢笔：连续点击围出区域，双击或点完成钢笔。",
@@ -8395,13 +8661,25 @@ function baseCanvasCssSize() {
 }
 
 function setZoom(value, options = {}) {
+  const zoomOptions = options && typeof options === "object" ? options : {};
   const settings = state.zoomState || { minZoom: 0.25, maxZoom: 4, step: 0.1 };
   const nextZoom = clampRange(Number(value) || 1, settings.minZoom, settings.maxZoom);
   const wrap = elements.canvasWrap;
   const previousZoom = Math.max(0.01, state.zoom || 1);
-  const hasAnchor = Number.isFinite(options.anchorX) && Number.isFinite(options.anchorY);
-  const anchorX = hasAnchor ? options.anchorX : wrap.clientWidth / 2;
-  const anchorY = hasAnchor ? options.anchorY : wrap.clientHeight / 2;
+  const hasAnchor = Number.isFinite(zoomOptions.anchorX) && Number.isFinite(zoomOptions.anchorY);
+  const base = baseCanvasCssSize();
+  const targetWidth = `${Math.round(base.width * nextZoom)}px`;
+  const targetHeight = `${Math.round(base.height * nextZoom)}px`;
+  const zoomChanged = Math.abs(nextZoom - previousZoom) > 0.0001;
+  const canvasSizeChanged = elements.patternCanvas.style.width !== targetWidth || elements.patternCanvas.style.height !== targetHeight;
+
+  if (!zoomChanged && !canvasSizeChanged && !zoomOptions.center && !hasAnchor) {
+    elements.zoomLabel.textContent = `${Math.round(nextZoom * 100)}%`;
+    return false;
+  }
+
+  const anchorX = hasAnchor ? zoomOptions.anchorX : wrap.clientWidth / 2;
+  const anchorY = hasAnchor ? zoomOptions.anchorY : wrap.clientHeight / 2;
   const anchorContentX = wrap.scrollLeft + anchorX;
   const anchorContentY = wrap.scrollTop + anchorY;
   const oldScrollWidth = Math.max(1, wrap.scrollWidth - wrap.clientWidth);
@@ -8411,16 +8689,15 @@ function setZoom(value, options = {}) {
   const renderDetailBefore = state.pattern.length ? canvasRenderDetail(activePlotMetrics().cell) : null;
 
   state.zoom = nextZoom;
-  const base = baseCanvasCssSize();
-  elements.patternCanvas.style.width = `${Math.round(base.width * state.zoom)}px`;
-  elements.patternCanvas.style.height = `${Math.round(base.height * state.zoom)}px`;
+  elements.patternCanvas.style.width = targetWidth;
+  elements.patternCanvas.style.height = targetHeight;
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 
   requestAnimationFrame(() => {
     if (renderDetailBefore !== null && renderDetailBefore !== canvasRenderDetail(activePlotMetrics().cell)) {
       requestPatternRender();
     }
-    if (options.center) {
+    if (zoomOptions.center) {
       wrap.scrollLeft = Math.max(0, (wrap.scrollWidth - wrap.clientWidth) / 2);
       wrap.scrollTop = Math.max(0, (wrap.scrollHeight - wrap.clientHeight) / 2);
       return;
@@ -8434,6 +8711,7 @@ function setZoom(value, options = {}) {
     wrap.scrollLeft = Math.max(0, centerRatioX * wrap.scrollWidth - wrap.clientWidth / 2);
     wrap.scrollTop = Math.max(0, centerRatioY * wrap.scrollHeight - wrap.clientHeight / 2);
   });
+  return true;
 }
 
 function fitCanvasToScreen() {
@@ -8608,15 +8886,15 @@ function resetApp() {
   state.referenceImage = null;
   state.referenceImageUrl = "";
   state.referenceName = "";
-  state.referenceVisible = true;
+  state.referenceVisible = false;
   state.referenceAbove = false;
   state.referenceOpacity = 0.35;
   state.referenceLocked = false;
   state.traceReference = {
     ...state.traceReference,
-    enabled: true,
-    visible: true,
-    opacity: 0.35,
+    enabled: false,
+    visible: false,
+    opacity: 0,
     zMode: "aboveGrid",
     scale: 1,
     x: null,
@@ -8631,7 +8909,7 @@ function resetApp() {
   elements.imageInput.value = "";
   elements.referenceInput.value = "";
   elements.referenceStatus.textContent = "未导入";
-  elements.referenceVisibleToggle.checked = true;
+  elements.referenceVisibleToggle.checked = false;
   elements.referenceAboveToggle.checked = false;
   elements.referenceOpacity.value = 35;
   elements.referenceOpacityLabel.textContent = "35%";

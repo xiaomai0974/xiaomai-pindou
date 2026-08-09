@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=20260809-6" />
-    <link rel="stylesheet" href="mobile-layout.css?v=20260809-5" />
+    <link rel="stylesheet" href="styles.css?v=20260809-18" />
+    <link rel="stylesheet" href="mobile-layout.css?v=20260809-18" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
@@ -26,7 +26,7 @@
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260809-7" defer></script>
+    <script src="app.js?v=20260809-18" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -118,15 +118,31 @@
         <section class="control-group sidebar-card upload-card">
           <div class="group-title">
             <span><b class="workflow-step">2</b>上传图片</span>
-            <small>自动完整适配</small>
+            <small id="uploadSizeLabel">64 x 64</small>
+          </div>
+          <div class="upload-size-editor" aria-label="上传前设置画布尺寸">
+            <div class="size-input-grid">
+              <label>
+                <span>宽度</span>
+                <input id="uploadWidthInput" type="number" min="16" max="160" step="1" value="64" />
+              </label>
+              <label>
+                <span>高度</span>
+                <input id="uploadHeightInput" type="number" min="16" max="160" step="1" value="64" />
+              </label>
+            </div>
+            <button id="applyUploadSizeButton" class="wide-tool-button" type="button">应用画布尺寸</button>
           </div>
           <label class="upload-zone" for="imageInput">
             <input id="imageInput" type="file" accept="image/*" />
             <i data-lucide="image-plus" aria-hidden="true"></i>
             <span>上传图片</span>
-            <small>支持 PNG / JPG，自动完整适配画布</small>
+            <small>支持 PNG / JPG，上传后先裁剪</small>
           </label>
-          <button id="recropButton" class="wide-tool-button" type="button">裁剪图片 / 重新裁剪</button>
+          <div class="upload-secondary-actions">
+            <button id="recropButton" class="wide-tool-button" type="button">重新裁剪</button>
+            <button id="newBlankCanvasButton" class="wide-tool-button" type="button">新建空白画布</button>
+          </div>
         </section>
 
         <section class="control-group sidebar-card size-card">
@@ -311,10 +327,6 @@
               <button class="app-mode-option is-active" data-app-mode="auto" type="button">自动转图</button>
               <button class="app-mode-option" data-app-mode="draw" type="button">画图模式</button>
             </div>
-            <div class="draw-mode-actions">
-              <button id="newBlankCanvasButton" type="button">新建空白画布</button>
-              <small>参考图和画布参考图层仍然可用。</small>
-            </div>
           </section>
 
           <section class="advanced-section preview-mode-panel" hidden>
@@ -445,19 +457,20 @@
             </button>
           </div>
           <div class="tool-grid" role="group" aria-label="编辑工具">
+            <button id="mobileToolPanButton" class="mobile-tool-pan-button" type="button" title="移动画布" aria-pressed="false"><i data-lucide="hand" aria-hidden="true"></i><span>移动</span></button>
             <button class="canvas-tool is-active" data-tool="brush" type="button" title="画笔快捷键 B"><i data-lucide="pencil" aria-hidden="true"></i><span>画笔</span></button>
             <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U"><i data-lucide="eraser" aria-hidden="true"></i><span>擦除</span></button>
             <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I"><i data-lucide="pipette" aria-hidden="true"></i><span>吸管</span></button>
-            <button class="canvas-tool" data-tool="rect" type="button" title="框选"><i data-lucide="box-select" aria-hidden="true"></i><span>框选</span></button>
             <button class="canvas-tool" data-tool="pen" type="button" title="钢笔快捷键 P；逐点勾选，双击闭合"><i data-lucide="pen-tool" aria-hidden="true"></i><span>钢笔</span></button>
-            <button class="canvas-tool" data-tool="sameColor" type="button" title="选择全部同色格"><i data-lucide="scan-search" aria-hidden="true"></i><span>同色</span></button>
+            <button class="canvas-tool" data-tool="rect" type="button" title="框选"><i data-lucide="box-select" aria-hidden="true"></i><span>框选</span></button>
+            <button id="mobileConfirmSelectionButton" class="mobile-confirm-selection-button" type="button" title="确定当前选区"><i data-lucide="check-square" aria-hidden="true"></i><span>确定选取</span></button>
           </div>
           <button id="toolPropertiesButton" class="tool-properties-button" type="button" title="工具设置" aria-expanded="false">
             <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span>
           </button>
           <div class="tool-properties-popover">
           <div class="tool-properties-heading">
-            <strong>画笔设置</strong>
+            <strong id="toolPropertiesTitle">画笔设置</strong>
             <button id="toolPropertiesCloseButton" class="icon-button" type="button" title="收起画笔设置">
               <i data-lucide="panel-right-close" aria-hidden="true"></i>
             </button>
@@ -475,6 +488,24 @@
             <div id="toolColorPalette" class="tool-color-palette" aria-label="编辑可用颜色"></div>
             <small>单击换画笔色，双击选中同色，点“替换”可整图改色。</small>
           </div>
+          <section id="mobileColorActions" class="mobile-color-actions mobile-only" hidden aria-label="颜色操作">
+            <div class="mobile-color-action-current">
+              <span id="mobileColorActionSwatch" aria-hidden="true"></span>
+              <div>
+                <small>当前操作颜色</small>
+                <strong id="mobileColorActionCode">H7</strong>
+              </div>
+            </div>
+            <label for="mobileReplaceColorInput">
+              替换为其他色号
+              <input id="mobileReplaceColorInput" type="text" inputmode="text" autocomplete="off" placeholder="例如 F3、B12" />
+            </label>
+            <div class="mobile-color-action-buttons">
+              <button id="mobileReplaceColorButton" class="primary" type="button">替换全部同色</button>
+              <button id="mobileColorLockButton" type="button">锁定颜色</button>
+            </div>
+            <small>锁定后，该颜色不会被减色、合并或自动优化删除。</small>
+          </section>
           <div class="brush-options">
             <label>
               画笔大小
@@ -571,7 +602,7 @@
             <i data-lucide="download" aria-hidden="true"></i>
             导出图纸
           </button>
-          <small id="referenceExportHint" class="setting-hint">导出以当前格子图纸为准，参考图层只用于描图，不会写入 PNG 或 PDF。</small>
+          <small class="setting-hint">导出内容以当前格子图纸和用豆清单为准。</small>
         </div>
       </aside>
 
@@ -601,7 +632,7 @@
               <button id="fitButton" type="button">适配</button>
             </div>
             <div class="mobile-canvas-actions mobile-only" aria-label="手机画布操作">
-              <button id="mobileReferenceControlsButton" class="icon-button" type="button" title="调整参考图" aria-expanded="false">
+              <button id="mobileReferenceControlsButton" class="icon-button" type="button" title="参考图透明度" aria-label="参考图透明度" aria-expanded="false">
                 <i data-lucide="image" aria-hidden="true"></i>
                 <span>参考图</span>
               </button>
@@ -623,12 +654,12 @@
               <i data-lucide="lock-open" aria-hidden="true"></i>
               解锁
             </button>
-            <div class="current-color">
+            <div id="currentColorControl" class="current-color" role="button" tabindex="0" title="双击输入色号">
               <span id="currentColorSwatch"></span>
               <strong id="currentColorName">H7 黑色</strong>
             </div>
             <span id="cellInfo">点选右侧颜色，再点图纸格子改色</span>
-            <div class="reference-toolbar" id="referenceToolbar" hidden>
+            <div class="reference-toolbar removed-reference-feature" id="referenceToolbar" hidden>
               <button id="referenceMenuButton" class="reference-menu-button" type="button" aria-expanded="false" aria-controls="referenceMenu">
                 <i data-lucide="image" aria-hidden="true"></i>
                 <span>参考图</span>
@@ -666,33 +697,33 @@
               <i data-lucide="maximize-2" aria-hidden="true"></i>
               专注模式
             </button>
-            <div class="trace-reference-toolbar" id="traceReferenceToolbar" aria-label="画布描图参考">
+            <div class="trace-reference-toolbar simple-reference-controls" id="traceReferenceToolbar" aria-label="参考图与透明度">
               <label class="trace-reference-upload" for="referenceInput" title="更换参考原图">
                 <i data-lucide="image-up" aria-hidden="true"></i>
-                <span>参考原图</span>
+                <span>参考图</span>
               </label>
               <label class="trace-reference-toggle">
                 <input id="traceReferenceToggle" type="checkbox" checked />
                 <span>显示</span>
               </label>
-              <button id="traceReferenceAdjustButton" class="trace-adjust-button" type="button">调整参考图</button>
-              <button id="traceReferenceLockButton" class="icon-button" type="button" title="锁定 / 解锁画布参考图">
+              <button id="traceReferenceAdjustButton" class="trace-adjust-button simple-reference-extra" type="button">调整参考图</button>
+              <button id="traceReferenceLockButton" class="icon-button simple-reference-extra" type="button" title="锁定 / 解锁画布参考图">
                 <i data-lucide="lock" aria-hidden="true"></i>
               </button>
               <label class="trace-opacity-control">
-                <span>原图显示</span>
+                <span>透明度</span>
                 <input id="traceReferenceOpacity" type="range" min="0" max="100" value="35" step="5" />
                 <output id="traceReferenceOpacityLabel">35%</output>
               </label>
-              <button id="traceReferenceZoomOutButton" class="icon-button" type="button" title="缩小描图参考">
+              <button id="traceReferenceZoomOutButton" class="icon-button simple-reference-extra" type="button" title="缩小描图参考">
                 <i data-lucide="minus" aria-hidden="true"></i>
               </button>
-              <button id="traceReferenceZoomInButton" class="icon-button" type="button" title="放大描图参考">
+              <button id="traceReferenceZoomInButton" class="icon-button simple-reference-extra" type="button" title="放大描图参考">
                 <i data-lucide="plus" aria-hidden="true"></i>
               </button>
-              <button id="traceReferenceFitButton" type="button">适配</button>
-              <button id="traceReferenceCenterButton" type="button">居中</button>
-              <button id="traceReferenceClearButton" class="icon-button danger" type="button" title="清除参考原图">
+              <button id="traceReferenceFitButton" class="simple-reference-extra" type="button">适配</button>
+              <button id="traceReferenceCenterButton" class="simple-reference-extra" type="button">居中</button>
+              <button id="traceReferenceClearButton" class="icon-button danger simple-reference-extra" type="button" title="清除参考原图">
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </div>
@@ -700,7 +731,7 @@
 
           <div class="canvas-wrap" id="canvasWrap">
             <canvas id="patternCanvas" width="1080" height="1440" tabindex="0" aria-label="拼豆图纸画布"></canvas>
-            <section id="referenceFloatPanel" class="reference-float-panel" hidden aria-label="上传图片参考">
+            <section id="referenceFloatPanel" class="reference-float-panel removed-reference-feature" hidden aria-label="上传图片参考">
               <div id="referenceFloatHeader" class="reference-float-header">
                 <strong>上传图片参考</strong>
                 <div class="reference-float-actions">
@@ -816,6 +847,23 @@
           </label>
           <button id="confirmCropButton" class="primary" type="button">确认裁剪</button>
           <button id="skipCropButton" type="button">跳过裁剪</button>
+        </div>
+        <div class="crop-desktop-options">
+          <div class="crop-desktop-quick-actions">
+            <button id="desktopCropResetButton" type="button">复原</button>
+            <button id="desktopCropMirrorButton" type="button">镜像</button>
+          </div>
+          <div class="crop-ratio-section">
+            <strong>裁剪比例</strong>
+            <div class="crop-ratio-options" role="group" aria-label="电脑端裁剪比例">
+              <button class="crop-ratio-option is-active" data-crop-ratio="free" type="button">自由</button>
+              <button class="crop-ratio-option" data-crop-ratio="1" type="button">1:1</button>
+              <button class="crop-ratio-option" data-crop-ratio="0.75" type="button">3:4</button>
+              <button class="crop-ratio-option" data-crop-ratio="1.333333" type="button">4:3</button>
+              <button class="crop-ratio-option" data-crop-ratio="0.5625" type="button">9:16</button>
+              <button class="crop-ratio-option" data-crop-ratio="1.777778" type="button">16:9</button>
+            </div>
+          </div>
         </div>
         <div class="crop-mobile-controls mobile-only">
           <div class="crop-mobile-zoom-row">

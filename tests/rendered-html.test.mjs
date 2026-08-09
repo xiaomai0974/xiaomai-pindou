@@ -59,15 +59,14 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260731-2/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /styles\.css\?v=20260809-6/);
-  assert.match(html, /mobile-layout\.css\?v=20260809-5/);
+  assert.match(html, /styles\.css\?v=20260809-18/);
+  assert.match(html, /mobile-layout\.css\?v=20260809-18/);
   assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
-  assert.match(html, /app\.js\?v=20260809-7/);
+  assert.match(html, /app\.js\?v=20260809-18/);
   assert.match(html, /id="mobileReferenceControlsButton"/);
   assert.match(html, /id="mobileCanvasPanButton"/);
-  assert.match(html, /id="mobileReferenceCloseButton"/);
-  assert.match(html, /id="mobileReferenceOpacityPanel"/);
-  assert.match(html, /id="mobileTraceReferenceOpacity"/);
+  assert.match(html, /id="mobileReferenceOpacityPanel" class="mobile-reference-opacity-panel mobile-only"/);
+  assert.match(html, /class="[^"]*simple-reference-controls[^"]*" id="traceReferenceToolbar"/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -94,7 +93,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="confirmPreviewButton"/);
   assert.match(html, /id="discardPreviewButton"/);
   assert.match(html, /id="traceReferenceClearButton"/);
-  assert.match(html, /原图显示/);
+  assert.match(html, /<span>透明度<\/span>\s*<input id="traceReferenceOpacity"/);
   assert.match(html, /id="traceReferenceOpacity"[^>]+value="35"/);
   assert.match(html, /<input id="accurateMatchToggle" type="checkbox" checked/);
   assert.doesNotMatch(html, /id="showFinalGridButton"/);
@@ -135,11 +134,17 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="minRegionSize"[^>]+value="2"/);
   assert.match(html, /id="customSizeInput"[^>]+type="number"[^>]+value="64"/);
   assert.match(html, /id="customHeightInput"[^>]+type="number"[^>]+value="64"/);
+  assert.match(html, /id="uploadWidthInput"[^>]+type="number"[^>]+value="64"/);
+  assert.match(html, /id="uploadHeightInput"[^>]+type="number"[^>]+value="64"/);
+  assert.match(html, /id="applyUploadSizeButton"/);
+  assert.match(html, /id="newBlankCanvasButton"/);
   [29, 54, 64, 100].forEach((size) => {
     assert.match(html, new RegExp(`class="seg-option(?: is-active)?" data-size="${size}"[^>]*>${size} x ${size}<`));
   });
   assert.match(html, /id="mobileCropZoom"/);
   assert.match(html, /id="cropMirrorButton"/);
+  assert.match(html, /id="desktopCropResetButton"/);
+  assert.match(html, /id="desktopCropMirrorButton"/);
   assert.match(html, /id="cropReplaceButton"/);
   assert.match(html, /id="mobileConfirmCropButton"/);
   assert.match(html, /data-crop-ratio="free"/);
@@ -148,13 +153,13 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="colorLimitValue"[^>]*>24 色<\/output>/);
   assert.doesNotMatch(html, /id="customColorLimitInput"/);
   assert.doesNotMatch(html, /id="applyCustomColorLimitButton"/);
-  assert.match(html, /支持 PNG \/ JPG，自动完整适配画布/);
+  assert.match(html, /支持 PNG \/ JPG，上传后先裁剪/);
   assert.match(html, /id="saveToLibraryButton"/);
   assert.match(html, /id="projectLibraryList"/);
   assert.match(html, /id="projectLibraryCount"/);
   assert.match(html, /我做过的图纸/);
   assert.match(html, /<input id="exportWatermarkToggle" type="checkbox" checked/);
-  assert.match(html, /id="referenceExportHint"/);
+  assert.doesNotMatch(html, /id="referenceExportHint"/);
   assert.match(html, /添加“小麦拼豆”水印/);
 });
 

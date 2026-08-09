@@ -1,5 +1,10 @@
 /* Mobile workbench. Every rule is scoped so the desktop layout stays intact. */
 @media (max-width: 768px) {
+  body.is-mobile-layout {
+    --mobile-editor-panel-height: clamp(190px, 28vh, 238px);
+    --mobile-editor-panel-height: clamp(190px, 28dvh, 238px);
+  }
+
   html,
   body.is-mobile-layout {
     width: 100%;
@@ -201,15 +206,14 @@
   body.is-mobile-layout[data-workbench-mode="transform"] .sidebar-rail-nav {
     display: grid;
     width: 100%;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0;
     overflow: visible;
     border: 0;
   }
 
   body.is-mobile-layout[data-workbench-mode="transform"] .rail-group-label,
-  body.is-mobile-layout[data-workbench-mode="transform"] .rail-spacer,
-  body.is-mobile-layout[data-workbench-mode="transform"] [data-sidebar-target="project"] {
+  body.is-mobile-layout[data-workbench-mode="transform"] .rail-spacer {
     display: none;
   }
 
@@ -316,15 +320,12 @@
     border: 0;
   }
 
-  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .sheet-chrome {
-    padding-bottom: calc(62px + env(safe-area-inset-bottom, 0px));
-  }
-
   body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar {
     justify-content: space-between;
   }
 
   body.is-mobile-layout[data-workbench-mode="edit"] .toolbar-history {
+    order: 1;
     display: flex;
     gap: 2px;
     border: 0;
@@ -364,10 +365,6 @@
     white-space: nowrap;
   }
 
-  body.is-mobile-layout[data-workbench-mode="edit"] .toolbar-history {
-    order: 1;
-  }
-
   body.is-mobile-layout[data-workbench-mode="edit"] .zoom-tools {
     order: 3;
     gap: 2px;
@@ -398,68 +395,10 @@
     padding: 6px 4px;
   }
 
-  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .edit-tool-panel {
-    position: fixed;
-    z-index: 2500;
-    top: auto;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    display: grid;
-    width: 100%;
-    height: calc(62px + env(safe-area-inset-bottom, 0px));
-    grid-template-columns: minmax(0, 1fr) 52px;
-    gap: 0;
-    overflow: visible;
-    border: 0;
-    border-top: 1px solid var(--line);
-    background: #fff;
-    padding: 4px 4px env(safe-area-inset-bottom, 0px);
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid {
-    display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-    gap: 1px;
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button,
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button {
-    width: auto;
-    min-width: 0;
-    min-height: 52px;
-    gap: 2px;
-    margin: 0;
-    border-radius: 6px;
-    padding: 3px 1px;
-    font-size: 9px;
-  }
-
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button svg,
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button svg {
     width: 18px;
     height: 18px;
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover {
-    position: fixed;
-    z-index: 2700;
-    top: auto;
-    right: 6px;
-    bottom: calc(62px + env(safe-area-inset-bottom, 0px));
-    left: 6px;
-    display: none;
-    width: auto;
-    max-height: min(58dvh, 500px);
-    overflow-y: auto;
-    border: 1px solid #d7d7d7;
-    border-radius: 12px 12px 7px 7px;
-    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.17);
-    padding: 12px;
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover {
-    display: block;
   }
 
   body.is-mobile-layout[data-workbench-mode="export"] .app-shell {
@@ -587,6 +526,10 @@
     display: none;
   }
 
+  body.is-mobile-layout .crop-desktop-options {
+    display: none;
+  }
+
   body.is-mobile-layout .mobile-only {
     display: initial;
   }
@@ -598,10 +541,6 @@
     right: 8px;
     display: grid !important;
     gap: 6px;
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-canvas-actions {
-    top: 104px;
   }
 
   body.is-mobile-layout[data-workbench-mode="export"] .mobile-canvas-actions {
@@ -798,5 +737,530 @@
     border-color: var(--accent);
     background: var(--accent);
     color: #fff;
+  }
+}
+
+/* Canvas-first mobile editor: keep the drawing visible while tools and colors stay close. */
+@media (max-width: 768px) {
+  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .sheet-chrome {
+    padding-bottom: calc(var(--mobile-editor-panel-height) + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .canvas-wrap {
+    background: #f5f6f7;
+    padding: 10px 8px 18px;
+    scroll-padding-right: 62px;
+    scroll-padding-bottom: 72px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .canvas-wrap #patternCanvas {
+    border: 1px solid #ececec;
+    background: #fff;
+    box-shadow: 0 5px 18px rgba(22, 22, 22, 0.06);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .edit-tool-panel {
+    position: fixed;
+    z-index: 2500;
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    width: 100%;
+    height: calc(var(--mobile-editor-panel-height) + env(safe-area-inset-bottom, 0px));
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 58px minmax(0, 1fr);
+    gap: 0;
+    overflow: hidden;
+    border: 0;
+    border-top: 1px solid #dedede;
+    background: #fff;
+    box-shadow: 0 -5px 18px rgba(0, 0, 0, 0.08);
+    padding: 4px 6px env(safe-area-inset-bottom, 0px);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel > .group-title {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 1px;
+    border-bottom: 1px solid #ededed;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button {
+    width: auto;
+    min-width: 0;
+    min-height: 52px;
+    gap: 2px;
+    margin: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    padding: 3px 1px;
+    color: #373737;
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-grid button.is-active,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-button[aria-expanded="true"] {
+    border-color: #f2b0c1;
+    background: #fff2f6;
+    color: var(--accent);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-tool-pan-button {
+    order: 0;
+    display: grid !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-canvas-actions #mobileCanvasPanButton {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="brush"] { order: 1; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="eraser"] { order: 2; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="eyedropper"] { order: 3; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="pen"] { order: 4; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="rect"] { order: 5; }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="sameColor"] {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-confirm-selection-button {
+    order: 6;
+    display: grid !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .tool-properties-popover,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover {
+    position: static;
+    z-index: auto;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: grid;
+    width: 100%;
+    max-height: none;
+    grid-template-columns: 112px minmax(0, 1fr);
+    align-content: start;
+    gap: 8px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: #fff;
+    box-shadow: none;
+    padding: 8px 2px 4px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-heading,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .symmetry-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .tool-advanced-actions {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-panel-current-color {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-content: center;
+    gap: 7px;
+    margin: 0;
+    border: 1px solid #dedede;
+    border-radius: 8px;
+    background: #fafafa;
+    padding: 8px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-panel-current-color > span {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-panel-current-color div {
+    align-content: center;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-panel-current-color small {
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-panel-current-color strong {
+    font-size: 11px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-picker {
+    min-width: 0;
+    gap: 5px;
+    margin: 0;
+    border: 0;
+    padding: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-picker-head {
+    min-height: 24px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-picker-head strong::after {
+    content: " · 点选后直接绘制";
+    color: #8a8a8a;
+    font-size: 9px;
+    font-weight: 600;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-picker-head button {
+    min-height: 24px !important;
+    padding: 0 6px;
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] #toolColorSearchInput,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-picker > small {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-palette {
+    display: grid;
+    max-height: 102px;
+    grid-template-columns: repeat(5, minmax(44px, 1fr));
+    gap: 5px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0 2px 2px 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-chip {
+    display: grid;
+    min-width: 0;
+    min-height: 44px !important;
+    grid-template-columns: 1fr;
+    place-items: center;
+    gap: 2px;
+    border-radius: 7px !important;
+    padding: 3px !important;
+    text-align: center;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-swatch {
+    width: 28px;
+    height: 24px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-meta b {
+    font-size: 9px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-meta small,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-replace {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open {
+    height: calc(72dvh + env(safe-area-inset-bottom, 0px));
+    grid-template-rows: 58px minmax(0, 1fr);
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover {
+    position: fixed;
+    z-index: 2700;
+    top: calc(60px + env(safe-area-inset-top, 0px));
+    right: 6px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    left: 6px;
+    display: block;
+    width: auto;
+    height: auto;
+    max-height: none;
+    overflow: hidden auto;
+    border: 1px solid #d7d7d7;
+    border-radius: 12px 12px 7px 7px;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.17);
+    padding: 12px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-heading {
+    display: flex;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover .symmetry-options {
+    display: grid;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover .tool-advanced-actions {
+    display: block;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open #toolColorSearchInput,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-picker > small {
+    display: block;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-palette {
+    max-height: 220px;
+    grid-template-columns: 1fr;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-chip {
+    min-height: 34px !important;
+    grid-template-columns: 28px minmax(0, 1fr) 34px;
+    place-items: initial;
+    text-align: left;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-swatch {
+    width: 24px;
+    height: 24px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-meta small,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-replace {
+    display: block;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-actions[hidden] {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .tool-advanced-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="paintColor"] .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="paintColor"] .symmetry-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="paintColor"] .tool-advanced-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-panel-current-color,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-color-picker,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .symmetry-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .tool-panel-current-color,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .tool-color-picker,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .symmetry-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .tool-advanced-actions {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .brush-options {
+    display: grid !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .symmetry-options {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .tool-color-picker {
+    display: grid !important;
+    margin-top: 4px;
+    border-top: 1px solid #e3e3e3;
+    padding-top: 10px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="paintColor"] .tool-color-picker {
+    display: grid !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .tool-color-palette {
+    max-height: 150px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-advanced-actions {
+    display: block !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-advanced-actions > summary {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .mirror-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .mirror-actions button,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-actions button {
+    min-height: 44px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .mobile-color-actions {
+    display: grid !important;
+    gap: 12px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-current {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    border: 1px solid #dfdfdf;
+    border-radius: 9px;
+    background: #fafafa;
+    padding: 10px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-current > span {
+    width: 48px;
+    height: 48px;
+    border: 1px solid #bdbdbd;
+    border-radius: 7px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-current div {
+    display: grid;
+    gap: 3px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-current small,
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-actions > small {
+    color: #767676;
+    font-size: 10px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-current strong {
+    font-size: 15px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-actions > label {
+    display: grid;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 850;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] #mobileReplaceColorInput {
+    min-height: 44px;
+    border: 1px solid #cfcfcf;
+    border-radius: 8px;
+    padding: 0 11px;
+    text-transform: uppercase;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-buttons {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-buttons button {
+    min-height: 44px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-buttons .primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] #mobileColorLockButton.is-active {
+    border-color: var(--green);
+    background: #eef8d7;
+    color: #476514;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .canvas-tool,
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-color-chip {
+    touch-action: manipulation;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-canvas-actions {
+    top: 108px;
+    right: 7px;
+    gap: 5px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-canvas-actions button {
+    width: 46px;
+    height: 46px;
+    border-radius: 9px;
+  }
+
+  /* Keep every mobile secondary panel inside the visible viewport. */
+  body.is-mobile-layout .workbench-drawer-panel,
+  body.is-mobile-layout .tool-properties-popover,
+  body.is-mobile-layout .mobile-reference-opacity-panel,
+  body.is-mobile-layout .crop-dialog {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: calc(100vw - max(16px, env(safe-area-inset-left, 0px) + env(safe-area-inset-right, 0px)));
+    overflow-x: hidden;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="transform"] .control-panel > .workbench-drawer-panel.is-sidebar-open,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover,
+  body.is-mobile-layout.mobile-reference-controls-open .mobile-reference-opacity-panel {
+    right: max(8px, env(safe-area-inset-right, 0px));
+    left: max(8px, env(safe-area-inset-left, 0px));
+    width: auto;
+    max-width: none;
+  }
+
+  body.is-mobile-layout .workbench-drawer-panel *,
+  body.is-mobile-layout .tool-properties-popover *,
+  body.is-mobile-layout .mobile-reference-opacity-panel *,
+  body.is-mobile-layout .crop-dialog * {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  body.is-mobile-layout .workbench-drawer-panel input,
+  body.is-mobile-layout .workbench-drawer-panel select,
+  body.is-mobile-layout .workbench-drawer-panel textarea,
+  body.is-mobile-layout .tool-properties-popover input,
+  body.is-mobile-layout .tool-properties-popover select,
+  body.is-mobile-layout .tool-properties-popover textarea,
+  body.is-mobile-layout .mobile-reference-opacity-panel input,
+  body.is-mobile-layout .crop-dialog input,
+  body.is-mobile-layout .crop-dialog select {
+    width: 100%;
+    font-size: 16px !important;
+    line-height: 1.35;
+  }
+
+  body.is-mobile-layout .workbench-drawer-panel button,
+  body.is-mobile-layout .tool-properties-popover button,
+  body.is-mobile-layout .mobile-reference-opacity-panel button,
+  body.is-mobile-layout .crop-dialog button {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-heading {
+    width: 100%;
+    min-width: 0;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-heading strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-heading .icon-button {
+    width: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    flex: 0 0 40px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .mobile-color-action-buttons,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .mirror-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .tool-actions {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

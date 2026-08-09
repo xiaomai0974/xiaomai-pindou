@@ -1141,11 +1141,14 @@ test("image upload and preview confirmation share one exact commit path", async 
   const source = await appSource();
   const generator = sourceBetween(source, "async function generatePattern()", "async function buildPatternResultFromImage");
   const applyPreview = sourceBetween(source, "function applyPreviewToEditGrid", "function confirmPendingPreview");
+  const imageLoader = sourceBetween(source, "function loadImageFile", "function openCurrentImageCropper");
 
   assert.match(generator, /requestPreviewUpdate\(/);
   assert.doesNotMatch(generator, /state\.pattern\s*=/);
   assert.match(applyPreview, /state\.pattern = \[\.\.\.state\.previewPattern\]/);
   assert.doesNotMatch(applyPreview, /validateColorConstraints/);
+  assert.match(imageLoader, /openCropper\(image, file\)/);
+  assert.doesNotMatch(imageLoader, /isMobileLayout\(\)/);
 });
 
 test("conversion strategies do not overwrite user generation-detail switches", async () => {
