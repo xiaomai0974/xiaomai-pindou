@@ -59,8 +59,10 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260731-2/);
   assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /styles\.css\?v=20260809-5/);
-  assert.match(html, /app\.js\?v=20260809-2/);
+  assert.match(html, /styles\.css\?v=20260809-6/);
+  assert.match(html, /mobile-layout\.css\?v=20260809-1/);
+  assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
+  assert.match(html, /app\.js\?v=20260809-3/);
   assert.match(html, /id="patternCanvas"/);
   assert.match(html, /data-tool="pen"/);
   assert.match(html, /id="copySelectionButton"/);
@@ -171,6 +173,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
     historyUtilsResponse,
     workerResponse,
     styleResponse,
+    mobileStyleResponse,
+    mobileGesturesResponse,
   ] = await Promise.all([
       fetchFromWorker("/app.js"),
       fetchFromWorker("/color-utils.js"),
@@ -190,6 +194,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/history-utils.js"),
       fetchFromWorker("/palette-worker.js"),
       fetchFromWorker("/styles.css"),
+      fetchFromWorker("/mobile-layout.css"),
+      fetchFromWorker("/mobile-gestures.js"),
     ]);
   assert.equal(scriptResponse.status, 200);
   assert.equal(colorUtilsResponse.status, 200);
@@ -209,6 +215,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(historyUtilsResponse.status, 200);
   assert.equal(workerResponse.status, 200);
   assert.equal(styleResponse.status, 200);
+  assert.equal(mobileStyleResponse.status, 200);
+  assert.equal(mobileGesturesResponse.status, 200);
   const script = await scriptResponse.text();
   const colorUtils = await colorUtilsResponse.text();
   const gridUtils = await gridUtilsResponse.text();

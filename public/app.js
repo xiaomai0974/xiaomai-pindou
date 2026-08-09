@@ -901,17 +901,7 @@ const cropState = {
   startCrop: null,
 };
 
-const mobileCanvasGesture = {
-  pointers: new Map(),
-  pendingEvent: null,
-  pendingTimer: null,
-  drawingPointerId: null,
-  pinching: false,
-  consumed: false,
-  startDistance: 0,
-  startZoom: 1,
-  suppressClickUntil: 0,
-};
+let mobileCanvasGestureController = null;
 state.colorLimit = Math.min(state.colorLimit, palette.length);
 state.selectedColor = palette.find((item) => item.code === "H7") || palette.find((item) => item.lab.l < 20) || palette[0];
 state.allowedColorCodes = new Set(palette.slice(0, state.colorLimit).map((item) => item.code));
@@ -6719,7 +6709,7 @@ function handleCanvasMove(event) {
 }
 
 function handleCanvasClick(event) {
-  if (isMobileLayout() && performance.now() < mobileCanvasGesture.suppressClickUntil) return;
+  if (isMobileLayout() && getMobileCanvasGestureController().shouldSuppressClick()) return;
   if (state.colorDebugEnabled && event.altKey) {
     const debugCell = getCellFromPointer(event);
     if (debugCell) showColorDebugForCell(debugCell);
@@ -6806,34 +6796,6 @@ function showColorDebugForCell(cell) {
   );
 }
 
-function isMobileCanvasTouch(event) {
-  return isMobileLayout() && event.pointerType === "touch";
-}
-
-function canvasPointerSnapshot(event) {
-  return {
-    pointerId: event.pointerId,
-    pointerType: event.pointerType,
-    button: event.button,
-    clientX: event.clientX,
-    clientY: event.clientY,
-    shiftKey: event.shiftKey,
-    target: elements.patternCanvas,
-    preventDefault() {},
-  };
-}
-
-function clearMobileCanvasGesture() {
-  window.clearTimeout(mobileCanvasGesture.pendingTimer);
-  mobileCanvasGesture.pointers.clear();
-  mobileCanvasGesture.pendingEvent = null;
-  mobileCanvasGesture.pendingTimer = null;
-  mobileCanvasGesture.drawingPointerId = null;
-  mobileCanvasGesture.pinching = false;
-  mobileCanvasGesture.consumed = false;
-  mobileCanvasGesture.startDistance = 0;
-}
-
 function cancelCanvasEditForPinch() {
   const snapshot = state.strokeHistorySnapshot;
   if (snapshot && (state.isBrushPainting || state.isErasing)) {
@@ -6863,50 +6825,31 @@ function cancelCanvasEditForPinch() {
   requestPatternRender();
 }
 
-function mobilePinchMetrics() {
-  const points = [...mobileCanvasGesture.pointers.values()].slice(0, 2);
-  if (points.length < 2) return null;
-  return {
-    distance: Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)),
-    centerX: (points[0].x + points[1].x) / 2,
-    centerY: (points[0].y + points[1].y) / 2,
-  };
-}
-
-function beginPendingMobileDraw() {
-  if (!mobileCanvasGesture.pendingEvent || mobileCanvasGesture.pinching || mobileCanvasGesture.consumed) return;
-  const event = mobileCanvasGesture.pendingEvent;
-  mobileCanvasGesture.pendingEvent = null;
-  mobileCanvasGesture.pendingTimer = null;
-  mobileCanvasGesture.drawingPointerId = event.pointerId;
-  handleCanvasPointerDownCore(event);
+function getMobileCanvasGestureController() {
+  if (mobileCanvasGestureController) return mobileCanvasGestureController;
+  const createController = window.XiaomaiMobileGestures?.createCanvasGestureController;
+  if (!createController) throw new Error("手机触控模块加载失败，请刷新页面后重试。");
+  mobileCanvasGestureController = createController({
+    isEnabled: (event) => isMobileLayout() && event.pointerType === "touch",
+    getZoom: () => state.zoom,
+    onDrawStart: handleCanvasPointerDownCore,
+    onDrawMove: handleCanvasPointerMoveCore,
+    onDrawEnd: handleCanvasPointerUpCore,
+    onPinchStart: cancelCanvasEditForPinch,
+    onPinchMove: ({ zoom, centerX, centerY }) => {
+      const wrapRect = elements.canvasWrap.getBoundingClientRect();
+      setZoom(zoom, {
+        anchorX: clampRange(centerX - wrapRect.left, 0, elements.canvasWrap.clientWidth),
+        anchorY: clampRange(centerY - wrapRect.top, 0, elements.canvasWrap.clientHeight),
+      });
+    },
+  });
+  return mobileCanvasGestureController;
 }
 
 function handleCanvasPointerDown(event) {
-  if (!isMobileCanvasTouch(event)) {
-    handleCanvasPointerDownCore(event);
-    return;
-  }
-  event.preventDefault();
-  mobileCanvasGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  elements.patternCanvas.setPointerCapture?.(event.pointerId);
-  if (mobileCanvasGesture.pointers.size === 1) {
-    mobileCanvasGesture.consumed = false;
-    mobileCanvasGesture.pendingEvent = canvasPointerSnapshot(event);
-    mobileCanvasGesture.pendingTimer = window.setTimeout(beginPendingMobileDraw, 90);
-    return;
-  }
-  if (mobileCanvasGesture.pointers.size === 2) {
-    window.clearTimeout(mobileCanvasGesture.pendingTimer);
-    mobileCanvasGesture.pendingTimer = null;
-    mobileCanvasGesture.pendingEvent = null;
-    mobileCanvasGesture.consumed = true;
-    cancelCanvasEditForPinch();
-    const pinch = mobilePinchMetrics();
-    mobileCanvasGesture.pinching = true;
-    mobileCanvasGesture.startDistance = pinch?.distance || 1;
-    mobileCanvasGesture.startZoom = state.zoom;
-  }
+  if (getMobileCanvasGestureController().handlePointerDown(event)) return;
+  handleCanvasPointerDownCore(event);
 }
 
 function handleCanvasPointerDownCore(event) {
@@ -6963,31 +6906,8 @@ function handleCanvasPointerDownCore(event) {
 }
 
 function handleCanvasPointerMove(event) {
-  if (!isMobileCanvasTouch(event)) {
-    handleCanvasPointerMoveCore(event);
-    return;
-  }
-  if (!mobileCanvasGesture.pointers.has(event.pointerId)) return;
-  event.preventDefault();
-  mobileCanvasGesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-  if (mobileCanvasGesture.pinching) {
-    const pinch = mobilePinchMetrics();
-    if (!pinch) return;
-    const wrapRect = elements.canvasWrap.getBoundingClientRect();
-    setZoom(mobileCanvasGesture.startZoom * (pinch.distance / mobileCanvasGesture.startDistance), {
-      anchorX: clampRange(pinch.centerX - wrapRect.left, 0, elements.canvasWrap.clientWidth),
-      anchorY: clampRange(pinch.centerY - wrapRect.top, 0, elements.canvasWrap.clientHeight),
-    });
-    return;
-  }
-  if (mobileCanvasGesture.consumed) return;
-  if (mobileCanvasGesture.pendingEvent?.pointerId === event.pointerId) {
-    const start = mobileCanvasGesture.pendingEvent;
-    if (Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY) < 5) return;
-    window.clearTimeout(mobileCanvasGesture.pendingTimer);
-    beginPendingMobileDraw();
-  }
-  if (mobileCanvasGesture.drawingPointerId === event.pointerId) handleCanvasPointerMoveCore(event);
+  if (getMobileCanvasGestureController().handlePointerMove(event)) return;
+  handleCanvasPointerMoveCore(event);
 }
 
 function handleCanvasPointerMoveCore(event) {
@@ -7018,32 +6938,8 @@ function handleCanvasPointerMoveCore(event) {
 }
 
 function handleCanvasPointerUp(event) {
-  if (!isMobileCanvasTouch(event)) {
-    handleCanvasPointerUpCore(event);
-    return;
-  }
-  event.preventDefault();
-  const wasPending = mobileCanvasGesture.pendingEvent?.pointerId === event.pointerId;
-  const wasDrawing = mobileCanvasGesture.drawingPointerId === event.pointerId;
-  if (mobileCanvasGesture.pinching || mobileCanvasGesture.consumed) {
-    mobileCanvasGesture.suppressClickUntil = performance.now() + 450;
-    mobileCanvasGesture.pointers.delete(event.pointerId);
-    if (mobileCanvasGesture.pointers.size < 2) mobileCanvasGesture.pinching = false;
-    if (!mobileCanvasGesture.pointers.size) clearMobileCanvasGesture();
-    return;
-  }
-  if (wasPending) {
-    window.clearTimeout(mobileCanvasGesture.pendingTimer);
-    mobileCanvasGesture.pendingTimer = null;
-    if (event.type !== "pointercancel") {
-      beginPendingMobileDraw();
-      handleCanvasPointerUpCore(event);
-    }
-  } else if (wasDrawing) {
-    handleCanvasPointerUpCore(event);
-  }
-  mobileCanvasGesture.pointers.delete(event.pointerId);
-  if (!mobileCanvasGesture.pointers.size) clearMobileCanvasGesture();
+  if (getMobileCanvasGestureController().handlePointerUp(event)) return;
+  handleCanvasPointerUpCore(event);
 }
 
 function handleCanvasPointerUpCore(event) {

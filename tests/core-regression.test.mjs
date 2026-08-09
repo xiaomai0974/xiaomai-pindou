@@ -13,6 +13,7 @@ const exportRendererSourceUrl = new URL("../public/export-renderer.js", import.m
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
+const mobileGesturesSourceUrl = new URL("../public/mobile-gestures.js", import.meta.url);
 const preprocessUtilsSourceUrl = new URL("../public/preprocess-utils.js", import.meta.url);
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
@@ -1242,12 +1243,14 @@ test("light high-contrast structures are protected from connected background rem
 });
 
 test("mobile canvas gestures reserve two fingers for zooming", async () => {
-  const source = await appSource();
-  const pointerDown = sourceBetween(source, "function handleCanvasPointerDown(event)", "function handleCanvasPointerDownCore");
-  const pointerMove = sourceBetween(source, "function handleCanvasPointerMove(event)", "function handleCanvasPointerMoveCore");
+  const source = await readFile(mobileGesturesSourceUrl, "utf8");
+  const app = await appSource();
 
-  assert.match(pointerDown, /mobileCanvasGesture\.pointers\.size === 2/);
-  assert.match(pointerDown, /cancelCanvasEditForPinch\(\)/);
-  assert.match(pointerMove, /mobileCanvasGesture\.pinching/);
-  assert.match(pointerMove, /setZoom\(/);
+  assert.match(source, /pointers\.size === 2/);
+  assert.match(source, /options\.onPinchStart/);
+  assert.match(source, /options\.onPinchMove/);
+  assert.match(source, /startZoom \* \(pinch\.distance \/ startDistance\)/);
+  assert.match(app, /createCanvasGestureController/);
+  assert.match(app, /onPinchStart: cancelCanvasEditForPinch/);
+  assert.match(app, /onPinchMove: \(\{ zoom, centerX, centerY \}\)/);
 });
