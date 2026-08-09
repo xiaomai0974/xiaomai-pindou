@@ -612,6 +612,8 @@ const elements = {
   traceReferenceFitButton: document.querySelector("#traceReferenceFitButton"),
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
   traceReferenceClearButton: document.querySelector("#traceReferenceClearButton"),
+  mobileReferenceFitTopButton: document.querySelector("#mobileReferenceFitTopButton"),
+  mobileReferenceCloseButton: document.querySelector("#mobileReferenceCloseButton"),
   pendingPreviewBar: document.querySelector("#pendingPreviewBar"),
   confirmPreviewButton: document.querySelector("#confirmPreviewButton"),
   discardPreviewButton: document.querySelector("#discardPreviewButton"),
@@ -1702,6 +1704,15 @@ function setupEvents() {
     renderPattern();
     markProjectDirty();
   });
+  elements.mobileReferenceFitTopButton?.addEventListener("click", () => {
+    fitTraceReferenceToCanvas();
+    renderPattern();
+    markProjectDirty();
+  });
+  elements.mobileReferenceCloseButton?.addEventListener("click", () => {
+    document.body.classList.remove("mobile-reference-controls-open");
+    syncMobileCanvasControls();
+  });
   elements.traceReferenceCenterButton.addEventListener("click", () => {
     centerTraceReference();
     renderPattern();
@@ -2641,6 +2652,7 @@ function syncTraceReferenceControls() {
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;
   elements.traceReferenceCenterButton.disabled = !hasReference;
+  if (elements.mobileReferenceFitTopButton) elements.mobileReferenceFitTopButton.disabled = !hasReference;
   syncMobileCanvasControls();
   updateCanvasCursor();
 }
