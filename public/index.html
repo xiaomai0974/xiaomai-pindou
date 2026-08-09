@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=20260809-18" />
-    <link rel="stylesheet" href="mobile-layout.css?v=20260809-18" />
+    <link rel="stylesheet" href="styles.css?v=20260810-1" />
+    <link rel="stylesheet" href="mobile-layout.css?v=20260810-1" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
@@ -26,7 +26,7 @@
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260809-18" defer></script>
+    <script src="app.js?v=20260810-1" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -756,16 +756,9 @@
                 <img id="referenceFloatImage" alt="上传图片参考" />
               </div>
             </section>
-            <div id="emptyState" class="empty-state">
-              <i data-lucide="scan-line" aria-hidden="true"></i>
-              <strong>上传图片开始生成</strong>
-              <span>会生成带坐标、色号和底部色卡的像素图纸</span>
-            </div>
           </div>
 
-          <div id="legendStrip" class="sheet-legend" aria-label="色卡预览">
-            <span>色卡会显示在这里</span>
-          </div>
+          <div id="legendStrip" class="sheet-legend" aria-label="色卡预览" hidden></div>
           <p class="privacy-note">
             小麦拼豆 Beta 版默认在浏览器本地处理图片。上传的图片不会主动上传到服务器。生成图纸、编辑和导出在本地完成。
           </p>

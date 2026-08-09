@@ -131,7 +131,6 @@ h2 {
 #projectMeta,
 .upload-zone small,
 .empty-list,
-.empty-state span,
 .sheet-legend {
   color: var(--muted);
 }
@@ -1885,25 +1884,6 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
 .canvas-wrap.is-drag-target {
   outline: 4px solid var(--accent);
   outline-offset: -8px;
-}
-
-.empty-state {
-  position: absolute;
-  display: grid;
-  width: min(360px, 78%);
-  place-items: center;
-  gap: 8px;
-  border: 2px solid var(--ink);
-  background: rgba(255, 255, 255, 0.95);
-  padding: 22px;
-  text-align: center;
-  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.18);
-}
-
-.empty-state svg {
-  width: 38px;
-  height: 38px;
-  color: var(--accent);
 }
 
 .sheet-legend {

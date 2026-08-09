@@ -712,7 +712,6 @@ const elements = {
   desktopCropResetButton: document.querySelector("#desktopCropResetButton"),
   desktopCropMirrorButton: document.querySelector("#desktopCropMirrorButton"),
   cropReplaceButton: document.querySelector("#cropReplaceButton"),
-  emptyState: document.querySelector("#emptyState"),
   projectName: document.querySelector("#projectName"),
   projectMeta: document.querySelector("#projectMeta"),
   paletteList: document.querySelector("#paletteList"),
@@ -5851,11 +5850,9 @@ function renderPatternNow(requestedDirtyBounds = null) {
       drawPlotBackground();
       drawGridLines();
       drawEmptyMessage();
-      elements.emptyState.hidden = false;
       return;
     }
 
-    elements.emptyState.hidden = true;
     drawPlotBackground();
     drawPatternCells(dirtyBounds);
     if (state.showGrid && state.viewMode !== "clean") {
@@ -6442,7 +6439,8 @@ function renderStatsNow(sorted, total, listRows, pattern, usedBounds) {
 
   if (!pattern.length && !state.projectPalette.length) {
     elements.paletteList.innerHTML = '<div class="empty-list">生成后会显示每种颜色需要多少颗</div>';
-    elements.legendStrip.innerHTML = "<span>色卡会显示在这里</span>";
+    elements.legendStrip.hidden = true;
+    elements.legendStrip.replaceChildren();
     renderPaletteChoices(sorted);
     return;
   }
@@ -6478,6 +6476,7 @@ function renderStatsNow(sorted, total, listRows, pattern, usedBounds) {
   }
 
   const boundsLabel = state.usedBounds ? `<span class="bounds-chip">所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}</span>` : "";
+  elements.legendStrip.hidden = false;
   elements.legendStrip.innerHTML =
     boundsLabel +
     sorted
