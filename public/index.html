@@ -6,7 +6,7 @@
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="styles.css?v=20260809-6" />
-    <link rel="stylesheet" href="mobile-layout.css?v=20260809-3" />
+    <link rel="stylesheet" href="mobile-layout.css?v=20260809-4" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
@@ -26,7 +26,7 @@
     <script src="export-renderer.js?v=20260731-2" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260809-5" defer></script>
+    <script src="app.js?v=20260809-6" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -599,15 +599,14 @@
               </button>
               <button id="zoomResetButton" type="button">100%</button>
               <button id="fitButton" type="button">适配</button>
+              <button id="mobileCanvasPanButton" class="icon-button mobile-only" type="button" title="移动画布" aria-label="移动画布" aria-pressed="false">
+                <i data-lucide="hand" aria-hidden="true"></i>
+              </button>
             </div>
             <div class="mobile-canvas-actions mobile-only" aria-label="手机画布操作">
               <button id="mobileReferenceControlsButton" class="icon-button" type="button" title="调整参考图" aria-expanded="false">
                 <i data-lucide="image" aria-hidden="true"></i>
                 <span>参考图</span>
-              </button>
-              <button id="mobileCanvasPanButton" class="icon-button" type="button" title="移动画布" aria-pressed="false">
-                <i data-lucide="hand" aria-hidden="true"></i>
-                <span>移动</span>
               </button>
             </div>
             <div class="top-parameter-toggles" aria-label="画布显示"></div>
@@ -668,8 +667,7 @@
             </button>
             <div class="trace-reference-toolbar" id="traceReferenceToolbar" aria-label="画布描图参考">
               <div class="mobile-reference-sheet-header mobile-only">
-                <strong>参考图</strong>
-                <button id="mobileReferenceFitTopButton" type="button">适配</button>
+                <strong>参考图透明度</strong>
                 <button id="mobileReferenceCloseButton" class="icon-button" type="button" title="收起参考图调整">
                   <i data-lucide="x" aria-hidden="true"></i>
                 </button>

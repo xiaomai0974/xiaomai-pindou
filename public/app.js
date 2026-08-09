@@ -612,7 +612,6 @@ const elements = {
   traceReferenceFitButton: document.querySelector("#traceReferenceFitButton"),
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
   traceReferenceClearButton: document.querySelector("#traceReferenceClearButton"),
-  mobileReferenceFitTopButton: document.querySelector("#mobileReferenceFitTopButton"),
   mobileReferenceCloseButton: document.querySelector("#mobileReferenceCloseButton"),
   pendingPreviewBar: document.querySelector("#pendingPreviewBar"),
   confirmPreviewButton: document.querySelector("#confirmPreviewButton"),
@@ -1704,11 +1703,6 @@ function setupEvents() {
     renderPattern();
     markProjectDirty();
   });
-  elements.mobileReferenceFitTopButton?.addEventListener("click", () => {
-    fitTraceReferenceToCanvas();
-    renderPattern();
-    markProjectDirty();
-  });
   elements.mobileReferenceCloseButton?.addEventListener("click", () => {
     document.body.classList.remove("mobile-reference-controls-open");
     syncMobileCanvasControls();
@@ -2652,7 +2646,6 @@ function syncTraceReferenceControls() {
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;
   elements.traceReferenceCenterButton.disabled = !hasReference;
-  if (elements.mobileReferenceFitTopButton) elements.mobileReferenceFitTopButton.disabled = !hasReference;
   syncMobileCanvasControls();
   updateCanvasCursor();
 }
@@ -7505,7 +7498,8 @@ function isTypingTarget(target) {
 
 function beginCanvasPan(event) {
   const mobilePan = isMobileLayout() && state.mobileCanvasPanMode && event.pointerType === "touch";
-  if ((!state.isSpacePressed && !mobilePan) || event.button !== 0 || isTypingTarget(event.target)) return false;
+  const primaryPointer = event.pointerType === "touch" || event.button === 0;
+  if ((!state.isSpacePressed && !mobilePan) || !primaryPointer || isTypingTarget(event.target)) return false;
   if (!elements.canvasWrap.contains(event.target)) return false;
   if (state.isPanningCanvas) return true;
   event.preventDefault();

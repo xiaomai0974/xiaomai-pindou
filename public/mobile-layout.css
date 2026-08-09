@@ -336,6 +336,84 @@
     display: none;
   }
 
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .current-color {
+    order: 2;
+    display: inline-flex !important;
+    width: 66px;
+    min-width: 0;
+    min-height: 34px;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    border: 1px solid #d5d5d5;
+    background: #fff;
+    padding: 3px 5px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .current-color span {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .current-color strong {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .toolbar-history {
+    order: 1;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .zoom-tools {
+    order: 3;
+    gap: 2px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .zoom-tools #zoomResetButton {
+    display: inline-flex !important;
+    min-width: 40px;
+    min-height: 34px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .zoom-tools #fitButton {
+    display: none;
+  }
+
+  body.is-mobile-layout .zoom-tools #mobileCanvasPanButton {
+    display: inline-grid !important;
+    width: 38px;
+    min-width: 38px;
+    height: 34px;
+    min-height: 34px;
+    place-items: center;
+    padding: 0;
+  }
+
+  body.is-mobile-layout .zoom-tools #mobileCanvasPanButton.is-active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .zoom-tools button {
+    min-width: 32px;
+    min-height: 34px;
+    padding: 0 5px;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .zoom-tools output {
+    min-width: 46px;
+    padding: 6px 4px;
+  }
+
   body.is-mobile-layout[data-workbench-mode="edit"] .workspace > .edit-tool-panel {
     position: fixed;
     z-index: 2500;
@@ -586,12 +664,12 @@
     left: 8px;
     display: flex !important;
     width: auto;
-    max-height: min(42dvh, 260px);
+    max-height: 138px;
     flex: none;
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    overflow-y: auto;
+    overflow: hidden;
     border: 1px solid #d2d2d2;
     border-radius: 12px;
     background: #fff;
@@ -607,7 +685,7 @@
     width: calc(100% + 18px);
     min-height: 48px;
     flex: 1 0 calc(100% + 18px);
-    grid-template-columns: minmax(0, 1fr) auto 40px;
+    grid-template-columns: minmax(0, 1fr) 40px;
     align-items: center;
     gap: 7px;
     margin: -9px -9px 2px;
@@ -635,8 +713,8 @@
     padding: 0;
   }
 
-  body.is-mobile-layout.mobile-reference-controls-open #traceReferenceFitButton {
-    display: none;
+  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar > :not(.mobile-reference-sheet-header):not(.trace-opacity-control) {
+    display: none !important;
   }
 
   body.is-mobile-layout[data-workbench-mode="edit"].mobile-reference-controls-open .editor-toolbar .trace-reference-toolbar {
@@ -644,8 +722,12 @@
   }
 
   body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control {
-    min-width: min(100%, 220px);
-    flex: 1 1 180px;
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    flex: 1 0 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
   }
 
   body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control input {
@@ -656,6 +738,9 @@
   body.is-mobile-layout .canvas-wrap.is-mobile-pan,
   body.is-mobile-layout .canvas-wrap.is-mobile-pan #patternCanvas {
     cursor: grab;
+    touch-action: none;
+    user-select: none;
+    overscroll-behavior: none;
   }
 
   body.is-mobile-layout .crop-close-button {
