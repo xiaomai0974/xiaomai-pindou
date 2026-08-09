@@ -613,6 +613,8 @@ const elements = {
   traceReferenceCenterButton: document.querySelector("#traceReferenceCenterButton"),
   traceReferenceClearButton: document.querySelector("#traceReferenceClearButton"),
   mobileReferenceCloseButton: document.querySelector("#mobileReferenceCloseButton"),
+  mobileTraceReferenceOpacity: document.querySelector("#mobileTraceReferenceOpacity"),
+  mobileTraceReferenceOpacityLabel: document.querySelector("#mobileTraceReferenceOpacityLabel"),
   pendingPreviewBar: document.querySelector("#pendingPreviewBar"),
   confirmPreviewButton: document.querySelector("#confirmPreviewButton"),
   discardPreviewButton: document.querySelector("#discardPreviewButton"),
@@ -1696,6 +1698,12 @@ function setupEvents() {
     syncTraceReferenceControls();
     requestPatternRender();
   });
+  elements.mobileTraceReferenceOpacity?.addEventListener("input", () => {
+    state.traceReference.opacity = Number(elements.mobileTraceReferenceOpacity.value) / 100;
+    syncTraceReferenceControls();
+    requestPatternRender();
+    markProjectDirty();
+  });
   elements.traceReferenceZoomOutButton.addEventListener("click", () => setTraceReferenceScale(state.traceReference.scale / 1.12));
   elements.traceReferenceZoomInButton.addEventListener("click", () => setTraceReferenceScale(state.traceReference.scale * 1.12));
   elements.traceReferenceFitButton.addEventListener("click", () => {
@@ -2642,6 +2650,13 @@ function syncTraceReferenceControls() {
   elements.traceReferenceOpacity.value = traceVisibility;
   elements.traceReferenceOpacityLabel.textContent = `${traceVisibility}%`;
   elements.traceReferenceOpacity.disabled = !hasReference;
+  if (elements.mobileTraceReferenceOpacity) {
+    elements.mobileTraceReferenceOpacity.value = traceVisibility;
+    elements.mobileTraceReferenceOpacity.disabled = !hasReference;
+  }
+  if (elements.mobileTraceReferenceOpacityLabel) {
+    elements.mobileTraceReferenceOpacityLabel.textContent = `${traceVisibility}%`;
+  }
   elements.traceReferenceZoomOutButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceZoomInButton.disabled = !canAdjust || trace.locked;
   elements.traceReferenceFitButton.disabled = !hasReference;

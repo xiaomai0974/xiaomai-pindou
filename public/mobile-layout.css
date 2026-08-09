@@ -387,22 +387,6 @@
     display: none;
   }
 
-  body.is-mobile-layout .zoom-tools #mobileCanvasPanButton {
-    display: inline-grid !important;
-    width: 38px;
-    min-width: 38px;
-    height: 34px;
-    min-height: 34px;
-    place-items: center;
-    padding: 0;
-  }
-
-  body.is-mobile-layout .zoom-tools #mobileCanvasPanButton.is-active {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: #fff;
-  }
-
   body.is-mobile-layout[data-workbench-mode="edit"] .editor-toolbar .zoom-tools button {
     min-width: 32px;
     min-height: 34px;
@@ -656,83 +640,67 @@
     color: #fff;
   }
 
-  body.is-mobile-layout.mobile-reference-controls-open .editor-toolbar .trace-reference-toolbar {
+  body.is-mobile-layout .mobile-reference-opacity-panel {
+    display: none !important;
+  }
+
+  body.is-mobile-layout.mobile-reference-controls-open .mobile-reference-opacity-panel {
     position: fixed;
-    z-index: 2750;
+    z-index: 2900;
     right: 8px;
-    bottom: 8px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     left: 8px;
-    display: flex !important;
+    display: grid !important;
     width: auto;
-    max-height: 138px;
-    flex: none;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    overflow: hidden;
+    gap: 10px;
     border: 1px solid #d2d2d2;
     border-radius: 12px;
     background: #fff;
     box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.18);
-    padding: 9px;
+    padding: 10px;
   }
 
-  body.is-mobile-layout.mobile-reference-controls-open .mobile-reference-sheet-header {
-    position: sticky;
-    z-index: 1;
-    top: -9px;
-    display: grid !important;
-    width: calc(100% + 18px);
-    min-height: 48px;
-    flex: 1 0 calc(100% + 18px);
+  body.is-mobile-layout[data-workbench-mode="edit"].mobile-reference-controls-open .mobile-reference-opacity-panel {
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.is-mobile-layout .mobile-reference-opacity-panel header {
+    display: grid;
+    min-height: 40px;
     grid-template-columns: minmax(0, 1fr) 40px;
     align-items: center;
-    gap: 7px;
-    margin: -9px -9px 2px;
+    gap: 8px;
     border-bottom: 1px solid #dedede;
-    background: #fff;
-    padding: 6px 8px;
+    padding-bottom: 8px;
   }
 
-  body.is-mobile-layout .mobile-reference-sheet-header strong {
+  body.is-mobile-layout .mobile-reference-opacity-panel header strong {
     font-size: 15px;
   }
 
-  body.is-mobile-layout .mobile-reference-sheet-header button {
+  body.is-mobile-layout .mobile-reference-opacity-panel header button {
+    width: 40px;
+    min-width: 40px;
+    height: 36px;
     min-height: 36px;
     border: 1px solid var(--ink);
     background: #fff;
-    padding: 0 12px;
-    font-size: 13px;
-    font-weight: 900;
-  }
-
-  body.is-mobile-layout .mobile-reference-sheet-header .icon-button {
-    width: 40px;
-    min-width: 40px;
     padding: 0;
   }
 
-  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar > :not(.mobile-reference-sheet-header):not(.trace-opacity-control) {
-    display: none !important;
-  }
-
-  body.is-mobile-layout[data-workbench-mode="edit"].mobile-reference-controls-open .editor-toolbar .trace-reference-toolbar {
-    bottom: calc(70px + env(safe-area-inset-bottom, 0px));
-  }
-
-  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control {
+  body.is-mobile-layout .mobile-reference-opacity-panel > label {
     display: grid;
     width: 100%;
-    min-width: 0;
-    flex: 1 0 100%;
     grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
     gap: 8px;
+    font-size: 13px;
+    font-weight: 850;
   }
 
-  body.is-mobile-layout.mobile-reference-controls-open .trace-reference-toolbar .trace-opacity-control input {
-    flex: 1 1 auto;
-    width: auto;
+  body.is-mobile-layout .mobile-reference-opacity-panel input {
+    width: 100%;
+    min-width: 0;
   }
 
   body.is-mobile-layout .canvas-wrap.is-mobile-pan,
