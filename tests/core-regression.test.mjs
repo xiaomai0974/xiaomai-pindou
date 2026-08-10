@@ -1151,6 +1151,35 @@ test("image upload and preview confirmation share one exact commit path", async 
   assert.doesNotMatch(imageLoader, /isMobileLayout\(\)/);
 });
 
+test("conversion controls compose without discarding pending preview state", async () => {
+  const source = await appSource();
+  const builder = sourceBetween(source, "async function buildPatternResultFromImage", "function finalizeAccurateMatch");
+  const previewUpdater = sourceBetween(source, "async function requestPreviewUpdate", "function applyPreviewToEditGrid");
+  const constraintUpdater = sourceBetween(source, "function applyConstraintChange", "function renderConstraintPalette");
+  const emptyBackground = sourceBetween(source, "function usesEmptyBackground", "function eraserFillColor");
+  const invalidator = sourceBetween(source, "function invalidateImageProcessingState", "function invalidateOptimizedBaseImage");
+
+  assert.match(builder, /limitedPalette,\s*true,\s*\)/);
+  assert.doesNotMatch(builder, /!\(state\.accurateMatch \|\| state\.processingProfile === "photoColor"\)/);
+  assert.match(previewUpdater, /const backgroundBase = hasPendingBase \? state\.previewPattern : state\.pattern/);
+  assert.match(previewUpdater, /activePreviewRequestSignature === requestSignature/);
+  assert.match(previewUpdater, /pendingPreviewRequestSignature === requestSignature/);
+  assert.match(constraintUpdater, /const base = hasPendingBase \? state\.previewPattern : state\.pattern/);
+  assert.match(emptyBackground, /return state\.pixelBackground !== "white"/);
+  assert.match(invalidator, /state\.isProcessingPattern = false;\s*updatePreviewButtons\(\)/);
+});
+
+test("outline and anime controls keep dependent settings reversible", async () => {
+  const source = await appSource();
+  const setup = sourceBetween(source, "function setupEvents", "function setupProjectDirtyTracking");
+
+  assert.match(setup, /state\.lineBoost && state\.outlineMode === "off"/);
+  assert.match(setup, /state\.outlineMode = "light"/);
+  assert.match(setup, /state\.minRegionSizeBeforeAnime = state\.minRegionSize/);
+  assert.match(setup, /state\.minRegionSize = state\.minRegionSizeBeforeAnime/);
+  assert.match(setup, /if \(state\.animeMode\) state\.animeAdjustedMinRegionSize = null/);
+});
+
 test("conversion strategies do not overwrite user generation-detail switches", async () => {
   const source = await appSource();
   const profileSetter = sourceBetween(source, "function setProcessingProfile", "function syncProcessingProfileControls");
@@ -1190,8 +1219,14 @@ test("runtime diagnostics stay out of saved projects and duplicate grid state is
 test("photo-color strategy can use the full palette without changing the color-limit control", async () => {
   const source = await appSource();
   const targetLimit = sourceBetween(source, "function targetColorLimit", "function isColorLocked");
+  const colorLimitControls = sourceBetween(source, "function syncColorLimitControls", "function setPatternMode");
+  const diagnosticControls = sourceBetween(source, "function syncDiagnosticControls", "function deserializeGrid");
 
   assert.match(targetLimit, /state\.processingProfile === "photoColor"\) return palette\.length/);
+  assert.match(colorLimitControls, /elements\.colorLimit\.disabled = usesFullPalette/);
+  assert.match(colorLimitControls, /usesFullPalette \? `全色 \$\{max\}`/);
+  assert.match(diagnosticControls, /elements\.accurateMatchToggle\.disabled = profileIncludesAccurateMatch/);
+  assert.match(diagnosticControls, /照片原色已内置精准匹配/);
 });
 
 test("restored projects stay on the simplified automatic standard-pattern flow", async () => {

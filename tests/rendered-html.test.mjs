@@ -62,7 +62,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /styles\.css\?v=20260810-1/);
   assert.match(html, /mobile-layout\.css\?v=20260810-1/);
   assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
-  assert.match(html, /app\.js\?v=20260810-1/);
+  assert.match(html, /app\.js\?v=20260810-2/);
   assert.match(html, /id="mobileReferenceControlsButton"/);
   assert.match(html, /id="mobileCanvasPanButton"/);
   assert.match(html, /id="mobileReferenceOpacityPanel" class="mobile-reference-opacity-panel mobile-only"/);
@@ -400,7 +400,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /function cancelPendingPaletteWorkerRequests\(/);
   assert.match(script, /if \(error\?\.name === "AbortError"\) throw error/);
   assert.match(script, /function invalidateImageProcessingState\(\)/);
-  assert.match(script, /const requestVersion = \+\+previewUpdateVersion;\s*cancelPendingPaletteWorkerRequests\(\);/);
+  assert.match(script, /const requestVersion = \+\+previewUpdateVersion;\s*activePreviewRequestSignature = requestSignature;\s*cancelPendingPaletteWorkerRequests\(\);/);
   assert.match(script, /const gridLinePathCache = \{/);
   assert.doesNotMatch(script, /function applyCountChanges\(counts, changes\)/);
   assert.match(gridUtils, /function applyCountChanges\(counts, changes\)/);

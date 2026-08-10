@@ -331,6 +331,8 @@ const state = {
   cleanSmallRegions: DEFAULT_GENERATION_SETTINGS.cleanSmallRegions,
   animeMode: DEFAULT_GENERATION_SETTINGS.animeMode,
   minRegionSize: DEFAULT_GENERATION_SETTINGS.minRegionSize,
+  minRegionSizeBeforeAnime: null,
+  animeAdjustedMinRegionSize: null,
   mergeBoost: 0,
   localPreprocessSettings: { ...DEFAULT_LOCAL_PREPROCESS_SETTINGS },
   optimizedBaseImage: null,
@@ -755,6 +757,9 @@ let paletteWorkerDisabled = false;
 let paletteWorkerRequestId = 0;
 let previewUpdateVersion = 0;
 let colorLimitPreviewTimer = null;
+let imageProcessingRevision = 0;
+let activePreviewRequestSignature = "";
+let pendingPreviewRequestSignature = "";
 let palettePanelRenderFrameId = null;
 let toolPaletteRenderFrameId = null;
 let qualityMetricsRefreshHandle = null;
@@ -1493,6 +1498,10 @@ function setupEvents() {
   });
   elements.lineBoostToggle.addEventListener("change", () => {
     state.lineBoost = elements.lineBoostToggle.checked;
+    if (state.lineBoost && state.outlineMode === "off") {
+      state.outlineMode = "light";
+      elements.outlineModeSelect.value = state.outlineMode;
+    }
     requestPreviewUpdate();
   });
   elements.accurateMatchToggle.addEventListener("change", () => {
@@ -1578,27 +1587,36 @@ function setupEvents() {
     requestPreviewUpdate();
   });
   elements.animeModeToggle.addEventListener("change", () => {
-    state.animeMode = elements.animeModeToggle.checked;
-    if (state.processingProfile === "photoColor") {
-      if (Number(elements.minRegionSize.value) > 3) {
-        elements.minRegionSize.value = 2;
-        state.minRegionSize = 2;
-        elements.minRegionLabel.textContent = "2 颗";
+    const nextAnimeMode = elements.animeModeToggle.checked;
+    if (nextAnimeMode && !state.animeMode) {
+      state.minRegionSizeBeforeAnime = state.minRegionSize;
+      const animeDefault = state.processingProfile === "photoColor" ? 2 : 6;
+      const shouldAdjust = state.processingProfile === "photoColor"
+        ? state.minRegionSize > 3
+        : state.minRegionSize < animeDefault;
+      if (shouldAdjust) {
+        state.minRegionSize = animeDefault;
+        state.animeAdjustedMinRegionSize = animeDefault;
       }
-    } else if (state.animeMode && Number(elements.minRegionSize.value) < 6) {
-      elements.minRegionSize.value = 6;
-      state.minRegionSize = 6;
-      elements.minRegionLabel.textContent = "6 颗";
-    } else if (!state.animeMode && Number(elements.minRegionSize.value) === 6) {
-      const restoredSize = state.processingProfile === "photoColor" ? 1 : state.processingProfile === "detail64" ? 2 : 3;
-      elements.minRegionSize.value = restoredSize;
-      state.minRegionSize = restoredSize;
-      elements.minRegionLabel.textContent = `${restoredSize} 颗`;
+    } else if (!nextAnimeMode && state.animeMode) {
+      if (
+        state.animeAdjustedMinRegionSize !== null &&
+        state.minRegionSize === state.animeAdjustedMinRegionSize &&
+        state.minRegionSizeBeforeAnime !== null
+      ) {
+        state.minRegionSize = state.minRegionSizeBeforeAnime;
+      }
+      state.minRegionSizeBeforeAnime = null;
+      state.animeAdjustedMinRegionSize = null;
     }
+    state.animeMode = nextAnimeMode;
+    elements.minRegionSize.value = state.minRegionSize;
+    elements.minRegionLabel.textContent = `${state.minRegionSize} 颗`;
     requestPreviewUpdate();
   });
   elements.minRegionSize.addEventListener("input", () => {
     state.minRegionSize = Number(elements.minRegionSize.value);
+    if (state.animeMode) state.animeAdjustedMinRegionSize = null;
     elements.minRegionLabel.textContent = `${state.minRegionSize} 颗`;
     requestPreviewUpdate();
   });
@@ -2392,12 +2410,17 @@ function setColorLimit(value, regenerate = true) {
 
 function syncColorLimitControls() {
   const max = palette.length;
+  const usesFullPalette = state.processingProfile === "photoColor";
   elements.colorLimit.max = max;
   elements.colorLimit.value = state.colorLimit;
-  elements.colorLimitValue.textContent = `${state.colorLimit} 色`;
-  elements.colorLabel.textContent = `${state.colorLimit} / ${max} 色`;
+  elements.colorLimit.disabled = usesFullPalette;
+  elements.colorLimit.title = usesFullPalette ? "照片原色固定使用完整色板；切换到精简或细节策略后可限制颜色数。" : "";
+  elements.colorLimitValue.textContent = usesFullPalette ? `全色 ${max}` : `${state.colorLimit} 色`;
+  elements.colorLabel.textContent = usesFullPalette ? `${max} / ${max} 色` : `${state.colorLimit} / ${max} 色`;
   document.querySelectorAll(".color-preset").forEach((button) => {
     button.classList.toggle("is-active", Number(button.dataset.colors) === state.colorLimit);
+    button.disabled = usesFullPalette;
+    button.title = usesFullPalette ? "照片原色固定使用完整色板" : "";
   });
 }
 
@@ -2423,6 +2446,8 @@ function setPatternMode(mode) {
     state.mergeSimilarColors = true;
     state.cleanSmallRegions = true;
     state.animeMode = false;
+    state.minRegionSizeBeforeAnime = null;
+    state.animeAdjustedMinRegionSize = null;
     state.pixelBackground = state.pixelBackground || "white";
     state.viewMode = "pixel";
     applyPixelSizeDefaults(true);
@@ -2803,8 +2828,13 @@ function closeLocalPreprocessPanel() {
 }
 
 function invalidateImageProcessingState() {
+  imageProcessingRevision += 1;
+  activePreviewRequestSignature = "";
+  pendingPreviewRequestSignature = "";
   previewUpdateVersion += 1;
   cancelPendingPaletteWorkerRequests();
+  state.isProcessingPattern = false;
+  updatePreviewButtons();
   cancelScheduledUiWork();
   clearReferenceSampler();
   nearestColorCache.clear();
@@ -2855,10 +2885,16 @@ function syncLocalPreprocessControls() {
 
 function syncDiagnosticControls() {
   if (!elements.accurateMatchToggle) return;
-  elements.accurateMatchToggle.checked = state.accurateMatch;
+  const profileIncludesAccurateMatch = state.processingProfile === "photoColor";
+  elements.accurateMatchToggle.checked = profileIncludesAccurateMatch || state.accurateMatch;
+  elements.accurateMatchToggle.disabled = profileIncludesAccurateMatch;
+  elements.accurateMatchToggle.closest(".mini-check")?.classList.toggle("is-disabled", profileIncludesAccurateMatch);
+  elements.accurateMatchToggle.title = profileIncludesAccurateMatch ? "照片原色已内置精准匹配" : "";
   elements.colorDebugToggle.checked = state.colorDebugEnabled;
   elements.colorDebugInfo.textContent =
-    state.accurateMatch
+    profileIncludesAccurateMatch
+      ? `照片原色已内置原图 + ${PALETTE_NAME} LAB/DeltaE 精准匹配；其余设置仍会更新当前预览。`
+      : state.accurateMatch
       ? `当前以原图 + ${PALETTE_NAME} LAB/DeltaE 精准匹配为基础；所有设置更新同一张预览。`
       : "当前使用兼容匹配；所有设置更新同一张预览。";
 }
@@ -3191,6 +3227,8 @@ async function restoreProjectData(projectData, options = {}) {
     state.mergeSimilarColors = settings.mergeSimilarColors !== false;
     state.cleanSmallRegions = settings.cleanIsolatedPixels !== false;
     state.animeMode = settings.animeMode !== false;
+    state.minRegionSizeBeforeAnime = null;
+    state.animeAdjustedMinRegionSize = null;
     state.dither = Boolean(settings.ditherEnabled);
     state.removeTransparent = settings.removeTransparent !== false;
     state.fitMode = settings.fitMode || "subject";
@@ -4441,7 +4479,7 @@ async function buildPatternResultFromImage() {
     pixels,
     size,
     limitedPalette,
-    !(state.accurateMatch || state.processingProfile === "photoColor"),
+    true,
   );
 
   if (state.processingProfile === "photoColor") {
@@ -4762,6 +4800,38 @@ function restorePreviewCanvasSnapshot() {
   return true;
 }
 
+function currentConversionPreviewSignature() {
+  const sortedCodes = (codes) => [...codes].sort();
+  return JSON.stringify({
+    imageProcessingRevision,
+    gridSize: state.gridSize,
+    gridWidth: activeGridWidth(),
+    gridHeight: activeGridHeight(),
+    patternMode: state.patternMode,
+    processingProfile: state.processingProfile,
+    colorLimit: state.colorLimit,
+    colorMode: state.colorMode,
+    allowedColorCodes: sortedCodes(state.allowedColorCodes),
+    lockedColorCodes: sortedCodes(state.lockedColorCodes),
+    disabledColorCodes: sortedCodes(state.disabledColorCodes),
+    pixelBackground: state.pixelBackground,
+    fitMode: state.fitMode,
+    dither: state.dither,
+    removeTransparent: state.removeTransparent,
+    lineBoost: state.lineBoost,
+    outlineMode: state.outlineMode,
+    dominantSampling: state.dominantSampling,
+    mergeSimilarColors: state.mergeSimilarColors,
+    cleanSmallRegions: state.cleanSmallRegions,
+    animeMode: state.animeMode,
+    minRegionSize: state.minRegionSize,
+    mergeBoost: state.mergeBoost,
+    accurateMatch: state.accurateMatch,
+    localPreprocessSettings: state.localPreprocessSettings,
+    editGridVersion: state.editGridVersion,
+  });
+}
+
 function clearPreviewState(options = {}) {
   if (options.restoreCanvas) restorePreviewCanvasSnapshot();
   else state.previewCanvasSnapshot = null;
@@ -4771,6 +4841,7 @@ function clearPreviewState(options = {}) {
   state.previewBackgroundMask = null;
   state.previewPreservesManualEdits = false;
   state.isPreviewDirty = false;
+  pendingPreviewRequestSignature = "";
   if (options.syncControls !== false) updatePreviewButtons();
 }
 
@@ -4786,6 +4857,7 @@ function setPendingPreview(pattern, options = {}) {
   state.previewPreservesManualEdits = Boolean(options.preservesManualEdits);
   state.previewGridVersion += 1;
   state.isPreviewDirty = preview.length > 0;
+  pendingPreviewRequestSignature = options.signature || "";
   state.patternSize = size;
   updatePreviewButtons();
   return preview;
@@ -4798,18 +4870,39 @@ function renderPendingPreview() {
 }
 
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
+  const hadScheduledColorLimitPreview = colorLimitPreviewTimer !== null;
+  if (hadScheduledColorLimitPreview) {
+    window.clearTimeout(colorLimitPreviewTimer);
+    colorLimitPreviewTimer = null;
+  }
+  const requestSignature = currentConversionPreviewSignature();
+  if (state.isProcessingPattern && activePreviewRequestSignature === requestSignature) return true;
+  if (state.isPreviewDirty && state.previewPattern.length && pendingPreviewRequestSignature === requestSignature) {
+    elements.cellInfo.textContent = message;
+    return true;
+  }
+  const hadProcessingRequest = state.isProcessingPattern;
   const requestVersion = ++previewUpdateVersion;
+  activePreviewRequestSignature = requestSignature;
   cancelPendingPaletteWorkerRequests();
   setPatternProcessingBusy(true);
   try {
     let result = null;
-    if (options.backgroundOnly && state.pattern.length) {
-      const mask = state.backgroundMask || computeBackgroundMask(state.pattern, state.pattern, state.gridSize, true);
+    const hasPendingBase = state.isPreviewDirty && state.previewPattern.length;
+    const backgroundBase = hasPendingBase ? state.previewPattern : state.pattern;
+    const canReuseBackgroundBase =
+      options.backgroundOnly &&
+      backgroundBase.length &&
+      !hadProcessingRequest &&
+      !hadScheduledColorLimitPreview;
+    if (canReuseBackgroundBase) {
+      const existingMask = hasPendingBase ? state.previewBackgroundMask : state.backgroundMask;
+      const mask = existingMask || computeBackgroundMask(backgroundBase, backgroundBase, state.gridSize, true);
       result = {
-        pattern: validateColorConstraints(applyBackgroundModeToGrid(state.pattern, mask, state.pixelBackground)),
+        pattern: validateColorConstraints(applyBackgroundModeToGrid(backgroundBase, mask, state.pixelBackground)),
         backgroundMask: mask,
         size: state.gridSize,
-        preservesManualEdits: true,
+        preservesManualEdits: hasPendingBase ? state.previewPreservesManualEdits : true,
       };
     } else {
       result = await buildPatternResultFromImage();
@@ -4831,6 +4924,7 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
       backgroundMask: result.backgroundMask,
       preservesManualEdits: result.preservesManualEdits,
       size: result.size,
+      signature: requestSignature,
     });
     renderPendingPreview();
     elements.projectMeta.textContent = `预览 / ${gridDimensionsLabel()} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
@@ -4844,7 +4938,10 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
     elements.cellInfo.textContent = `生成预览失败：${error.message || error}`;
     return false;
   } finally {
-    if (requestVersion === previewUpdateVersion) setPatternProcessingBusy(false);
+    if (requestVersion === previewUpdateVersion) {
+      activePreviewRequestSignature = "";
+      setPatternProcessingBusy(false);
+    }
   }
 }
 
@@ -5004,7 +5101,7 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
 }
 
 function usesEmptyBackground() {
-  return state.pixelBackground !== "white" && (state.patternMode === "pixelPattern" || state.gridSize === 48 || state.gridSize === 64);
+  return state.pixelBackground !== "white";
 }
 
 function eraserFillColor() {
@@ -6502,12 +6599,14 @@ function ensureUsableAllowedPalette() {
 function applyConstraintChange() {
   renderConstraintPalette();
   updateSelectedColorUi();
-  const base = state.pattern.length ? state.pattern : state.previewPattern;
+  const hasPendingBase = state.isPreviewDirty && state.previewPattern.length;
+  const base = hasPendingBase ? state.previewPattern : state.pattern;
   if (base.length) {
     setPendingPreview(validateColorConstraints(base), {
-      backgroundMask: state.backgroundMask,
-      preservesManualEdits: state.isPreviewDirty && state.previewPreservesManualEdits,
+      backgroundMask: hasPendingBase ? state.previewBackgroundMask : state.backgroundMask,
+      preservesManualEdits: hasPendingBase ? state.previewPreservesManualEdits : true,
       size: state.gridSize,
+      signature: currentConversionPreviewSignature(),
     });
     renderPendingPreview();
     elements.cellInfo.textContent = "颜色约束预览已更新，请确认应用。";
