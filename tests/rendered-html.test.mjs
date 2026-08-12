@@ -52,17 +52,18 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
   assert.match(html, /sampling-utils\.js\?v=20260730-1/);
   assert.match(html, /quality-utils\.js\?v=20260730-1/);
-  assert.match(html, /color-postprocess\.js\?v=20260731-1/);
-  assert.match(html, /canvas-renderer\.js\?v=20260812-1/);
+  assert.match(html, /color-postprocess\.js\?v=20260812-2/);
+  assert.match(html, /canvas-renderer\.js\?v=20260812-3/);
+  assert.match(html, /local-edit-utils\.js\?v=20260812-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
   assert.match(html, /project-store\.js\?v=20260730-1/);
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260812-1/);
-  assert.match(html, /history-utils\.js\?v=20260730-1/);
-  assert.match(html, /styles\.css\?v=20260810-1/);
-  assert.match(html, /mobile-layout\.css\?v=20260810-1/);
+  assert.match(html, /history-utils\.js\?v=20260812-1/);
+  assert.match(html, /styles\.css\?v=20260813-1/);
+  assert.match(html, /mobile-layout\.css\?v=20260813-2/);
   assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
-  assert.match(html, /app\.js\?v=20260812-2/);
+  assert.match(html, /app\.js\?v=20260813-2/);
   assert.match(html, /<option value="png" selected>PNG 高清图片<\/option>/);
   assert.match(html, /id="mobileReferenceControlsButton"/);
   assert.match(html, /id="mobileCanvasPanButton"/);
@@ -153,7 +154,10 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /data-crop-ratio="free"/);
   assert.match(html, /data-crop-ratio="1\.777778"/);
   assert.match(html, /id="colorLimit"[^>]+type="range"[^>]+value="24"/);
-  assert.match(html, /id="colorLimitValue"[^>]*>24 色<\/output>/);
+  assert.match(html, /id="colorLimitNumber"[^>]+type="number"[^>]+value="24"/);
+  assert.match(html, /id="transformColorPanelMount"/);
+  assert.match(html, /id="statsColorPanelMount"/);
+  assert.match(html, /双击或右键锁定/);
   assert.doesNotMatch(html, /id="customColorLimitInput"/);
   assert.doesNotMatch(html, /id="applyCustomColorLimitButton"/);
   assert.match(html, /支持 PNG \/ JPG，上传后先裁剪/);
@@ -179,6 +183,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     qualityUtilsResponse,
     colorPostprocessResponse,
     canvasRendererResponse,
+    localEditUtilsResponse,
     projectCodecResponse,
     projectStoreResponse,
     pdfUtilsResponse,
@@ -200,6 +205,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/quality-utils.js"),
       fetchFromWorker("/color-postprocess.js"),
       fetchFromWorker("/canvas-renderer.js"),
+      fetchFromWorker("/local-edit-utils.js"),
       fetchFromWorker("/project-codec.js"),
       fetchFromWorker("/project-store.js"),
       fetchFromWorker("/pdf-utils.js"),
@@ -221,6 +227,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(qualityUtilsResponse.status, 200);
   assert.equal(colorPostprocessResponse.status, 200);
   assert.equal(canvasRendererResponse.status, 200);
+  assert.equal(localEditUtilsResponse.status, 200);
   assert.equal(projectCodecResponse.status, 200);
   assert.equal(projectStoreResponse.status, 200);
   assert.equal(pdfUtilsResponse.status, 200);
@@ -241,6 +248,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   const qualityUtils = await qualityUtilsResponse.text();
   const colorPostprocess = await colorPostprocessResponse.text();
   const canvasRenderer = await canvasRendererResponse.text();
+  const localEditUtils = await localEditUtilsResponse.text();
   const projectCodec = await projectCodecResponse.text();
   const projectStore = await projectStoreResponse.text();
   const pdfUtils = await pdfUtilsResponse.text();
@@ -257,6 +265,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /const qualityUtils = window\.XiaomaiQualityUtils/);
   assert.match(script, /const colorPostprocessApi = window\.XiaomaiColorPostprocess/);
   assert.match(script, /const canvasRenderer = window\.XiaomaiCanvasRenderer/);
+  assert.match(script, /const localEditUtils = window\.XiaomaiLocalEditUtils/);
   assert.match(script, /const projectCodec = window\.XiaomaiProjectCodec/);
   assert.match(script, /const projectStoreApi = window\.XiaomaiProjectStore/);
   assert.match(script, /const pdfUtils = window\.XiaomaiPdfUtils/);
@@ -271,6 +280,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(qualityUtils, /global\.XiaomaiQualityUtils = Object\.freeze/);
   assert.match(colorPostprocess, /global\.XiaomaiColorPostprocess = Object\.freeze/);
   assert.match(canvasRenderer, /global\.XiaomaiCanvasRenderer = Object\.freeze/);
+  assert.match(localEditUtils, /global\.XiaomaiLocalEditUtils = Object\.freeze/);
   assert.doesNotMatch(script, /function mergeSimilarUsedColors\(/);
   assert.match(colorPostprocess, /function mergeSimilarUsedColors\(/);
   assert.match(projectCodec, /global\.XiaomaiProjectCodec = Object\.freeze/);
@@ -349,7 +359,8 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(script, /state\.manualEditCount = state\.manualEditedCells\.size/);
   assert.match(script, /state\.colorMode = paletteState\.colorConstraintMode === "fixedPalette" \? "fixedPalette" : "max"/);
   const targetLimitSource = script.slice(script.indexOf("function targetColorLimit"), script.indexOf("function isColorLocked"));
-  assert.match(targetLimitSource, /state\.processingProfile === "photoColor"\) return palette\.length/);
+  assert.doesNotMatch(targetLimitSource, /state\.processingProfile === "photoColor"\) return palette\.length/);
+  assert.match(targetLimitSource, /preferLockedTargets: state\.processingProfile === "photoColor"/);
   assert.doesNotMatch(script, /function drawReadableExportWatermark\(/);
   assert.match(exportRenderer, /function drawReadableExportWatermark\(/);
   assert.match(exportRenderer, /const maxLegendRows = 45/);
@@ -419,7 +430,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.match(colorPostprocess, /while \(counts\.size > maxColors && guard < 1000\)/);
   assert.match(
     script,
-    /processed = repairOutlines\(processed, size, outlineStrengthForSize\(\)\);\s*processed = forceMaxColors\(processed, size, targetColorLimit\(\)\);/,
+    /processed = repairOutlines\(processed, size, outlineStrengthForSize\(\)\);\s*processed = forceMaxColors\(processed, size, targetColorLimit\(\), lockedColorConvergenceOptions\(\)\);/,
   );
   assert.doesNotMatch(script, /wechat-custom-order/);
   assert.doesNotMatch(script, /loadExportAdImage/);

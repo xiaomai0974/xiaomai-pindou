@@ -228,7 +228,7 @@
       return processed;
     }
 
-    function forceMaxColors(pattern, size, maxColors) {
+    function forceMaxColors(pattern, size, maxColors, options = {}) {
       let processed = [...pattern];
       let counts = buildCounts(processed);
       if (counts.size <= maxColors) return processed;
@@ -238,7 +238,24 @@
         ...outlineColorCodes(processed, size),
       ]);
       const hardProtectedCodes = new Set([...backgroundColorCodes(), ...getLockedColorCodes()]);
+      const preferredLockedTargets = (Array.isArray(options.preferredLockedTargets) ? options.preferredLockedTargets : [])
+        .filter((color) => color && getLockedColorCodes().has(color.code));
+      const preferLockedTargets = options.preferLockedTargets === true && preferredLockedTargets.length > 0;
       const detailProfile = getProcessingProfile() === "detail64";
+
+      function mergeTargetFor(source, colors) {
+        if (preferLockedTargets) {
+          const lockedTarget = nearestColorFromList(
+            source,
+            preferredLockedTargets.filter((item) => item.code !== source.code),
+          );
+          if (lockedTarget) return lockedTarget;
+        }
+        const available = colors.filter((item) => item.code !== source.code);
+        const sameFamily = available.filter((item) => colorFamily(item) === colorFamily(source));
+        return nearestColorFromList(source, sameFamily.length ? sameFamily : available);
+      }
+
       let guard = 0;
       while (counts.size > maxColors && guard < 500) {
         guard += 1;
@@ -252,14 +269,11 @@
         for (const candidateSource of colors) {
           if (hardProtectedCodes.has(candidateSource.code) || isColorLocked(candidateSource)) continue;
           const sameFamily = colors.filter((item) => item.code !== candidateSource.code && colorFamily(item) === colorFamily(candidateSource));
-          const candidateTarget = nearestColorFromList(
-            candidateSource,
-            sameFamily.length ? sameFamily : colors.filter((item) => item.code !== candidateSource.code),
-          );
+          const candidateTarget = mergeTargetFor(candidateSource, colors);
           if (!candidateTarget) continue;
           const mergeDistance = colorDistance(candidateSource, candidateTarget);
-          if (softProtectedCodes.has(candidateSource.code) && mergeDistance > (detailProfile ? 14 : 24)) continue;
-          if (detailProfile && !sameFamily.length && mergeDistance > 18) continue;
+          if (!preferLockedTargets && softProtectedCodes.has(candidateSource.code) && mergeDistance > (detailProfile ? 14 : 24)) continue;
+          if (!preferLockedTargets && detailProfile && !sameFamily.length && mergeDistance > 18) continue;
           source = candidateSource;
           target = candidateTarget;
           break;
@@ -280,9 +294,7 @@
             return pa - pb || a.count - b.count || colorLuminance(a) - colorLuminance(b);
           })[0];
         if (!source) break;
-        const targets = colors.filter((item) => item.code !== source.code);
-        const sameFamily = targets.filter((item) => colorFamily(item) === colorFamily(source));
-        const target = nearestColorFromList(source, sameFamily.length ? sameFamily : targets);
+        const target = mergeTargetFor(source, colors);
         if (!target) break;
         processed = processed.map((item) => (item.code === source.code ? target : item));
         counts = buildCounts(processed);

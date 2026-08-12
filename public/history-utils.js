@@ -64,6 +64,7 @@
       a.selectedColorCode === b.selectedColorCode &&
       sameHistoryPatternData(a, b) &&
       sameHistorySet(a.manualEditedCells || [], b.manualEditedCells || []) &&
+      sameHistorySet(a.protectedCells || [], b.protectedCells || []) &&
       sameHistorySet(a.lockedColorCodes || [], b.lockedColorCodes || []) &&
       sameHistorySet(a.allowedColorCodes || [], b.allowedColorCodes || []) &&
       sameHistorySet(a.disabledColorCodes || [], b.disabledColorCodes || []) &&
@@ -86,6 +87,7 @@
     bytes += (snapshot.codebook || []).reduce((total, code) => total + String(code || "").length * 2 + 4, 0);
     for (const key of [
       "manualEditedCells",
+      "protectedCells",
       "lockedColorCodes",
       "allowedColorCodes",
       "disabledColorCodes",

@@ -308,6 +308,15 @@
     scroll-padding-bottom: calc(44dvh + env(safe-area-inset-bottom, 0px));
   }
 
+  body.is-mobile-layout .stats-color-panel.is-transform-color-panel .constraint-palette {
+    max-height: min(17dvh, 145px);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  body.is-mobile-layout .stats-color-panel.is-transform-color-panel .constraint-chip {
+    min-height: 38px;
+  }
+
   body.is-mobile-layout[data-workbench-mode="edit"] .workspace {
     position: fixed;
     top: 52px;
@@ -788,7 +797,7 @@
     display: grid;
     grid-column: 1 / -1;
     grid-row: 1;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
     gap: 1px;
     border-bottom: 1px solid #ededed;
   }
@@ -831,15 +840,16 @@
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="brush"] { order: 1; }
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="eraser"] { order: 2; }
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="eyedropper"] { order: 3; }
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="pen"] { order: 4; }
-  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="rect"] { order: 5; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="protect"] { order: 4; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="pen"] { order: 5; }
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="rect"] { order: 6; }
 
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel .canvas-tool[data-tool="sameColor"] {
     display: none;
   }
 
   body.is-mobile-layout[data-workbench-mode="edit"] .mobile-confirm-selection-button {
-    order: 6;
+    order: 7;
     display: grid !important;
   }
 
@@ -867,6 +877,10 @@
   body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .brush-options,
   body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .symmetry-options,
   body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .tool-advanced-actions {
+    display: none;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .tool-properties-popover .local-edit-actions {
     display: none;
   }
 
@@ -1003,6 +1017,10 @@
     display: block;
   }
 
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-properties-popover .local-edit-actions {
+    display: block;
+  }
+
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open #toolColorSearchInput,
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open .tool-color-picker > small {
     display: block;
@@ -1049,6 +1067,43 @@
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .symmetry-options,
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .tool-advanced-actions {
     display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .local-edit-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="paintColor"] .local-edit-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="color"] .local-edit-actions {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .tool-panel-current-color,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .tool-color-picker,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .brush-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .symmetry-options,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .tool-advanced-actions {
+    display: none !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .local-edit-actions,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .local-edit-actions {
+    display: block !important;
+    height: auto !important;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .local-edit-actions > :not(summary),
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .local-edit-actions > :not(summary) {
+    display: revert;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .local-edit-actions > .protection-status,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .local-edit-actions > .local-edit-button-grid,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .local-edit-actions > .protection-status,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .local-edit-actions > .local-edit-button-grid {
+    display: grid;
+  }
+
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="local"] .local-edit-actions > summary,
+  body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="selection"] .local-edit-actions > summary {
+    display: none;
   }
 
   body.is-mobile-layout[data-workbench-mode="edit"] .edit-tool-panel.is-properties-open[data-mobile-menu="brush"] .brush-options {

@@ -285,6 +285,7 @@
   function drawSelectionOverlay(ctx, options) {
     const {
       selection,
+      protectedCells = new Set(),
       penPoints,
       stride,
       plot,
@@ -294,6 +295,35 @@
     const cell = plot.cell;
 
     ctx.save();
+    ctx.strokeStyle = "rgba(8,145,178,0.9)";
+    ctx.lineWidth = Math.max(1, cell * 0.08);
+    for (const index of protectedCells) {
+      const x = index % stride;
+      const y = Math.floor(index / stride);
+      if (!isActiveCell(x, y)) continue;
+      if (bounds && (x < bounds.minX || x > bounds.maxX || y < bounds.minY || y > bounds.maxY)) continue;
+      const cellX = plot.gridX + x * cell;
+      const cellY = plot.gridY + y * cell;
+      ctx.beginPath();
+      if (!protectedCells.has(index - stride) || y === 0) {
+        ctx.moveTo(cellX + 1, cellY + 1);
+        ctx.lineTo(cellX + cell - 1, cellY + 1);
+      }
+      if (!protectedCells.has(index + 1) || x + 1 >= plot.widthCells) {
+        ctx.moveTo(cellX + cell - 1, cellY + 1);
+        ctx.lineTo(cellX + cell - 1, cellY + cell - 1);
+      }
+      if (!protectedCells.has(index + stride) || y + 1 >= plot.heightCells) {
+        ctx.moveTo(cellX + cell - 1, cellY + cell - 1);
+        ctx.lineTo(cellX + 1, cellY + cell - 1);
+      }
+      if (!protectedCells.has(index - 1) || x === 0) {
+        ctx.moveTo(cellX + 1, cellY + cell - 1);
+        ctx.lineTo(cellX + 1, cellY + 1);
+      }
+      ctx.stroke();
+    }
+
     ctx.fillStyle = "rgba(232, 59, 100, 0.22)";
     ctx.strokeStyle = "#e83b64";
     ctx.lineWidth = Math.max(1, cell * 0.12);

@@ -69,6 +69,15 @@ const {
   planSelectionRotate,
 } = editorClipboard;
 
+const localEditUtils = window.XiaomaiLocalEditUtils;
+if (!localEditUtils) {
+  throw new Error("局部编辑优化模块加载失败，请刷新页面后重试。");
+}
+const {
+  buildSuspectColorReview,
+  optimizeSelection,
+} = localEditUtils;
+
 const imageUtils = window.XiaomaiImageUtils;
 if (!imageUtils) {
   throw new Error("图片工具模块加载失败，请刷新页面后重试。");
@@ -383,6 +392,8 @@ const state = {
   previewQualityMetrics: null,
   previewBackgroundMask: null,
   previewPreservesManualEdits: false,
+  previewKind: "conversion",
+  previewChangedIndexes: [],
   previewCanvasSnapshot: null,
   rawMappedGrid: [],
   rawSampleData: [],
@@ -399,6 +410,10 @@ const state = {
   previewGridVersion: 0,
   manualEditCount: 0,
   manualEditedCells: new Set(),
+  protectedCells: new Set(),
+  protectionMode: "add",
+  colorReviewItems: [],
+  colorReviewGridVersion: -1,
   patternSize: 64,
   counts: new Map(),
   projectPalette: [],
@@ -560,7 +575,7 @@ const elements = {
   colorLabel: document.querySelector("#colorLabel"),
   fitModeLabel: document.querySelector("#fitModeLabel"),
   colorLimit: document.querySelector("#colorLimit"),
-  colorLimitValue: document.querySelector("#colorLimitValue"),
+  colorLimitNumber: document.querySelector("#colorLimitNumber"),
   customSizeInput: document.querySelector("#customSizeInput"),
   customHeightInput: document.querySelector("#customHeightInput"),
   applyCustomSizeButton: document.querySelector("#applyCustomSizeButton"),
@@ -657,6 +672,14 @@ const elements = {
   mobileReplaceColorInput: document.querySelector("#mobileReplaceColorInput"),
   mobileReplaceColorButton: document.querySelector("#mobileReplaceColorButton"),
   mobileColorLockButton: document.querySelector("#mobileColorLockButton"),
+  protectedCellCount: document.querySelector("#protectedCellCount"),
+  protectSelectionButton: document.querySelector("#protectSelectionButton"),
+  unprotectSelectionButton: document.querySelector("#unprotectSelectionButton"),
+  previewSelectionOptimizeButton: document.querySelector("#previewSelectionOptimizeButton"),
+  reviewSuspectColorsButton: document.querySelector("#reviewSuspectColorsButton"),
+  colorReviewPanel: document.querySelector("#colorReviewPanel"),
+  colorReviewSummary: document.querySelector("#colorReviewSummary"),
+  colorReviewList: document.querySelector("#colorReviewList"),
   brushSizeInput: document.querySelector("#brushSizeInput"),
   brushShapeSelect: document.querySelector("#brushShapeSelect"),
   symmetryModeSelect: document.querySelector("#symmetryModeSelect"),
@@ -993,8 +1016,15 @@ function targetColorLimit() {
   if (state.colorMode === "fixedPalette") {
     return Math.min(effectiveAllowedPalette().length, Math.max(state.colorLimit, lockedCount));
   }
-  if (state.processingProfile === "photoColor") return palette.length;
   return Math.min(palette.length, Math.max(state.colorLimit, lockedCount));
+}
+
+function lockedColorConvergenceOptions() {
+  const preferredLockedTargets = paletteByCodes(state.lockedColorCodes);
+  return {
+    preferLockedTargets: state.processingProfile === "photoColor" && preferredLockedTargets.length > 0,
+    preferredLockedTargets,
+  };
 }
 
 function isColorLocked(colorOrCode) {
@@ -1416,6 +1446,13 @@ function setupEvents() {
   elements.uploadZone.addEventListener("drop", handleDrop);
   elements.colorLimit.addEventListener("input", handleColorLimitChange);
   elements.colorLimit.addEventListener("change", flushColorLimitPreview);
+  elements.colorLimitNumber?.addEventListener("input", handleColorLimitNumberInput);
+  elements.colorLimitNumber?.addEventListener("change", commitColorLimitNumber);
+  elements.colorLimitNumber?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    commitColorLimitNumber();
+  });
   elements.applyCustomSizeButton.addEventListener("click", applyCustomSize);
   elements.applyUploadSizeButton?.addEventListener("click", applyUploadSize);
   elements.customSizeInput.addEventListener("keydown", (event) => {
@@ -1866,6 +1903,14 @@ function setupEvents() {
   elements.patternCanvas.addEventListener("click", handleCanvasClick);
   elements.mobileReplaceColorButton?.addEventListener("click", applyMobileColorReplacement);
   elements.mobileColorLockButton?.addEventListener("click", toggleMobileColorLock);
+  document.querySelectorAll(".protection-mode-button").forEach((button) => {
+    button.addEventListener("click", () => setProtectionMode(button.dataset.protectionMode));
+  });
+  elements.protectSelectionButton?.addEventListener("click", () => setSelectionProtection(true));
+  elements.unprotectSelectionButton?.addEventListener("click", () => setSelectionProtection(false));
+  elements.previewSelectionOptimizeButton?.addEventListener("click", previewSelectionOptimization);
+  elements.reviewSuspectColorsButton?.addEventListener("click", reviewSuspectColors);
+  elements.colorReviewList?.addEventListener("click", handleColorReviewAction);
   elements.mobileReplaceColorInput?.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
     event.preventDefault();
@@ -1888,6 +1933,10 @@ function setupEvents() {
       state.gridSize = nextSize;
       state.gridWidth = nextSize;
       state.gridHeight = nextSize;
+      state.protectedCells = new Set();
+      state.colorReviewItems = [];
+      state.colorReviewGridVersion = -1;
+      updateProtectionUi();
       elements.sizeLabel.textContent = gridDimensionsLabel();
       if (state.patternMode === "pixelPattern") {
         applyPixelSizeDefaults(true);
@@ -2102,7 +2151,6 @@ function setupWorkbenchLayout() {
   const statsDiagnosticTools = statsPanel?.querySelector(".color-diagnostic-tools");
   if (statsSearchTools) {
     statsSearchTools.classList.add("stats-search-tools");
-    statsTabs[0]?.closest(".stats-tabs")?.insertAdjacentElement("afterend", statsSearchTools);
   }
   if (statsDiagnosticTools) {
     statsDiagnosticTools.classList.add("stats-footer-tools");
@@ -2248,6 +2296,7 @@ function setWorkbenchMode(mode, options = {}) {
     setFocusCanvasMode(false, { fit: false });
   }
   document.body.dataset.workbenchMode = mode;
+  syncConstraintPalettePlacement(mode);
   document.querySelectorAll(".workbench-mode-button").forEach((button) => {
     const active = button.dataset.workbenchMode === mode;
     button.classList.toggle("is-active", active);
@@ -2332,6 +2381,25 @@ function handleColorLimitChange() {
   scheduleColorLimitPreview();
 }
 
+function handleColorLimitNumberInput() {
+  const rawValue = elements.colorLimitNumber?.value.trim();
+  if (!rawValue) return;
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return;
+  setColorLimit(value, false);
+  scheduleColorLimitPreview();
+}
+
+function commitColorLimitNumber() {
+  const value = Number(elements.colorLimitNumber?.value);
+  if (!Number.isFinite(value)) {
+    syncColorLimitControls();
+    return;
+  }
+  setColorLimit(value, false);
+  flushColorLimitPreview();
+}
+
 function scheduleColorLimitPreview() {
   window.clearTimeout(colorLimitPreviewTimer);
   colorLimitPreviewTimer = window.setTimeout(() => {
@@ -2367,6 +2435,10 @@ function applyCustomSize() {
   state.gridWidth = clampRange(width, 16, 160);
   state.gridHeight = clampRange(height, 16, 160);
   state.gridSize = Math.max(state.gridWidth, state.gridHeight);
+  state.protectedCells = new Set();
+  state.colorReviewItems = [];
+  state.colorReviewGridVersion = -1;
+  updateProtectionUi();
   state.traceReference.x = null;
   state.traceReference.y = null;
   state.traceReference.scale = 1;
@@ -2412,17 +2484,23 @@ function setColorLimit(value, regenerate = true) {
 
 function syncColorLimitControls() {
   const max = palette.length;
-  const usesFullPalette = state.processingProfile === "photoColor";
+  elements.colorLimit.min = 1;
   elements.colorLimit.max = max;
   elements.colorLimit.value = state.colorLimit;
-  elements.colorLimit.disabled = usesFullPalette;
-  elements.colorLimit.title = usesFullPalette ? "照片原色固定使用完整色板；切换到精简或细节策略后可限制颜色数。" : "";
-  elements.colorLimitValue.textContent = usesFullPalette ? `全色 ${max}` : `${state.colorLimit} 色`;
-  elements.colorLabel.textContent = usesFullPalette ? `${max} / ${max} 色` : `${state.colorLimit} / ${max} 色`;
+  elements.colorLimit.disabled = false;
+  elements.colorLimit.title = state.processingProfile === "photoColor"
+    ? "照片原色先精准匹配，再按此数量收敛；锁定颜色优先保留。"
+    : "";
+  if (elements.colorLimitNumber) {
+    elements.colorLimitNumber.min = 1;
+    elements.colorLimitNumber.max = max;
+    elements.colorLimitNumber.value = state.colorLimit;
+  }
+  elements.colorLabel.textContent = `${state.colorLimit} / ${max} 色`;
   document.querySelectorAll(".color-preset").forEach((button) => {
     button.classList.toggle("is-active", Number(button.dataset.colors) === state.colorLimit);
-    button.disabled = usesFullPalette;
-    button.title = usesFullPalette ? "照片原色固定使用完整色板" : "";
+    button.disabled = false;
+    button.title = "";
   });
 }
 
@@ -2524,16 +2602,21 @@ function createBlankCanvas(options = {}) {
   state.counts = buildCounts(state.pattern);
   state.projectPalette = fill.empty ? [] : [fill];
   state.recentColorCodes = [];
+  clearColorDiagnostics();
   state.backgroundMask = new Uint8Array(state.pattern.length);
   clearPreviewState();
   state.hasConfirmedGrid = true;
   state.manualEditedCells = new Set();
+  state.protectedCells = new Set();
+  state.colorReviewItems = [];
+  state.colorReviewGridVersion = -1;
   state.manualEditCount = 0;
   state.fileName = state.fileName || "手绘图纸";
   state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.editGridVersion += 1;
   updateHistoryButtons();
+  updateProtectionUi();
   updateSelectedColorUi();
   renderPattern();
   renderStats();
@@ -2577,7 +2660,11 @@ function recommendedProcessingProfile(size = state.gridSize) {
 
 function setProcessingProfile(profile, options = {}) {
   const { regenerate = true } = options;
+  const previousProfile = state.processingProfile;
   state.processingProfile = ["compact48", "detail64", "photoColor"].includes(profile) ? profile : "compact48";
+  if (state.processingProfile === "photoColor" && previousProfile !== "photoColor") {
+    state.colorLimit = palette.length;
+  }
   syncProcessingProfileControls();
   syncControlsFromState();
   if (regenerate && state.image) {
@@ -2592,7 +2679,7 @@ function syncProcessingProfileControls() {
   if (elements.processingProfileLabel) elements.processingProfileLabel.textContent = photo ? "照片原色" : detail ? "64+ 细节版" : "48 精简版";
   if (elements.processingProfileHint) {
     elements.processingProfileHint.textContent = photo
-      ? "高保真映射并轻度整理近色与孤点；不限制总颜色，不做全局色系压缩。"
+      ? "先用完整色板高保真匹配，再按颜色上限收敛；锁定色会作为优先保留的目标色。"
       : detail
       ? "轻度清理，保留更多明暗层次、小装饰和结构细节。"
       : "强收敛杂色，突出轮廓与远看识别度。";
@@ -2606,7 +2693,6 @@ function applyPixelSizeDefaults(updateColor = true) {
   if (state.processingProfile !== "photoColor") state.processingProfile = recommendedProcessingProfile();
   if (state.processingProfile === "photoColor") {
     state.minRegionSize = 2;
-    if (updateColor) setColorLimit(palette.length, false);
     return;
   }
   state.minRegionSize = state.gridSize <= 34 ? 1 : state.gridSize <= 48 ? 3 : 2;
@@ -2619,7 +2705,6 @@ function applySizePresetDefaults(updateColor = true) {
   if (state.processingProfile !== "photoColor") state.processingProfile = recommendedProcessingProfile();
   if (state.processingProfile === "photoColor") {
     state.minRegionSize = 2;
-    if (updateColor) setColorLimit(palette.length, false);
     return;
   }
   if (state.gridSize <= 48) {
@@ -2978,7 +3063,10 @@ function buildProjectData() {
       backgroundMask: maskToArray(state.backgroundMask),
       previewBackgroundMask: maskToArray(state.previewBackgroundMask),
       isPreviewDirty: state.isPreviewDirty,
+      previewKind: state.previewKind,
+      previewChangedIndexes: [...state.previewChangedIndexes],
       manualEditedCells: [...state.manualEditedCells],
+      protectedCells: [...state.protectedCells],
     },
     paletteState: {
       paletteName: PALETTE_NAME,
@@ -3195,11 +3283,21 @@ async function restoreProjectData(projectData, options = {}) {
     state.backgroundMask = arrayToMask(gridState.backgroundMask, state.pattern.length);
     state.previewBackgroundMask = arrayToMask(gridState.previewBackgroundMask, state.previewPattern.length);
     state.isPreviewDirty = Boolean(gridState.isPreviewDirty && state.previewPattern.length);
+    state.previewKind = gridState.previewKind === "selectionOptimize" ? "selectionOptimize" : "conversion";
+    state.previewChangedIndexes = (Array.isArray(gridState.previewChangedIndexes) ? gridState.previewChangedIndexes : [])
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < expectedGridLength);
     state.manualEditedCells = new Set(
       (Array.isArray(gridState.manualEditedCells) ? gridState.manualEditedCells : []).filter(
         (index) => Number.isInteger(index) && index >= 0 && index < expectedGridLength,
       ),
     );
+    state.protectedCells = new Set(
+      (Array.isArray(gridState.protectedCells) ? gridState.protectedCells : []).filter(
+        (index) => Number.isInteger(index) && index >= 0 && index < expectedGridLength,
+      ),
+    );
+    state.colorReviewItems = [];
+    state.colorReviewGridVersion = -1;
     state.manualEditCount = state.manualEditedCells.size;
 
     state.colorLimit = clampColorLimit(paletteState.maxColors || state.colorLimit);
@@ -3309,6 +3407,7 @@ async function restoreProjectData(projectData, options = {}) {
     syncControlsFromState();
     syncColorLimitControls();
     updateSelectedColorUi();
+    updateProtectionUi();
     updatePreviewButtons();
     updateHistoryButtons();
     updateGridLockUi();
@@ -3798,6 +3897,9 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.penPoints = [];
     state.pattern = [];
     clearPreviewState();
+    state.protectedCells = new Set();
+    state.colorReviewItems = [];
+    state.colorReviewGridVersion = -1;
     state.backgroundMask = null;
     state.hasConfirmedGrid = false;
     state.editGridVersion = 0;
@@ -3815,6 +3917,7 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     elements.referenceStatus.textContent = state.referenceName;
     fitTraceReferenceToCanvas();
     syncControlsFromState();
+    updateProtectionUi();
     renderPattern();
     markProjectDirty();
     window.setTimeout(generatePattern, 20);
@@ -4566,7 +4669,7 @@ function finalizePhotoColorMatch(pattern, pixels, size) {
     processed = convergeOutlineColors(processed, size);
   }
   processed = repairOutlines(processed, size, outlineStrengthForSize());
-  processed = forceMaxColors(processed, size, targetColorLimit());
+  processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
   return {
     pattern: validateColorConstraints(processed),
     backgroundMask,
@@ -4808,6 +4911,16 @@ function restorePreviewCanvasSnapshot() {
   return true;
 }
 
+function syncConstraintPalettePlacement(mode = document.body.dataset.workbenchMode) {
+  const panel = document.querySelector(".stats-color-panel");
+  const transformMount = document.querySelector("#transformColorPanelMount");
+  const statsMount = document.querySelector("#statsColorPanelMount");
+  const target = mode === "transform" ? transformMount : statsMount;
+  if (!panel || !target) return;
+  if (panel.parentElement !== target) target.appendChild(panel);
+  panel.classList.toggle("is-transform-color-panel", mode === "transform");
+}
+
 function currentConversionPreviewSignature() {
   const sortedCodes = (codes) => [...codes].sort();
   return JSON.stringify({
@@ -4848,13 +4961,22 @@ function clearPreviewState(options = {}) {
   state.previewQualityMetrics = null;
   state.previewBackgroundMask = null;
   state.previewPreservesManualEdits = false;
+  state.previewKind = "conversion";
+  state.previewChangedIndexes = [];
   state.isPreviewDirty = false;
   pendingPreviewRequestSignature = "";
   if (options.syncControls !== false) updatePreviewButtons();
 }
 
 function setPendingPreview(pattern, options = {}) {
-  const preview = Array.isArray(pattern) ? pattern : [];
+  const sourcePreview = Array.isArray(pattern) ? pattern : [];
+  const shouldKeepProtectedCells =
+    options.kind !== "selectionOptimize" &&
+    state.protectedCells.size > 0 &&
+    state.pattern.length === sourcePreview.length;
+  const preview = shouldKeepProtectedCells
+    ? sourcePreview.map((color, index) => state.protectedCells.has(index) ? state.pattern[index] : color)
+    : sourcePreview;
   const size = Number(options.size) || state.gridSize;
   state.previewPattern = preview;
   state.previewCounts = options.counts || buildCounts(preview);
@@ -4863,6 +4985,8 @@ function setPendingPreview(pattern, options = {}) {
     ? options.backgroundMask
     : state.backgroundMask;
   state.previewPreservesManualEdits = Boolean(options.preservesManualEdits);
+  state.previewKind = options.kind === "selectionOptimize" ? "selectionOptimize" : "conversion";
+  state.previewChangedIndexes = Array.isArray(options.changedIndexes) ? [...new Set(options.changedIndexes)] : [];
   state.previewGridVersion += 1;
   state.isPreviewDirty = preview.length > 0;
   pendingPreviewRequestSignature = options.signature || "";
@@ -4957,6 +5081,8 @@ function applyPreviewToEditGrid() {
     elements.cellInfo.textContent = "当前没有可应用的预览。";
     return false;
   }
+  const previewKind = state.previewKind;
+  const previewChangedIndexes = [...state.previewChangedIndexes];
   if (state.pattern.length) pushHistory();
   // Preview generation already applies the active constraints. Commit the
   // exact pixels the user reviewed so switching to Edit cannot change them.
@@ -4964,6 +5090,10 @@ function applyPreviewToEditGrid() {
   if (!state.previewPreservesManualEdits) {
     state.manualEditedCells = new Set();
     state.manualEditCount = 0;
+  }
+  if (previewKind === "selectionOptimize") {
+    previewChangedIndexes.forEach((index) => state.manualEditedCells.add(index));
+    state.manualEditCount = state.manualEditedCells.size;
   }
   state.patternSize = state.gridSize;
   state.counts = buildCounts(state.pattern);
@@ -4978,9 +5108,14 @@ function applyPreviewToEditGrid() {
   state.editGridVersion += 1;
   renderPattern();
   renderStats();
+  updateProtectionUi();
   updateHistoryButtons();
   elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
-  showQualityHint("预览已确认应用，现在可以进入编辑或导出。");
+  if (previewKind === "selectionOptimize") {
+    showQualityHint(`局部优化已应用，共整理 ${previewChangedIndexes.length} 格；可随时撤回。`);
+  } else {
+    showQualityHint("预览已确认应用，现在可以进入编辑或导出。");
+  }
   markProjectDirty();
   return true;
 }
@@ -5000,6 +5135,7 @@ function confirmPendingPreview() {
 
 function discardPendingPreview() {
   if (state.isProcessingPattern) return false;
+  const previewKind = state.previewKind;
   clearPreviewState({ restoreCanvas: true });
   state.suspendHistory = false;
   refreshDiagnosticsFromCurrentPattern("discardPreview");
@@ -5007,7 +5143,9 @@ function discardPendingPreview() {
   if (state.pattern.length) {
     const bounds = state.usedBounds || calculateUsedBounds(state.pattern, state.gridSize);
     elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${bounds.width} x ${bounds.height}`;
-    elements.cellInfo.textContent = "已放弃本次参数预览，保留当前已确认图纸。";
+    elements.cellInfo.textContent = previewKind === "selectionOptimize"
+      ? "已取消局部优化预览，正式图纸没有变化。"
+      : "已放弃本次参数预览，保留当前已确认图纸。";
   } else {
     elements.projectMeta.textContent = "当前还没有已确认图纸";
     elements.cellInfo.textContent = "已放弃本次参数预览。";
@@ -5024,7 +5162,13 @@ function updatePreviewButtons() {
   if (elements.pendingPreviewBar) {
     elements.pendingPreviewBar.hidden = !isBlocking;
     const label = elements.pendingPreviewBar.querySelector("span");
-    if (label) label.textContent = state.isProcessingPattern ? "正在生成参数预览…" : "参数已调整，当前是预览";
+    if (label) {
+      label.textContent = state.isProcessingPattern
+        ? "正在生成参数预览…"
+        : state.previewKind === "selectionOptimize"
+          ? `局部优化预览：${state.previewChangedIndexes.length} 格待确认`
+          : "参数已调整，当前是预览";
+    }
   }
   if (elements.confirmPreviewButton) elements.confirmPreviewButton.disabled = state.isProcessingPattern || !hasPreview;
   if (elements.discardPreviewButton) elements.discardPreviewButton.disabled = state.isProcessingPattern || !hasPreview;
@@ -5173,12 +5317,12 @@ function baselinePipeline(pattern, size) {
   }
 
   processed = mergeLowUsageColors(processed, size, { strength: detailProfile ? "detail" : "light" });
-  processed = forceMaxColors(processed, size, targetColorLimit());
+  processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
   if (state.patternMode === "pixelPattern" && outlineStrengthForSize() >= 2) {
     processed = hardEdgePostProcess(processed, size);
   }
   processed = repairOutlines(processed, size, outlineStrengthForSize());
-  processed = forceMaxColors(processed, size, targetColorLimit());
+  processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
 
   return validateColorConstraints(processed);
 }
@@ -5458,12 +5602,219 @@ function repairSaturatedAccentGaps(pattern, size) {
 
 function buildProtectedIndexSet(pattern, size) {
   const mask = buildOutlineMask(pattern, size);
-  const protectedIndexes = new Set(state.manualEditedCells);
+  const protectedIndexes = new Set([...state.manualEditedCells, ...state.protectedCells]);
   for (let index = 0; index < pattern.length; index += 1) {
     const color = pattern[index];
     if (mask[index] || isColorLocked(color)) protectedIndexes.add(index);
   }
   return protectedIndexes;
+}
+
+function setProtectionMode(mode) {
+  state.protectionMode = mode === "remove" ? "remove" : "add";
+  updateProtectionUi();
+  elements.cellInfo.textContent = state.protectionMode === "add"
+    ? "保护画笔：划过的格子不会被局部清理或自动减色。"
+    : "取消保护：划过的格子将恢复参与自动优化。";
+}
+
+function updateProtectionUi() {
+  if (elements.protectedCellCount) elements.protectedCellCount.textContent = String(state.protectedCells.size);
+  document.querySelectorAll(".protection-mode-button").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.protectionMode === state.protectionMode);
+  });
+}
+
+function setSelectionProtection(protectedState) {
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "请先确认或取消当前预览，再调整保护区域。";
+    return false;
+  }
+  if (!state.selection.size) {
+    elements.cellInfo.textContent = "请先用框选或钢笔选择需要保护的区域。";
+    return false;
+  }
+  const targets = [...state.selection].filter((index) =>
+    protectedState ? !state.protectedCells.has(index) : state.protectedCells.has(index),
+  );
+  if (!targets.length) {
+    elements.cellInfo.textContent = protectedState ? "当前选区已经全部受保护。" : "当前选区没有保护格。";
+    return false;
+  }
+  pushHistory();
+  targets.forEach((index) => {
+    if (protectedState) state.protectedCells.add(index);
+    else state.protectedCells.delete(index);
+  });
+  updateProtectionUi();
+  renderPattern();
+  markProjectDirty();
+  elements.cellInfo.textContent = `${protectedState ? "已保护" : "已取消保护"}选区中的 ${targets.length} 格。`;
+  return true;
+}
+
+function updateProtectionAtCell(cell) {
+  const cells = state.lastBrushCell ? interpolateCells(state.lastBrushCell, cell) : [cell];
+  const dirtyCells = [];
+  for (const point of cells) {
+    for (const brushCell of brushCellsForPoint(point, activeEditorGeometryOptions())) {
+      const index = brushCell.y * state.gridSize + brushCell.x;
+      if (state.strokeVisited.has(index)) continue;
+      if (state.pattern[index]?.empty) continue;
+      state.strokeVisited.add(index);
+      const wasProtected = state.protectedCells.has(index);
+      if (state.protectionMode === "add") state.protectedCells.add(index);
+      else state.protectedCells.delete(index);
+      if (wasProtected === state.protectedCells.has(index)) continue;
+      state.strokeChanged = true;
+      dirtyCells.push(brushCell);
+    }
+  }
+  state.lastBrushCell = cell;
+  state.selectedCell = cell;
+  if (dirtyCells.length) {
+    updateProtectionUi();
+    requestPatternRender(dirtyCells);
+  }
+}
+
+function previewSelectionOptimization() {
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "请先确认或取消当前预览。";
+    return false;
+  }
+  if (!state.pattern.length || !state.selection.size) {
+    elements.cellInfo.textContent = "请先框选需要整理的小区域。";
+    return false;
+  }
+  const protectedIndexes = buildProtectedIndexSet(state.pattern, state.gridSize);
+  const result = optimizeSelection(state.pattern, state.selection, {
+    stride: state.gridSize,
+    width: activeGridWidth(),
+    height: activeGridHeight(),
+    protectedIndexes,
+    minRegionSize: Math.max(2, Math.min(4, state.minRegionSize || 3)),
+    maxDeltaE: state.gridSize <= 48 ? 10 : 12,
+    colorDistance,
+    isLocked: isColorLocked,
+  });
+  if (!result.changedIndexes.length) {
+    elements.cellInfo.textContent = "当前选区没有适合安全合并的碎色，图纸保持不变。";
+    return false;
+  }
+  setPendingPreview(result.pattern, {
+    kind: "selectionOptimize",
+    changedIndexes: result.changedIndexes,
+    preservesManualEdits: true,
+    backgroundMask: state.backgroundMask,
+    size: state.gridSize,
+  });
+  renderPendingPreview();
+  elements.projectMeta.textContent = `局部预览 / ${gridDimensionsLabel()} / 整理 ${result.changedIndexes.length} 格`;
+  elements.cellInfo.textContent = `已整理 ${result.mergedRegions} 个小色块、共 ${result.changedIndexes.length} 格；请在顶部确认或放弃。`;
+  return true;
+}
+
+function reviewSuspectColors() {
+  if (!state.pattern.length) {
+    elements.cellInfo.textContent = "当前还没有可检查的正式图纸。";
+    return;
+  }
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "请先确认或取消当前预览，再检查疑似错色。";
+    return;
+  }
+  if (state.rawSampleData.length !== state.pattern.length) {
+    elements.cellInfo.textContent = "当前项目没有原图采样数据，无法判断疑似错色。";
+    return;
+  }
+  const protectedIndexes = buildProtectedIndexSet(state.pattern, state.gridSize);
+  if (state.backgroundMask?.length === state.pattern.length) {
+    state.backgroundMask.forEach((isBackground, index) => {
+      if (isBackground) protectedIndexes.add(index);
+    });
+  }
+  state.colorReviewItems = buildSuspectColorReview(state.pattern, state.rawSampleData, effectiveAllowedPalette(), {
+    protectedIndexes,
+    isLocked: isColorLocked,
+    getCandidates: nearestPaletteCandidates,
+    getDistance: paletteMatchDistance,
+    limit: 12,
+    minimumError: 5,
+    minimumImprovement: 2,
+  });
+  state.colorReviewGridVersion = state.editGridVersion;
+  renderColorReviewPanel();
+  elements.cellInfo.textContent = state.colorReviewItems.length
+    ? `发现 ${state.colorReviewItems.length} 个建议复核的位置；只会在你点候选色后修改。`
+    : "没有发现明显疑似错色，当前颜色匹配较稳定。";
+}
+
+function renderColorReviewPanel() {
+  if (!elements.colorReviewPanel || !elements.colorReviewList) return;
+  elements.colorReviewPanel.hidden = false;
+  elements.colorReviewPanel.closest("details")?.setAttribute("open", "");
+  if (elements.colorReviewSummary) elements.colorReviewSummary.textContent = `${state.colorReviewItems.length} 处`;
+  if (!state.colorReviewItems.length) {
+    elements.colorReviewList.innerHTML = '<p class="color-review-empty">暂未发现明显错色。</p>';
+    return;
+  }
+  elements.colorReviewList.innerHTML = state.colorReviewItems.map((item, reviewIndex) => {
+    const x = item.index % state.gridSize;
+    const y = Math.floor(item.index / state.gridSize);
+    const candidateButtons = item.candidates.filter((candidate) => candidate.code !== item.current.code).slice(0, 3).map((candidate) => `
+      <button class="color-review-candidate" type="button" data-review-index="${reviewIndex}" data-color-code="${candidate.code}" title="替换为 ${candidate.code}">
+        <span style="--review-color:${candidate.hex}"></span>${candidate.code}
+      </button>
+    `).join("");
+    return `
+      <article class="color-review-item">
+        <button class="color-review-locate" type="button" data-review-index="${reviewIndex}" title="定位到画布">${x + 1},${y + 1}</button>
+        <div><strong>${item.current.code}</strong><small>当前误差 ${item.currentError.toFixed(1)}</small></div>
+        <div class="color-review-candidates">${candidateButtons}</div>
+      </article>
+    `;
+  }).join("");
+}
+
+function handleColorReviewAction(event) {
+  const button = event.target.closest("button[data-review-index]");
+  if (!button) return;
+  const reviewIndex = Number(button.dataset.reviewIndex);
+  const item = state.colorReviewItems[reviewIndex];
+  if (!item) return;
+  if (state.colorReviewGridVersion !== state.editGridVersion || state.pattern[item.index]?.code !== item.current.code) {
+    reviewSuspectColors();
+    elements.cellInfo.textContent = "图纸已经变化，疑似错色列表已重新检查，请再选择一次。";
+    return;
+  }
+  focusCanvasCell(item.index);
+  const colorCode = button.dataset.colorCode;
+  if (!colorCode) return;
+  const color = paletteColorByCode(colorCode);
+  if (!color || !applyColorToIndices([item.index], color)) return;
+  elements.cellInfo.textContent = `已把 ${item.index % state.gridSize + 1},${Math.floor(item.index / state.gridSize) + 1} 从 ${item.current.code} 改为 ${color.code}，可撤回。`;
+  reviewSuspectColors();
+  markProjectDirty();
+}
+
+function focusCanvasCell(index) {
+  const x = index % state.gridSize;
+  const y = Math.floor(index / state.gridSize);
+  state.selectedCell = { x, y };
+  state.selection = new Set([index]);
+  updateSelectionLabel();
+  renderPattern();
+  const plot = activePlotMetrics();
+  const scaleX = elements.patternCanvas.clientWidth / Math.max(1, elements.patternCanvas.width);
+  const scaleY = elements.patternCanvas.clientHeight / Math.max(1, elements.patternCanvas.height);
+  const targetX = (plot.gridX + (x + 0.5) * plot.cell) * scaleX;
+  const targetY = (plot.gridY + (y + 0.5) * plot.cell) * scaleY;
+  elements.canvasWrap.scrollTo({
+    left: Math.max(0, targetX - elements.canvasWrap.clientWidth / 2),
+    top: Math.max(0, targetY - elements.canvasWrap.clientHeight / 2),
+    behavior: "smooth",
+  });
 }
 
 function buildOutlineMask(pattern, size) {
@@ -6354,6 +6705,9 @@ function drawSelectedCell() {
 function drawSelectionOverlay(dirtyBounds = null) {
   canvasRenderer.drawSelectionOverlay(ctx, {
     selection: state.selection,
+    protectedCells: document.body.dataset.workbenchMode === "edit" && state.editorView === "grid"
+      ? state.protectedCells
+      : new Set(),
     penPoints: state.penPoints,
     stride: state.gridSize,
     plot: activePlotMetrics(),
@@ -6364,12 +6718,16 @@ function drawSelectionOverlay(dirtyBounds = null) {
 
 function drawBrushPreview() {
   if (!state.brushHoverCell || !state.pattern.length || state.editorView !== "grid") return;
-  if (!["brush", "eraser", "line"].includes(state.activeTool)) return;
+  if (!["brush", "eraser", "line", "protect"].includes(state.activeTool)) return;
   const plot = activePlotMetrics();
   const cellSize = plot.cell;
   ctx.save();
-  ctx.fillStyle = state.activeTool === "eraser" ? "rgba(255,255,255,0.35)" : "rgba(232, 59, 100, 0.20)";
-  ctx.strokeStyle = state.activeTool === "eraser" ? "#111111" : "#e83b64";
+  ctx.fillStyle = state.activeTool === "eraser"
+    ? "rgba(255,255,255,0.35)"
+    : state.activeTool === "protect"
+      ? "rgba(8,145,178,0.20)"
+      : "rgba(232, 59, 100, 0.20)";
+  ctx.strokeStyle = state.activeTool === "eraser" ? "#111111" : state.activeTool === "protect" ? "#0891b2" : "#e83b64";
   ctx.lineWidth = Math.max(1, cellSize * 0.08);
 
   for (const brushCell of brushPreviewCellsForCell(state.brushHoverCell)) {
@@ -6630,7 +6988,12 @@ function applyConstraintChange() {
 
 function renderConstraintPalette() {
   const startedAt = performanceNow();
-  elements.colorModeLabel.textContent = "MARD 221";
+  const modeLabel = state.lockedColorCodes.size
+    ? `MARD 221 · 已锁 ${state.lockedColorCodes.size}`
+    : "MARD 221";
+  if (elements.colorModeLabel.textContent !== modeLabel) {
+    elements.colorModeLabel.textContent = modeLabel;
+  }
 
   const query = state.paletteSearch;
   const filteredPalette = palette.filter((item) => {
@@ -6639,7 +7002,7 @@ function renderConstraintPalette() {
     const active = state.selectedColor?.code === item.code;
     if (state.showSelectedColorsOnly && !used && !locked && !active) return false;
     if (!query) return true;
-    return `${item.code} ${item.name} ${item.hex} ${item.brand}`.toLowerCase().includes(query);
+    return paletteSearchTextByCode.get(item.code).includes(query);
   });
 
   const signature = [
@@ -6649,10 +7012,12 @@ function renderConstraintPalette() {
     state.selectedColor?.code || "",
     filteredPalette
       .map(
-        (item) =>
-          `${item.code}:${Number(state.lockedColorCodes.has(item.code))}:${Number(state.allowedColorCodes.has(item.code))}:${Number(
-            state.disabledColorCodes.has(item.code),
-          )}`,
+        (item) => {
+          const fixedPaletteState = state.colorMode === "fixedPalette"
+            ? `:${Number(state.allowedColorCodes.has(item.code))}:${Number(state.disabledColorCodes.has(item.code))}`
+            : "";
+          return `${item.code}:${Number(state.lockedColorCodes.has(item.code))}${fixedPaletteState}`;
+        },
       )
       .join(","),
   ].join("|");
@@ -6663,11 +7028,38 @@ function renderConstraintPalette() {
   }
 
   try {
-    renderConstraintPaletteNow(filteredPalette);
+    if (!patchConstraintPaletteInPlace(filteredPalette)) {
+      renderConstraintPaletteNow(filteredPalette);
+    }
     renderCache.constraintSignature = signature;
   } finally {
     recordPerformance("render.palette", performanceNow() - startedAt);
   }
+}
+
+function patchConstraintPaletteInPlace(filteredPalette) {
+  const buttons = [...elements.constraintPalette.querySelectorAll("[data-constraint-code]")];
+  if (
+    buttons.length !== filteredPalette.length ||
+    buttons.some((button, index) => button.dataset.constraintCode !== filteredPalette[index].code)
+  ) {
+    return false;
+  }
+
+  filteredPalette.forEach((item, index) => {
+    const button = buttons[index];
+    const locked = state.lockedColorCodes.has(item.code);
+    const allowed = state.colorMode !== "fixedPalette" || state.allowedColorCodes.has(item.code) || locked;
+    const disabled = state.colorMode === "fixedPalette" && state.disabledColorCodes.has(item.code);
+    const active = state.selectedColor?.code === item.code;
+    const title = `${item.code} ${item.name} ${item.hex}${locked ? " / 已锁定" : ""}${active ? " / 当前画笔色" : ""}`;
+    button.classList.toggle("is-off", !allowed);
+    button.classList.toggle("is-locked", locked);
+    button.classList.toggle("is-active", active);
+    button.classList.toggle("is-disabled", disabled);
+    button.title = `${title}。单击设为画笔色；右键或双击锁定/解锁。`;
+  });
+  return true;
 }
 
 function renderConstraintPaletteNow(filteredPalette) {
@@ -6997,7 +7389,7 @@ function handleCanvasMove(event) {
   if (!state.brushHoverCell || state.brushHoverCell.x !== cell.x || state.brushHoverCell.y !== cell.y) {
     const previousPreviewCells = brushPreviewCellsForCell(state.brushHoverCell);
     state.brushHoverCell = cell;
-    if (["brush", "eraser", "line"].includes(state.activeTool)) {
+    if (["brush", "eraser", "line", "protect"].includes(state.activeTool)) {
       requestPatternRender([...previousPreviewCells, ...brushPreviewCellsForCell(cell)]);
     }
   }
@@ -7017,7 +7409,7 @@ function handleCanvasClick(event) {
     return;
   }
   if (!state.editing || state.gridLocked || !state.pattern.length) return;
-  if (["rect", "hline", "brush", "line"].includes(state.activeTool)) return;
+  if (["rect", "hline", "brush", "line", "protect"].includes(state.activeTool)) return;
   if (state.activeTool === "eraser" && !state.selection.size) return;
   const cell = getCellFromPointer(event);
   if (state.activeTool === "eyedropper" && pickColorFromTraceReference(event)) return;
@@ -7102,7 +7494,9 @@ function cancelCanvasEditForPinch() {
       code === "__EMPTY__" ? EMPTY_CELL : byCode.get(code) || fallbackPaletteColor(),
     );
     state.manualEditedCells = new Set(snapshot.manualEditedCells || []);
+    state.protectedCells = new Set(snapshot.protectedCells || []);
     state.counts = buildCounts(state.pattern);
+    updateProtectionUi();
   }
   state.strokeHistorySnapshot = null;
   state.strokeChanged = false;
@@ -7182,6 +7576,7 @@ function handleCanvasToolDoubleClick(tool) {
   }
   runMobileDoubleAction(`tool:${tool}`, () => {
     if (tool === "brush") openMobileToolMenu("brush");
+    else if (tool === "protect") openMobileToolMenu("local");
     else if (tool === "rect") openMobileToolMenu("selection");
     else if (tool === "sameColor") openMobileColorMenu(selectedRegionColorCode());
     else if (tool === "eraser") eraseCurrentSelection();
@@ -7202,8 +7597,18 @@ function openMobileToolMenu(mode, colorCode = "") {
   if (elements.mobileColorActions) elements.mobileColorActions.hidden = mode !== "color";
   const advancedActions = elements.editToolPanel.querySelector(".tool-advanced-actions");
   if (advancedActions && mode === "selection") advancedActions.open = true;
+  const localActions = elements.editToolPanel.querySelector(".local-edit-actions");
+  if (localActions && ["local", "selection"].includes(mode)) localActions.setAttribute("open", "");
   if (elements.toolPropertiesTitle) {
-    elements.toolPropertiesTitle.textContent = mode === "color" ? "颜色操作" : mode === "selection" ? "选区操作" : mode === "paintColor" ? "选择画笔颜色" : "画笔设置";
+    elements.toolPropertiesTitle.textContent = mode === "color"
+      ? "颜色操作"
+      : mode === "selection"
+        ? "选区操作"
+        : mode === "local"
+          ? "局部优化与保护"
+          : mode === "paintColor"
+            ? "选择画笔颜色"
+            : "画笔设置";
   }
   if (elements.toolColorSearchInput) {
     elements.toolColorSearchInput.placeholder = ["brush", "paintColor"].includes(mode) ? "输入色号，如 F3、B12；回车使用" : "搜索色号 / 颜色名";
@@ -7227,17 +7632,51 @@ function openMobilePaintColorMenu() {
   window.setTimeout(() => elements.toolColorSearchInput?.focus(), 0);
 }
 
+function openConfirmedSelectionActions() {
+  const advancedActions = elements.editToolPanel?.querySelector(".tool-advanced-actions");
+  if (advancedActions) advancedActions.open = true;
+
+  if (isMobileLayout()) {
+    openMobileToolMenu("selection");
+    return;
+  }
+
+  elements.editToolPanel?.classList.add("is-properties-open");
+  document.querySelector("#toolPropertiesButton")?.setAttribute("aria-expanded", "true");
+  if (elements.toolPropertiesTitle) elements.toolPropertiesTitle.textContent = "选区操作";
+}
+
 function confirmMobileSelection() {
-  if (state.penPoints.length) {
-    finishPenSelection();
-    return;
+  if (state.isPreviewDirty) {
+    elements.cellInfo.textContent = "当前是转图预览；请先确认应用，再编辑选区。";
+    return false;
   }
-  if (state.selection.size) {
-    elements.cellInfo.textContent = `已确定选取 ${state.selection.size} 格，可以继续填色、复制或移动。`;
-    renderPattern();
-    return;
+  if (!state.editing || state.gridLocked || !state.pattern.length) {
+    elements.cellInfo.textContent = state.gridLocked ? "格子已锁定，请先解锁再确认选区。" : "当前没有可编辑的图纸。";
+    return false;
   }
-  elements.cellInfo.textContent = "请先用钢笔或框选工具选择区域。";
+
+  if (state.dragStartCell && state.dragPreview) {
+    state.selection = buildSelectionFromDrag(state.dragStartCell, state.dragPreview, state.activeTool, state.gridSize);
+    state.dragStartCell = null;
+    state.dragPreview = null;
+  }
+
+  if (state.penPoints.length && !finishPenSelection()) return false;
+  if (!state.selection.size) {
+    elements.cellInfo.textContent = "请先用钢笔或框选工具选择区域。";
+    return false;
+  }
+
+  const selectedCount = state.selection.size;
+  if (["pen", "rect", "hline"].includes(state.activeTool)) setActiveTool("brush");
+  updateSelectionLabel();
+  elements.mobileConfirmSelectionButton?.classList.add("is-confirmed");
+  elements.mobileConfirmSelectionButton?.setAttribute("aria-pressed", "true");
+  renderPattern();
+  openConfirmedSelectionActions();
+  elements.cellInfo.textContent = `已确定选取 ${selectedCount} 格，可以继续填色、复制、移动或局部优化。`;
+  return true;
 }
 
 function openMobileColorMenu(code) {
@@ -7360,6 +7799,17 @@ function handleCanvasPointerDownCore(event) {
     paintBrushCell(cell, event.shiftKey);
     return;
   }
+  if (state.activeTool === "protect") {
+    state.strokeHistorySnapshot = snapshotPattern();
+    state.strokeChanged = false;
+    state.isBrushPainting = true;
+    state.lastBrushIndex = null;
+    state.lastBrushCell = null;
+    state.strokeVisited = new Set();
+    elements.patternCanvas.setPointerCapture?.(event.pointerId);
+    updateProtectionAtCell(cell);
+    return;
+  }
   if (state.activeTool === "eraser") {
     if (state.selection.size) return;
     state.strokeHistorySnapshot = snapshotPattern();
@@ -7395,7 +7845,10 @@ function handleCanvasPointerMoveCore(event) {
   }
   if (state.isBrushPainting) {
     const cell = getCellFromPointer(event);
-    if (cell) paintBrushCell(cell, event.shiftKey);
+    if (cell) {
+      if (state.activeTool === "protect") updateProtectionAtCell(cell);
+      else paintBrushCell(cell, event.shiftKey);
+    }
     return;
   }
   if (state.isErasing) {
@@ -7431,7 +7884,7 @@ function handleCanvasPointerUpCore(event) {
     return;
   }
   if (state.isBrushPainting) {
-    finishContinuousStroke("brush");
+    finishContinuousStroke(state.activeTool === "protect" ? "protect" : "brush");
     return;
   }
   if (state.isErasing) {
@@ -7448,7 +7901,7 @@ function handleCanvasPointerUpCore(event) {
 }
 
 function finishContinuousStroke(tool) {
-  if (tool === "brush") {
+  if (tool === "brush" || tool === "protect") {
     state.isBrushPainting = false;
     state.lastBrushIndex = null;
     state.lastBrushCell = null;
@@ -7462,6 +7915,17 @@ function finishContinuousStroke(tool) {
   if (!strokeChanged) {
     requestPatternRender(brushPreviewCellsForCell(state.brushHoverCell));
     return false;
+  }
+
+  if (tool === "protect") {
+    state.editGridVersion += 1;
+    updateProtectionUi();
+    renderPattern();
+    markProjectDirty();
+    elements.cellInfo.textContent = state.protectionMode === "add"
+      ? "保护区域已更新，可随时撤回。"
+      : "已取消划过区域的保护。";
+    return true;
   }
 
   const validation = validateColorConstraints(state.pattern, { withReport: true });
@@ -7602,6 +8066,9 @@ function mirrorPattern(direction) {
   state.manualEditedCells = new Set(
     activeIndexes([...state.manualEditedCells]).map((index) => mirroredIndex(index, direction, activeEditorGeometryOptions())),
   );
+  state.protectedCells = new Set(
+    activeIndexes([...state.protectedCells]).map((index) => mirroredIndex(index, direction, activeEditorGeometryOptions())),
+  );
   state.selection = new Set(
     activeIndexes([...state.selection]).map((index) => mirroredIndex(index, direction, activeEditorGeometryOptions())),
   );
@@ -7625,6 +8092,7 @@ function mirrorPattern(direction) {
   state.usedBounds = calculateUsedBounds(state.pattern, state.gridSize);
   state.manualEditCount += 1;
   state.editGridVersion += 1;
+  updateProtectionUi();
   updateSelectionLabel();
   renderPattern();
   renderStats();
@@ -7654,6 +8122,8 @@ function mirrorSelectedRegion(direction) {
   applySelectionTransformPlan(
     plan,
     direction === "horizontal" ? "选区已左右镜像。" : "选区已上下镜像。",
+    undefined,
+    transformProtectedSelection("mirror", { direction }),
   );
 }
 
@@ -7675,7 +8145,12 @@ function moveSelectedRegion(dx, dy) {
     elements.cellInfo.textContent = "选区已经到画布边缘，不能继续移动。";
     return;
   }
-  applySelectionTransformPlan(plan, "选区已移动 1 格。", "选区移动会修改锁定颜色，请先解锁或开启“允许改锁定色”。");
+  applySelectionTransformPlan(
+    plan,
+    "选区已移动 1 格。",
+    "选区移动会修改锁定颜色，请先解锁或开启“允许改锁定色”。",
+    transformProtectedSelection("move", { dx, dy }),
+  );
 }
 
 function rotateSelectedRegion(direction) {
@@ -7702,10 +8177,54 @@ function rotateSelectedRegion(direction) {
     plan,
     direction === "clockwise" ? "选区已向右旋转 90°。" : "选区已向左旋转 90°。",
     "选区旋转会修改锁定颜色，请先解锁或开启“允许改锁定色”。",
+    transformProtectedSelection("rotate", { direction }),
   );
 }
 
-function applySelectionTransformPlan(plan, successMessage, lockedMessage = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。") {
+function transformProtectedSelection(transform, options = {}) {
+  const protectedSource = [...state.selection].filter((index) => state.protectedCells.has(index));
+  if (!protectedSource.length) return [];
+  const selectedPoints = [...state.selection].map((index) => ({
+    index,
+    x: index % state.gridSize,
+    y: Math.floor(index / state.gridSize),
+  }));
+  const minX = Math.min(...selectedPoints.map((point) => point.x));
+  const maxX = Math.max(...selectedPoints.map((point) => point.x));
+  const minY = Math.min(...selectedPoints.map((point) => point.y));
+  const maxY = Math.max(...selectedPoints.map((point) => point.y));
+  return protectedSource.map((index) => {
+    const x = index % state.gridSize;
+    const y = Math.floor(index / state.gridSize);
+    let nextX = x;
+    let nextY = y;
+    if (transform === "move") {
+      nextX += Math.sign(Number(options.dx) || 0);
+      nextY += Math.sign(Number(options.dy) || 0);
+    } else if (transform === "mirror") {
+      if (options.direction === "horizontal") nextX = minX + maxX - x;
+      else nextY = minY + maxY - y;
+    } else if (transform === "rotate") {
+      const dx = x - minX;
+      const dy = y - minY;
+      if (options.direction === "clockwise") {
+        nextX = minX + (maxY - minY) - dy;
+        nextY = minY + dx;
+      } else {
+        nextX = minX + dy;
+        nextY = minY + (maxX - minX) - dx;
+      }
+    }
+    return nextY * state.gridSize + nextX;
+  });
+}
+
+function applySelectionTransformPlan(
+  plan,
+  successMessage,
+  lockedMessage = "选区镜像会修改锁定颜色，请先解锁或开启“允许改锁定色”。",
+  protectedTargets = [],
+) {
   if (!plan?.changes?.length) return;
 
   const clearColor = eraserFillColor();
@@ -7722,6 +8241,7 @@ function applySelectionTransformPlan(plan, successMessage, lockedMessage = "选�
   }
 
   if (changes.length) pushHistory();
+  const protectedSource = new Set([...state.selection].filter((index) => state.protectedCells.has(index)));
   const countChanges = [];
   for (const change of changes) {
     const before = state.pattern[change.index];
@@ -7732,7 +8252,12 @@ function applySelectionTransformPlan(plan, successMessage, lockedMessage = "选�
   }
 
   state.selection = new Set(plan.selection);
+  if (protectedSource.size) {
+    protectedSource.forEach((index) => state.protectedCells.delete(index));
+    protectedTargets.forEach((index) => state.protectedCells.add(index));
+  }
   state.penPoints = [];
+  updateProtectionUi();
   if (countChanges.length) {
     applyCountChanges(state.counts, countChanges);
     state.qualityMetrics = calculateQualityMetrics(state.pattern, state.gridSize);
@@ -8117,7 +8642,7 @@ function pickColorFromTraceReference(event) {
 }
 
 function visibleCanvasTool(tool) {
-  return ["brush", "eraser", "eyedropper", "rect", "pen", "sameColor"].includes(tool);
+  return ["brush", "eraser", "eyedropper", "rect", "pen", "sameColor", "protect"].includes(tool);
 }
 
 function setActiveTool(tool) {
@@ -8141,6 +8666,7 @@ function setActiveTool(tool) {
   if (elements.editToolPanel) elements.editToolPanel.dataset.activeTool = tool;
   syncTraceReferenceControls();
   updateCanvasCursor();
+  updateSelectionLabel();
   elements.cellInfo.textContent = toolHint(tool);
   renderPattern();
 }
@@ -8176,6 +8702,7 @@ function toolHint(tool) {
     hline: "横线：拖动选择一段横向格子。",
     pen: "钢笔：连续点击围出区域，双击或点完成钢笔。",
     eraser: "擦除：点击或按住拖动，空背景模式下会擦成空白格。",
+    protect: "保护：划过的格子不会被局部清理、减色或自动优化；可在设置中切换取消保护。",
     sameColor: "同色：点击图纸或右侧色块，选择全部同色格。",
   };
   return hints[tool] || "";
@@ -8184,7 +8711,7 @@ function toolHint(tool) {
 function finishPenSelection() {
   if (state.penPoints.length < 3) {
     elements.cellInfo.textContent = "钢笔选区至少需要 3 个点。";
-    return;
+    return false;
   }
   const selected = new Set();
   for (let y = 0; y < activeGridHeight(); y += 1) {
@@ -8199,6 +8726,7 @@ function finishPenSelection() {
   updateSelectionLabel();
   renderPattern();
   elements.cellInfo.textContent = `钢笔选区已闭合，共选中 ${selected.size} 个像素，可直接填色或复制。`;
+  return true;
 }
 
 function clearSelection() {
@@ -8210,8 +8738,21 @@ function clearSelection() {
 
 function updateSelectionLabel() {
   elements.selectionLabel.textContent = state.selection.size ? `${state.selection.size} 格` : state.penPoints.length ? `${state.penPoints.length} 点` : "未选区";
+  if (elements.mobileConfirmSelectionButton) {
+    const ready = state.selection.size > 0 || state.penPoints.length >= 3;
+    const confirmed = state.selection.size > 0 && !["pen", "rect", "hline"].includes(state.activeTool);
+    elements.mobileConfirmSelectionButton.disabled = !ready;
+    elements.mobileConfirmSelectionButton.classList.toggle("is-ready", ready);
+    elements.mobileConfirmSelectionButton.classList.toggle("is-confirmed", confirmed);
+    elements.mobileConfirmSelectionButton.setAttribute("aria-pressed", String(confirmed));
+    const label = elements.mobileConfirmSelectionButton.querySelector("span");
+    if (label) label.textContent = confirmed ? `已选 ${state.selection.size}` : "确定选取";
+  }
   elements.copySelectionButton.disabled = !state.selection.size;
   elements.pasteSelectionButton.disabled = !state.selectionClipboard;
+  if (elements.protectSelectionButton) elements.protectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
+  if (elements.unprotectSelectionButton) elements.unprotectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
+  if (elements.previewSelectionOptimizeButton) elements.previewSelectionOptimizeButton.disabled = !state.selection.size || state.isPreviewDirty;
 }
 
 function copySelectionPixels() {
@@ -8289,6 +8830,7 @@ function snapshotPattern() {
     height: activeGridHeight(),
     ...createHistoryPatternPayload(state.pattern),
     manualEditedCells: [...state.manualEditedCells],
+    protectedCells: [...state.protectedCells],
     lockedColorCodes: [...state.lockedColorCodes],
     allowedColorCodes: [...state.allowedColorCodes],
     disabledColorCodes: [...state.disabledColorCodes],
@@ -8316,6 +8858,7 @@ function restorePattern(snapshot) {
   const byCode = new Map(palette.map((item) => [item.code, item]));
   state.pattern = codes.map((code) => (code === "__EMPTY__" ? EMPTY_CELL : byCode.get(code) || fallbackPaletteColor()));
   state.manualEditedCells = new Set(Array.isArray(snapshot.manualEditedCells) ? snapshot.manualEditedCells : []);
+  state.protectedCells = new Set(Array.isArray(snapshot.protectedCells) ? snapshot.protectedCells : []);
   if (!Array.isArray(snapshot)) {
     state.lockedColorCodes = new Set(snapshot.lockedColorCodes || []);
     state.allowedColorCodes = new Set(snapshot.allowedColorCodes || state.allowedColorCodes);
@@ -8580,6 +9123,7 @@ function handleKeyboardShortcuts(event) {
     b: "brush",
     i: "eyedropper",
     p: "pen",
+    q: "protect",
     u: "eraser",
   };
   if (!event.ctrlKey && !event.metaKey && !event.altKey && shortcuts[key]) {
@@ -8706,6 +9250,7 @@ function applyColorToIndices(indices, color, recordHistory = true) {
   state.editGridVersion += 1;
   scheduleQualityMetricsRefresh();
   updateSelectionLabel();
+  updateProtectionUi();
   renderPattern();
   renderStats();
   return true;
@@ -9006,6 +9551,9 @@ function resetApp() {
   state.previewGridVersion = 0;
   state.manualEditCount = 0;
   state.manualEditedCells = new Set();
+  state.protectedCells = new Set();
+  state.colorReviewItems = [];
+  state.colorReviewGridVersion = -1;
   state.projectDirty = false;
   state.projectSavedAt = null;
   state.projectCreatedAt = null;
@@ -9056,6 +9604,7 @@ function resetApp() {
   elements.symmetryModeSelect.value = "none";
   setActiveTool("brush");
   syncControlsFromState();
+  updateProtectionUi();
   updateBackgroundHint();
   updateProjectSaveStatus("未保存");
   renderPattern();
@@ -9075,6 +9624,7 @@ function init() {
   syncControlsFromState();
   updateSelectedColorUi();
   updateHistoryButtons();
+  updateProtectionUi();
   updatePreviewButtons();
   updateGridLockUi();
   updateToolboxLockUi();

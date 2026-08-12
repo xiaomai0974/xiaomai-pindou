@@ -13,6 +13,7 @@ const exportRendererSourceUrl = new URL("../public/export-renderer.js", import.m
 const gridUtilsSourceUrl = new URL("../public/grid-utils.js", import.meta.url);
 const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.url);
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
+const localEditUtilsSourceUrl = new URL("../public/local-edit-utils.js", import.meta.url);
 const mobileGesturesSourceUrl = new URL("../public/mobile-gestures.js", import.meta.url);
 const preprocessUtilsSourceUrl = new URL("../public/preprocess-utils.js", import.meta.url);
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
@@ -304,6 +305,14 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
   assert.ok(gridUtils.buildCounts(limited).size <= 2);
   assert.equal(limited.some((item) => item.code === "LOCK"), true);
 
+  const anchored = processor.forceMaxColors(
+    [gray, nearGray, warm, warm, lockedColor, nearGray, gray, warm, lockedColor],
+    3,
+    1,
+    { preferLockedTargets: true, preferredLockedTargets: [lockedColor] },
+  );
+  assert.deepEqual([...new Set(anchored.map((item) => item.code))], ["LOCK"]);
+
   const analysis = processor.analyzeColorRegions(
     [gray, gray, background, gray, warm, background, background, background, background],
     3,
@@ -312,6 +321,83 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
     Array.from(analysis.regions, (region) => [region.color.code, region.cells.length]),
     [["A", 3], ["BG", 5], ["C", 1]],
   );
+});
+
+test("local selection cleanup respects its boundary and protected cells", async () => {
+  const localEditUtils = await browserUtilityContext(
+    localEditUtilsSourceUrl,
+    "XiaomaiLocalEditUtils",
+    { Map, Set },
+  );
+  const color = (code, l) => ({ code, empty: false, lab: { l, a: 0, b: 0 } });
+  const base = color("A", 50);
+  const fragment = color("B", 54);
+  const pattern = Array.from({ length: 25 }, () => base);
+  pattern[12] = fragment;
+
+  const cleaned = localEditUtils.optimizeSelection(pattern, new Set([12]), {
+    stride: 5,
+    width: 5,
+    height: 5,
+    minRegionSize: 3,
+    maxDeltaE: 12,
+    colorDistance: (left, right) => Math.abs(left.lab.l - right.lab.l),
+  });
+  assert.deepEqual(Array.from(cleaned.changedIndexes), [12]);
+  assert.equal(cleaned.pattern[12].code, "A");
+  assert.equal(pattern[12].code, "B", "local optimization must not mutate the confirmed grid");
+
+  const protectedResult = localEditUtils.optimizeSelection(pattern, new Set([12]), {
+    stride: 5,
+    width: 5,
+    height: 5,
+    minRegionSize: 3,
+    maxDeltaE: 12,
+    protectedIndexes: new Set([12]),
+    colorDistance: (left, right) => Math.abs(left.lab.l - right.lab.l),
+  });
+  assert.deepEqual(Array.from(protectedResult.changedIndexes), []);
+  assert.equal(protectedResult.pattern[12].code, "B");
+
+  const partialSelection = localEditUtils.optimizeSelection(
+    [base, fragment, fragment, base],
+    new Set([1]),
+    {
+      stride: 4,
+      width: 4,
+      height: 1,
+      minRegionSize: 3,
+      maxDeltaE: 12,
+      colorDistance: (left, right) => Math.abs(left.lab.l - right.lab.l),
+    },
+  );
+  assert.deepEqual(Array.from(partialSelection.changedIndexes), [], "a component crossing the selection must stay intact");
+});
+
+test("wrong-color review only proposes meaningful unprotected corrections", async () => {
+  const localEditUtils = await browserUtilityContext(
+    localEditUtilsSourceUrl,
+    "XiaomaiLocalEditUtils",
+    { Map, Set },
+  );
+  const current = { code: "A", empty: false };
+  const best = { code: "B", empty: false, deltaE: 2 };
+  const second = { code: "C", empty: false, deltaE: 5 };
+  const review = localEditUtils.buildSuspectColorReview(
+    [current, current],
+    [{ source: 1 }, { source: 2 }],
+    [current, best, second],
+    {
+      protectedIndexes: new Set([1]),
+      getCandidates: () => [best, second, current],
+      getDistance: (_sample, color) => color.code === "A" ? 12 : color.deltaE,
+      minimumError: 5,
+      minimumImprovement: 2,
+    },
+  );
+  assert.equal(review.length, 1);
+  assert.equal(review[0].index, 0);
+  assert.equal(review[0].candidates[0].code, "B");
 });
 
 test("canvas renderer keeps cells, labels, grid, reference, and selection layers independent", async () => {
@@ -791,6 +877,7 @@ test("history snapshots compare grid content and editor state", async () => {
     height: 64,
     codes: ["H7", "F1", "__EMPTY__"],
     manualEditedCells: [1, 7],
+    protectedCells: [2],
     lockedColorCodes: ["B12", "H7"],
     allowedColorCodes: ["H7", "F1"],
     disabledColorCodes: [],
@@ -800,6 +887,7 @@ test("history snapshots compare grid content and editor state", async () => {
   const reorderedSets = {
     ...baseline,
     manualEditedCells: [7, 1],
+    protectedCells: [2],
     lockedColorCodes: ["H7", "B12"],
   };
 
@@ -808,6 +896,13 @@ test("history snapshots compare grid content and editor state", async () => {
     historyUtils.historySnapshotsEqual(baseline, {
       ...baseline,
       codes: ["H7", "B12", "__EMPTY__"],
+    }),
+    false,
+  );
+  assert.equal(
+    historyUtils.historySnapshotsEqual(baseline, {
+      ...baseline,
+      protectedCells: [],
     }),
     false,
   );
@@ -1134,6 +1229,8 @@ test("live color limit preview remains wired to input and confirmation", async (
     /function handleColorLimitChange\(\) \{\s*setColorLimit\(Number\(elements\.colorLimit\.value\), false\);\s*scheduleColorLimitPreview\(\);/,
   );
   assert.match(source, /function scheduleColorLimitPreview\(\)[\s\S]*?}, 140\);/);
+  assert.match(source, /elements\.colorLimitNumber\?\.addEventListener\("input", handleColorLimitNumberInput\)/);
+  assert.match(source, /function commitColorLimitNumber\(\)[\s\S]*?flushColorLimitPreview\(\)/);
 });
 
 test("single conversion canvas shows pending settings preview before the confirmed grid", async () => {
@@ -1264,17 +1361,29 @@ test("runtime diagnostics stay out of saved projects and duplicate grid state is
   assert.match(serializer, /canvasReferenceLayerState:\s*{\s*imageData: ""/);
 });
 
-test("photo-color strategy can use the full palette without changing the color-limit control", async () => {
+test("photo-color starts from the full palette and then honors editable locked-color limits", async () => {
   const source = await appSource();
   const targetLimit = sourceBetween(source, "function targetColorLimit", "function isColorLocked");
   const colorLimitControls = sourceBetween(source, "function syncColorLimitControls", "function setPatternMode");
+  const processingProfile = sourceBetween(source, "function setProcessingProfile", "function syncProcessingProfileControls");
+  const photoFinalize = sourceBetween(source, "function finalizePhotoColorMatch", "function cleanPhotoLowContrastIsolated");
   const diagnosticControls = sourceBetween(source, "function syncDiagnosticControls", "function deserializeGrid");
 
-  assert.match(targetLimit, /state\.processingProfile === "photoColor"\) return palette\.length/);
-  assert.match(colorLimitControls, /elements\.colorLimit\.disabled = usesFullPalette/);
-  assert.match(colorLimitControls, /usesFullPalette \? `全色 \$\{max\}`/);
+  assert.doesNotMatch(targetLimit, /state\.processingProfile === "photoColor"\) return palette\.length/);
+  assert.match(processingProfile, /state\.colorLimit = palette\.length/);
+  assert.match(colorLimitControls, /elements\.colorLimit\.disabled = false/);
+  assert.match(colorLimitControls, /elements\.colorLimitNumber\.value = state\.colorLimit/);
+  assert.match(photoFinalize, /forceMaxColors\(processed, size, targetColorLimit\(\), lockedColorConvergenceOptions\(\)\)/);
   assert.match(diagnosticControls, /elements\.accurateMatchToggle\.disabled = profileIncludesAccurateMatch/);
   assert.match(diagnosticControls, /照片原色已内置精准匹配/);
+});
+
+test("constraint palette updates locked states in place without resetting its scroll", async () => {
+  const source = await appSource();
+  assert.match(source, /function patchConstraintPaletteInPlace\(filteredPalette\)/);
+  assert.match(source, /buttons\.some\(\(button, index\) => button\.dataset\.constraintCode !== filteredPalette\[index\]\.code\)/);
+  assert.match(source, /if \(!patchConstraintPaletteInPlace\(filteredPalette\)\)/);
+  assert.match(source, /const fixedPaletteState = state\.colorMode === "fixedPalette"/);
 });
 
 test("restored projects stay on the simplified automatic standard-pattern flow", async () => {
@@ -1283,6 +1392,18 @@ test("restored projects stay on the simplified automatic standard-pattern flow",
   assert.match(source, /state\.appMode = "auto";/);
   assert.doesNotMatch(source, /state\.patternMode = settings\.patternMode/);
   assert.doesNotMatch(source, /state\.appMode = draw\.appMode/);
+});
+
+test("confirm-selection button commits the active selection and exposes its actions", async () => {
+  const source = await appSource();
+  const confirmSelection = sourceBetween(source, "function openConfirmedSelectionActions", "function openMobileColorMenu");
+
+  assert.match(confirmSelection, /buildSelectionFromDrag\(/);
+  assert.match(confirmSelection, /finishPenSelection\(\)/);
+  assert.match(confirmSelection, /setActiveTool\("brush"\)/);
+  assert.match(confirmSelection, /openMobileToolMenu\("selection"\)/);
+  assert.match(confirmSelection, /classList\.add\("is-properties-open"\)/);
+  assert.match(confirmSelection, /已确定选取/);
 });
 
 test("raw diagnostics sample the original source instead of the optimized base image", async () => {

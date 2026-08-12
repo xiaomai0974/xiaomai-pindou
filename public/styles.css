@@ -760,7 +760,7 @@ input[type="range"] {
 
 .color-limit-slider {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 54px;
+  grid-template-columns: minmax(0, 1fr) 68px;
   align-items: center;
   gap: 10px;
 }
@@ -770,14 +770,53 @@ input[type="range"] {
   cursor: ew-resize;
 }
 
-.color-limit-slider output {
-  min-width: 54px;
-  padding: 5px 4px;
+.color-limit-number {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  min-width: 68px;
   border: 1px solid var(--ink);
   background: #fff;
+}
+
+.color-limit-number input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  padding: 4px 2px 4px 6px;
   font-size: 13px;
   font-weight: 950;
   text-align: center;
+}
+
+.color-limit-number span {
+  padding-right: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.color-limit-number:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.mobile-confirm-selection-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.mobile-confirm-selection-button.is-ready:not(.is-confirmed) {
+  border-color: var(--accent) !important;
+  color: var(--accent);
+}
+
+.mobile-confirm-selection-button.is-confirmed {
+  border-color: #16855b !important;
+  background: #eaf8f1 !important;
+  color: #116945 !important;
 }
 
 .color-limit-scale {
@@ -2228,6 +2267,46 @@ body.is-pixel-pattern .seg-option[data-size="120"] {
 
 .palette-settings-card .palette-name-row {
   display: none;
+}
+
+.transform-color-panel-mount {
+  min-height: 0;
+  border-top: 1px solid var(--line);
+  margin-top: 3px;
+  padding-top: 8px;
+}
+
+.transform-color-panel-mount:empty {
+  display: none;
+}
+
+.stats-color-panel-mount {
+  display: contents;
+}
+
+.stats-color-panel.is-transform-color-panel {
+  min-height: 0;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.stats-color-panel.is-transform-color-panel .group-title {
+  min-height: 24px;
+}
+
+.stats-color-panel.is-transform-color-panel .constraint-palette {
+  max-height: min(34vh, 300px);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+  overscroll-behavior: contain;
+}
+
+.constraint-palette-help {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .background-card .segmented button,
@@ -4275,6 +4354,160 @@ body[data-workbench-mode="edit"].focus-canvas-mode .workspace > .sheet-chrome {
     width: 250px;
   }
 
+}
+
+.local-edit-actions {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+  padding: 0 0 14px;
+}
+
+.edit-tool-panel:not(.is-properties-open) .local-edit-actions,
+.edit-tool-panel:not(.is-properties-open) .tool-advanced-actions {
+  display: none;
+}
+
+.local-edit-actions summary {
+  min-height: 36px;
+  color: #444;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.protection-status {
+  display: grid;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.protection-status > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #17677b;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.protection-status svg {
+  width: 15px;
+  height: 15px;
+}
+
+.protection-mode-buttons,
+.local-edit-button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.protection-mode-button.is-active {
+  border-color: #0891b2 !important;
+  background: #ecfeff !important;
+  color: #0e7490;
+}
+
+.local-edit-button-grid {
+  margin-top: 8px;
+}
+
+.local-edit-button-grid .primary {
+  border-color: #e93566 !important;
+  background: #e93566 !important;
+  color: #fff;
+}
+
+.local-edit-actions > small {
+  display: block;
+  margin-top: 8px;
+  color: #777;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.color-review-panel {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  border-top: 1px solid #e4e4e4;
+  padding-top: 9px;
+}
+
+.color-review-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.color-review-heading span {
+  color: #777;
+}
+
+.color-review-list {
+  display: grid;
+  max-height: 250px;
+  gap: 5px;
+  overflow: auto;
+}
+
+.color-review-item {
+  display: grid;
+  grid-template-columns: 48px minmax(54px, 0.8fr) minmax(0, 1.5fr);
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #e1e1e1;
+  border-radius: 6px;
+  padding: 5px;
+}
+
+.color-review-item > div {
+  display: grid;
+  gap: 1px;
+}
+
+.color-review-item small {
+  color: #888;
+  font-size: 8px;
+}
+
+.color-review-locate,
+.color-review-candidate {
+  min-height: 30px !important;
+  padding: 0 5px !important;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.color-review-candidates {
+  display: flex !important;
+  min-width: 0;
+  gap: 3px !important;
+}
+
+.color-review-candidate {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+
+.color-review-candidate span {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+  border: 1px solid #999;
+  background: var(--review-color);
+}
+
+.color-review-empty {
+  margin: 0;
+  color: #777;
+  font-size: 10px;
 }
 
 @media (max-width: 1320px) {

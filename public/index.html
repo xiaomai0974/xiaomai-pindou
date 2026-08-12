@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=20260810-1" />
-    <link rel="stylesheet" href="mobile-layout.css?v=20260810-1" />
+    <link rel="stylesheet" href="styles.css?v=20260813-1" />
+    <link rel="stylesheet" href="mobile-layout.css?v=20260813-2" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
@@ -18,15 +18,16 @@
     <script src="preprocess-utils.js?v=20260730-1" defer></script>
     <script src="sampling-utils.js?v=20260730-1" defer></script>
     <script src="quality-utils.js?v=20260730-1" defer></script>
-    <script src="color-postprocess.js?v=20260731-1" defer></script>
-    <script src="canvas-renderer.js?v=20260812-1" defer></script>
+    <script src="color-postprocess.js?v=20260812-2" defer></script>
+    <script src="canvas-renderer.js?v=20260812-3" defer></script>
+    <script src="local-edit-utils.js?v=20260812-1" defer></script>
     <script src="project-codec.js?v=20260730-1" defer></script>
     <script src="project-store.js?v=20260730-1" defer></script>
     <script src="pdf-utils.js?v=20260730-1" defer></script>
     <script src="export-renderer.js?v=20260812-1" defer></script>
-    <script src="history-utils.js?v=20260730-1" defer></script>
+    <script src="history-utils.js?v=20260812-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260812-2" defer></script>
+    <script src="app.js?v=20260813-2" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -190,8 +191,11 @@
             <strong>MARD 221</strong>
           </div>
           <div class="color-limit-slider">
-            <input id="colorLimit" type="range" min="4" max="221" value="24" step="1" aria-label="最大颜色数" />
-            <output id="colorLimitValue" for="colorLimit">24 色</output>
+            <input id="colorLimit" type="range" min="1" max="221" value="24" step="1" aria-label="最大颜色数" />
+            <label class="color-limit-number" title="也可以直接输入颜色数量">
+              <input id="colorLimitNumber" type="number" min="1" max="221" value="24" step="1" inputmode="numeric" aria-label="手写最大颜色数" />
+              <span>色</span>
+            </label>
           </div>
           <div class="color-limit-scale" aria-hidden="true">
             <span>少颜色</span>
@@ -202,7 +206,8 @@
             <button class="color-preset" data-colors="16" type="button"><strong>平衡</strong><span>16 色</span></button>
             <button class="color-preset is-active" data-colors="24" type="button"><strong>细节</strong><span>24 色</span></button>
           </div>
-          <small class="setting-hint">MARD 221 全色板仍可搜索；这里控制一张图最多使用多少种颜色。</small>
+          <small class="setting-hint">滑动或手写颜色数量；锁定色优先保留，照片原色也会按这里的数量收敛。</small>
+          <div id="transformColorPanelMount" class="transform-color-panel-mount" aria-live="polite"></div>
         </section>
 
         <section class="control-group sidebar-card background-card">
@@ -461,9 +466,10 @@
             <button class="canvas-tool is-active" data-tool="brush" type="button" title="画笔快捷键 B"><i data-lucide="pencil" aria-hidden="true"></i><span>画笔</span></button>
             <button class="canvas-tool" data-tool="eraser" type="button" title="擦除快捷键 U"><i data-lucide="eraser" aria-hidden="true"></i><span>擦除</span></button>
             <button class="canvas-tool" data-tool="eyedropper" type="button" title="吸管快捷键 I"><i data-lucide="pipette" aria-hidden="true"></i><span>吸管</span></button>
+            <button class="canvas-tool" data-tool="protect" type="button" title="保护画笔快捷键 Q：标记不参与自动优化的格子"><i data-lucide="shield-check" aria-hidden="true"></i><span>保护</span></button>
             <button class="canvas-tool" data-tool="pen" type="button" title="钢笔快捷键 P；逐点勾选，双击闭合"><i data-lucide="pen-tool" aria-hidden="true"></i><span>钢笔</span></button>
             <button class="canvas-tool" data-tool="rect" type="button" title="框选"><i data-lucide="box-select" aria-hidden="true"></i><span>框选</span></button>
-            <button id="mobileConfirmSelectionButton" class="mobile-confirm-selection-button" type="button" title="确定当前选区"><i data-lucide="check-square" aria-hidden="true"></i><span>确定选取</span></button>
+            <button id="mobileConfirmSelectionButton" class="mobile-confirm-selection-button" type="button" title="确定当前选区" aria-pressed="false" disabled><i data-lucide="check-square" aria-hidden="true"></i><span>确定选取</span></button>
           </div>
           <button id="toolPropertiesButton" class="tool-properties-button" type="button" title="工具设置" aria-expanded="false">
             <i data-lucide="sliders-horizontal" aria-hidden="true"></i><span>设置</span>
@@ -543,6 +549,30 @@
               </select>
             </label>
           </div>
+          <details class="local-edit-actions" open>
+            <summary>局部优化与保护</summary>
+            <div class="protection-status">
+              <span><i data-lucide="shield-check" aria-hidden="true"></i> 已保护 <strong id="protectedCellCount">0</strong> 格</span>
+              <div class="protection-mode-buttons" role="group" aria-label="保护画笔模式">
+                <button class="protection-mode-button is-active" data-protection-mode="add" type="button">添加保护</button>
+                <button class="protection-mode-button" data-protection-mode="remove" type="button">取消保护</button>
+              </div>
+            </div>
+            <div class="local-edit-button-grid">
+              <button id="protectSelectionButton" type="button">保护选区</button>
+              <button id="unprotectSelectionButton" type="button">取消选区保护</button>
+              <button id="previewSelectionOptimizeButton" class="primary" type="button">预览局部优化</button>
+              <button id="reviewSuspectColorsButton" type="button">检查疑似错色</button>
+            </div>
+            <small>保护格不会被局部清理或自动减色；局部优化只处理当前选区，并先生成预览。</small>
+            <div id="colorReviewPanel" class="color-review-panel" hidden>
+              <div class="color-review-heading">
+                <strong>疑似错色复核</strong>
+                <span id="colorReviewSummary"></span>
+              </div>
+              <div id="colorReviewList" class="color-review-list"></div>
+            </div>
+          </details>
           <details class="tool-advanced-actions">
             <summary>选区与整图操作</summary>
             <div class="mirror-actions" role="group" aria-label="选区或整图镜像">
@@ -777,17 +807,20 @@
         </div>
 
         <div class="stats-tab-content" data-stats-content="colors" role="tabpanel" hidden>
-          <section class="control-group color-constraint-panel stats-color-panel">
-            <div class="group-title">
-              <span>选择画笔颜色</span>
-              <output id="colorModeLabel">MARD 221</output>
-            </div>
-            <div class="constraint-tools">
-              <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
-              <button id="showSelectedColorsButton" type="button">只看使用</button>
-            </div>
-            <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
-          </section>
+          <div id="statsColorPanelMount" class="stats-color-panel-mount">
+            <section class="control-group color-constraint-panel stats-color-panel">
+              <div class="group-title">
+                <span>选择 / 锁定颜色</span>
+                <output id="colorModeLabel">MARD 221</output>
+              </div>
+              <div class="constraint-tools">
+                <input id="paletteSearchInput" type="search" placeholder="搜索色号 / 颜色名" aria-label="搜索色板颜色" />
+                <button id="showSelectedColorsButton" type="button">只看使用</button>
+              </div>
+              <small class="constraint-palette-help">单击选色；双击或右键锁定。锁定色不会被减色删除。</small>
+              <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
+            </section>
+          </div>
           <div class="color-diagnostic-tools" aria-label="颜色识别验证">
             <label class="mini-check">
               <input id="colorDebugToggle" type="checkbox" />
