@@ -64,7 +64,7 @@
 
     exportCtx.textAlign = "center";
     exportCtx.textBaseline = "middle";
-    exportCtx.font = "14px Arial, sans-serif";
+    exportCtx.font = `${Math.max(10, Math.round(cellSize * 0.38))}px Arial, sans-serif`;
     exportCtx.fillStyle = "#777";
     for (let index = 1; index <= widthCells; index += 1) {
       if (index === 1 || index % 5 === 0 || widthCells <= 64) {
@@ -113,13 +113,13 @@
       rows,
       contrastColor,
     } = options;
-    const chipWidth = 170;
-    const chipHeight = 58;
-    const gap = 18;
+    const chipWidth = 148;
+    const chipHeight = 50;
+    const gap = 14;
     const columns = Math.max(1, Math.floor(maxWidth / (chipWidth + gap)));
 
     exportCtx.fillStyle = "#111";
-    exportCtx.font = "900 30px Microsoft YaHei, sans-serif";
+    exportCtx.font = "900 25px Microsoft YaHei, sans-serif";
     exportCtx.textAlign = "left";
     exportCtx.fillText("色卡", startX, startY - 30);
 
@@ -129,19 +129,19 @@
       const x = startX + col * (chipWidth + gap);
       const y = startY + row * (chipHeight + gap);
       exportCtx.fillStyle = item.hex;
-      exportCtx.fillRect(x, y, 46, 46);
+      exportCtx.fillRect(x, y, 40, 40);
       exportCtx.strokeStyle = "#111";
       exportCtx.lineWidth = 2;
-      exportCtx.strokeRect(x, y, 46, 46);
+      exportCtx.strokeRect(x, y, 40, 40);
       exportCtx.fillStyle = contrastColor(item.rgb);
-      exportCtx.font = "900 17px Arial, sans-serif";
+      exportCtx.font = "900 14px Arial, sans-serif";
       exportCtx.textAlign = "center";
       exportCtx.textBaseline = "middle";
-      exportCtx.fillText(item.code, x + 23, y + 23);
+      exportCtx.fillText(item.code, x + 20, y + 20);
       exportCtx.textAlign = "left";
       exportCtx.fillStyle = "#111";
-      exportCtx.font = "800 22px Arial, Microsoft YaHei, sans-serif";
-      exportCtx.fillText(`x${item.count}`, x + 58, y + 29);
+      exportCtx.font = "800 18px Arial, Microsoft YaHei, sans-serif";
+      exportCtx.fillText(`x${item.count}`, x + 50, y + 25);
     });
   }
 
@@ -162,26 +162,27 @@
       watermarkText = "小麦拼豆",
     } = options;
     const largestSide = Math.max(widthCells, heightCells);
-    const cellSize = largestSide >= 120 ? 38 : largestSide >= 100 ? 44 : largestSide >= 64 ? 42 : 46;
-    const margin = Math.max(96, Math.round(cellSize * 2.5));
-    const top = Math.max(180, Math.round(cellSize * 4.1));
+    const cellSize = largestSide >= 120 ? 20 : largestSide >= 100 ? 24 : largestSide >= 64 ? 30 : 34;
+    const margin = Math.max(72, Math.round(cellSize * 2.5));
+    const top = Math.max(132, Math.round(cellSize * 3.5));
     const plotWidth = widthCells * cellSize;
     const plotHeight = heightCells * cellSize;
-    const legendRows = Math.ceil(rows.length / Math.max(1, Math.floor(plotWidth / 188)));
-    const legendHeight = Math.max(280, 90 + legendRows * 82);
+    const legendRows = Math.ceil(rows.length / Math.max(1, Math.floor(plotWidth / 162)));
+    const legendHeight = Math.max(220, 76 + legendRows * 68);
     const canvas = document.createElement("canvas");
     canvas.width = margin * 2 + plotWidth;
     canvas.height = top + plotHeight + legendHeight;
     const exportCtx = canvas.getContext("2d");
+    exportCtx.imageSmoothingEnabled = false;
 
     exportCtx.fillStyle = "#fffdf8";
     exportCtx.fillRect(0, 0, canvas.width, canvas.height);
     exportCtx.fillStyle = "#111";
-    exportCtx.font = `900 ${Math.max(54, Math.round(cellSize * 1.25))}px Microsoft YaHei, sans-serif`;
-    exportCtx.fillText(includeWatermark ? watermarkText : "拼豆图纸", margin, 76);
-    exportCtx.font = `500 ${Math.max(34, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
+    exportCtx.font = `900 ${Math.max(42, Math.round(cellSize * 1.25))}px Microsoft YaHei, sans-serif`;
+    exportCtx.fillText(includeWatermark ? watermarkText : "拼豆图纸", margin, 60);
+    exportCtx.font = `500 ${Math.max(24, Math.round(cellSize * 0.8))}px Arial, Microsoft YaHei, sans-serif`;
     exportCtx.textAlign = "right";
-    exportCtx.fillText(`${fileName || "pattern"}   ${dimensionsLabel} / ${totalBeads}颗 / ${counts.size}色`, canvas.width - margin, 76);
+    exportCtx.fillText(`${fileName || "pattern"}   ${dimensionsLabel} / ${totalBeads}颗 / ${counts.size}色`, canvas.width - margin, 60);
     exportCtx.textAlign = "left";
 
     drawReadableCells(exportCtx, {
@@ -196,7 +197,7 @@
     });
     drawReadableLegend(exportCtx, {
       startX: margin,
-      startY: top + plotHeight + 80,
+      startY: top + plotHeight + 66,
       maxWidth: canvas.width - margin * 2,
       rows,
       contrastColor,

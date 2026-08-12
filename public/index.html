@@ -19,14 +19,14 @@
     <script src="sampling-utils.js?v=20260730-1" defer></script>
     <script src="quality-utils.js?v=20260730-1" defer></script>
     <script src="color-postprocess.js?v=20260731-1" defer></script>
-    <script src="canvas-renderer.js?v=20260731-1" defer></script>
+    <script src="canvas-renderer.js?v=20260812-1" defer></script>
     <script src="project-codec.js?v=20260730-1" defer></script>
     <script src="project-store.js?v=20260730-1" defer></script>
     <script src="pdf-utils.js?v=20260730-1" defer></script>
-    <script src="export-renderer.js?v=20260731-2" defer></script>
+    <script src="export-renderer.js?v=20260812-1" defer></script>
     <script src="history-utils.js?v=20260730-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260810-2" defer></script>
+    <script src="app.js?v=20260812-2" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -494,6 +494,7 @@
               <div>
                 <small>当前操作颜色</small>
                 <strong id="mobileColorActionCode">H7</strong>
+                <small id="mobileColorActionCount">当前图纸 0 颗</small>
               </div>
             </div>
             <label for="mobileReplaceColorInput">
@@ -590,8 +591,8 @@
           <label class="export-format">
             <span>导出格式</span>
             <select id="exportFormat">
-              <option value="pdf" selected>PDF 清晰图纸</option>
-              <option value="png">PNG 高清图片</option>
+              <option value="png" selected>PNG 高清图片</option>
+              <option value="pdf">PDF 清晰图纸</option>
             </select>
           </label>
           <label class="export-watermark-toggle">

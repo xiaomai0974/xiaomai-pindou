@@ -319,6 +319,7 @@ const state = {
   paletteSearch: "",
   toolPaletteSearch: "",
   toolPaletteShowAll: false,
+  recentColorCodes: [],
   showSelectedColorsOnly: false,
   dither: DEFAULT_GENERATION_SETTINGS.dither,
   showGrid: true,
@@ -652,6 +653,7 @@ const elements = {
   mobileColorActions: document.querySelector("#mobileColorActions"),
   mobileColorActionSwatch: document.querySelector("#mobileColorActionSwatch"),
   mobileColorActionCode: document.querySelector("#mobileColorActionCode"),
+  mobileColorActionCount: document.querySelector("#mobileColorActionCount"),
   mobileReplaceColorInput: document.querySelector("#mobileReplaceColorInput"),
   mobileReplaceColorButton: document.querySelector("#mobileReplaceColorButton"),
   mobileColorLockButton: document.querySelector("#mobileColorLockButton"),
@@ -2521,6 +2523,7 @@ function createBlankCanvas(options = {}) {
   state.patternSize = state.gridSize;
   state.counts = buildCounts(state.pattern);
   state.projectPalette = fill.empty ? [] : [fill];
+  state.recentColorCodes = [];
   state.backgroundMask = new Uint8Array(state.pattern.length);
   clearPreviewState();
   state.hasConfirmedGrid = true;
@@ -2984,6 +2987,7 @@ function buildProjectData() {
       lockedColors: [...state.lockedColorCodes],
       disabledColors: [...state.disabledColorCodes],
       activePaintColor: state.selectedColor?.code || "",
+      recentColors: [...state.recentColorCodes],
       maxColors: state.colorLimit,
       colorConstraintMode: state.colorMode,
       projectPalette: state.projectPalette.map((item) => item.code).filter(Boolean),
@@ -3205,6 +3209,9 @@ async function restoreProjectData(projectData, options = {}) {
     state.disabledColorCodes = new Set(paletteState.disabledColors || []);
     state.lockedColorCodes.forEach((code) => state.allowedColorCodes.add(code));
     state.selectedColor = paletteColorByCode(paletteState.activePaintColor) || state.selectedColor || fallbackPaletteColor();
+    state.recentColorCodes = Array.isArray(paletteState.recentColors)
+      ? paletteState.recentColors.filter((code) => paletteColorByCode(code)).slice(0, 8)
+      : [];
     state.projectPalette = Array.isArray(paletteState.projectPalette)
       ? paletteState.projectPalette.map((code) => paletteColorByCode(code)).filter(Boolean)
       : [];
@@ -3799,6 +3806,7 @@ function acceptSourceImage(image, file, cropInfo = {}) {
     state.manualEditedCells = new Set();
     state.counts = new Map();
     state.projectPalette = [];
+    state.recentColorCodes = [];
     clearHistory();
     state.suspendHistory = true;
     elements.projectName.textContent = state.fileName || "小麦拼豆";
@@ -4866,7 +4874,6 @@ function setPendingPreview(pattern, options = {}) {
 function renderPendingPreview() {
   renderPattern();
   renderStats();
-  showQualityHint();
 }
 
 async function requestPreviewUpdate(message = "参数预览已更新，请确认应用后再编辑或导出。", options = {}) {
@@ -4878,7 +4885,7 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
   const requestSignature = currentConversionPreviewSignature();
   if (state.isProcessingPattern && activePreviewRequestSignature === requestSignature) return true;
   if (state.isPreviewDirty && state.previewPattern.length && pendingPreviewRequestSignature === requestSignature) {
-    elements.cellInfo.textContent = message;
+    showQualityHint(message);
     return true;
   }
   const hadProcessingRequest = state.isProcessingPattern;
@@ -4928,7 +4935,7 @@ async function requestPreviewUpdate(message = "参数预览已更新，请确认
     });
     renderPendingPreview();
     elements.projectMeta.textContent = `预览 / ${gridDimensionsLabel()} / ${totalBeadCount(result.pattern)} 颗 / ${state.previewCounts.size} 色`;
-    elements.cellInfo.textContent = state.manualEditCount ? "当前已有手动编辑；确认应用新预览时会询问是否覆盖。" : message;
+    showQualityHint(state.manualEditCount ? "当前已有手动编辑；确认应用新预览时会询问是否覆盖。" : message);
     markProjectDirty();
     return true;
   } catch (error) {
@@ -4971,10 +4978,9 @@ function applyPreviewToEditGrid() {
   state.editGridVersion += 1;
   renderPattern();
   renderStats();
-  showQualityHint();
   updateHistoryButtons();
   elements.projectMeta.textContent = `${gridDimensionsLabel()} / ${totalBeadCount()} 颗 / ${state.counts.size} 色 / 所需最小行列 ${state.usedBounds.width} x ${state.usedBounds.height}`;
-  elements.cellInfo.textContent = "预览已确认应用，现在可以进入编辑或导出。";
+  showQualityHint("预览已确认应用，现在可以进入编辑或导出。");
   markProjectDirty();
   return true;
 }
@@ -5830,9 +5836,12 @@ function countLowUsageColors(pattern) {
   return [...buildCounts(pattern).values()].filter((item) => item.count < threshold && !isColorLocked(item)).length;
 }
 
-function showQualityHint() {
+function showQualityHint(prefix = "") {
   const metrics = displayQualityMetrics();
-  if (!metrics) return;
+  if (!metrics) {
+    if (prefix) elements.cellInfo.textContent = prefix;
+    return "";
+  }
   if (metrics.fixedPaletteViolation) {
     elements.cellInfo.textContent = "固定色板约束未满足：请重新映射到允许色板。";
   } else if (metrics.maxColorsViolation) {
@@ -5873,6 +5882,9 @@ function showQualityHint() {
       ? `颜色匹配评分 ${match.colorMatchScore}%（平均 ΔE00 ${match.averageDeltaE}），拼豆友好度 ${metrics.beadFriendlinessScore}/10。`
       : `拼豆友好度 ${metrics.beadFriendlinessScore}/10，适合继续手动修边。`;
   }
+  const hint = elements.cellInfo.textContent;
+  if (prefix) elements.cellInfo.textContent = `${prefix} ${hint}`;
+  return hint;
 }
 
 function displayPattern() {
@@ -6140,6 +6152,7 @@ function drawPatternCells(dirtyBounds = null) {
     plot,
     bounds: dirtyBounds || undefined,
     viewMode: state.viewMode,
+    detail: canvasRenderDetail(plot.cell),
   });
 }
 
@@ -6466,6 +6479,7 @@ function renderStats() {
     state.patternMode,
     state.colorMode,
     state.paletteSearch,
+    state.recentColorCodes.join(","),
     `${activeGridWidth()}x${activeGridHeight()}`,
     pattern.length,
     state.projectPalette.length,
@@ -6482,8 +6496,7 @@ function renderStats() {
 
   try {
     renderStatsNow(sorted, total, listRows, pattern, usedBounds);
-    if (!state.toolPaletteSearch && !state.toolPaletteShowAll) renderToolColorPalette(sorted);
-    else renderToolColorPalette();
+    renderToolColorPalette();
     renderCache.statsSignature = signature;
   } finally {
     recordPerformance("render.stats", performanceNow() - startedAt);
@@ -6609,7 +6622,7 @@ function applyConstraintChange() {
       signature: currentConversionPreviewSignature(),
     });
     renderPendingPreview();
-    elements.cellInfo.textContent = "颜色约束预览已更新，请确认应用。";
+    showQualityHint("颜色约束预览已更新，请确认应用。");
   } else if (state.image) {
     requestPreviewUpdate("颜色约束预览已更新，请确认应用。");
   }
@@ -6714,6 +6727,7 @@ function renderPaletteChoices(rows = currentPaletteRows()) {
 function toolPaletteRows() {
   const query = state.toolPaletteSearch.trim().toLowerCase();
   const counts = displayCounts();
+  const recentRank = new Map(state.recentColorCodes.map((code, index) => [code, index]));
   const enrich = (color) => {
     const sourceColor = paletteColorByCode(color.code) || color;
     const counted = counts.get(sourceColor.code);
@@ -6723,22 +6737,34 @@ function toolPaletteRows() {
       isUsed: Boolean(counted?.count),
       isLocked: state.lockedColorCodes.has(sourceColor.code),
       isActive: state.selectedColor?.code === sourceColor.code,
+      recentRank: recentRank.get(sourceColor.code) ?? Number.MAX_SAFE_INTEGER,
     };
   };
 
+  const defaultSource = new Map(
+    currentPaletteRows()
+      .filter((item) => item.count > 0 || item.isLocked || item.isActive)
+      .map((item) => [item.code, item]),
+  );
+  for (const code of state.recentColorCodes) {
+    const color = paletteColorByCode(code);
+    if (color && !defaultSource.has(code)) defaultSource.set(code, color);
+  }
   const source = query || state.toolPaletteShowAll
     ? palette.filter((item) => !query || paletteSearchTextByCode.get(item.code).includes(query))
-    : currentPaletteRows().filter((item) => item.count > 0 || item.isLocked || item.isActive);
+    : [...defaultSource.values()];
 
   const rows = source.map(enrich).sort((a, b) => {
     const rank = (item) => {
       if (item.isActive) return 0;
       if (item.isLocked) return 1;
-      if (item.isUsed) return 2;
-      return 3;
+      if (item.recentRank !== Number.MAX_SAFE_INTEGER) return 2;
+      if (item.isUsed) return 3;
+      return 4;
     };
     return (
       rank(a) - rank(b) ||
+      a.recentRank - b.recentRank ||
       b.count - a.count ||
       (paletteIndexByCode.get(a.code) ?? Number.MAX_SAFE_INTEGER) -
         (paletteIndexByCode.get(b.code) ?? Number.MAX_SAFE_INTEGER)
@@ -6748,14 +6774,14 @@ function toolPaletteRows() {
   return rows.slice(0, query ? 80 : state.toolPaletteShowAll ? 96 : 40);
 }
 
-function renderToolColorPalette(sourceRows = null) {
+function renderToolColorPalette() {
   if (!elements.toolColorPalette) return;
-  const sourcePaletteRows = sourceRows?.filter((item) => item.count > 0 || item.isLocked || item.isActive) || null;
-  const rows = sourcePaletteRows || toolPaletteRows();
+  const rows = toolPaletteRows();
   const signature = [
     state.toolPaletteSearch,
     Number(state.toolPaletteShowAll),
     state.selectedColor?.code || "",
+    state.recentColorCodes.join(","),
     rows.map((item) => `${item.code}:${item.count}:${Number(item.isActive)}:${Number(item.isLocked)}`).join(","),
   ].join("|");
 
@@ -7227,6 +7253,10 @@ function syncMobileColorAction(code = "") {
   if (elements.mobileColorActionSwatch) elements.mobileColorActionSwatch.style.background = color.hex;
   if (elements.mobileColorActionCode) {
     elements.mobileColorActionCode.textContent = color.name && color.name !== color.code ? `${color.code} ${color.name}` : color.code;
+  }
+  if (elements.mobileColorActionCount) {
+    const count = displayCounts().get(color.code)?.count || 0;
+    elements.mobileColorActionCount.textContent = `当前图纸 ${count.toLocaleString("zh-CN")} 颗`;
   }
   if (elements.mobileReplaceColorInput) elements.mobileReplaceColorInput.value = "";
   if (elements.mobileColorLockButton) {
@@ -8413,7 +8443,7 @@ function replaceColorInGrid(oldColorId, newColorId, options = {}) {
   }
 
   if (state.lockedColorCodes.has(oldCode) && !options.confirmedLocked) {
-    const ok = window.confirm(`当前颜色 ${oldCode} 已锁定，是否仍然替换为 ${newCode}？\n确认后锁定状态会转移到 ${newCode}。`);
+    const ok = window.confirm(`当前颜色 ${oldCode} 已锁定，共影响 ${oldCount} 颗。是否仍然替换为 ${newCode}？\n确认后锁定状态会转移到 ${newCode}。`);
     if (!ok) return false;
   }
 
@@ -8494,7 +8524,11 @@ function validateColorReplacementResult(oldCode, newCode, beforeGrid, afterGrid,
 }
 
 function promptReplaceColor(oldCode) {
-  const nextCode = window.prompt(`把 ${oldCode} 替换为哪个 MARD 色号？`, "");
+  const affectedCount = state.pattern.reduce(
+    (total, item) => total + Number(!item.empty && item.code === oldCode),
+    0,
+  );
+  const nextCode = window.prompt(`把 ${oldCode} 替换为哪个 MARD 色号？\n当前图纸将影响 ${affectedCount} 颗。`, "");
   if (nextCode === null) return;
   replaceColorInGrid(oldCode, nextCode);
 }
@@ -8632,6 +8666,7 @@ function selectAllMatchingColor(color) {
 
 function rememberPaletteColor(color) {
   if (color.empty) return;
+  state.recentColorCodes = [color.code, ...state.recentColorCodes.filter((code) => code !== color.code)].slice(0, 8);
   if (!state.projectPalette.some((item) => item.code === color.code)) {
     state.projectPalette.push(color);
   }
@@ -8669,7 +8704,6 @@ function applyColorToIndices(indices, color, recordHistory = true) {
   state.hasConfirmedGrid = true;
   state.manualEditCount += 1;
   state.editGridVersion += 1;
-  scheduleQualityMetricsRefresh();
   scheduleQualityMetricsRefresh();
   updateSelectionLabel();
   renderPattern();
@@ -8979,6 +9013,7 @@ function resetApp() {
   state.patternSize = state.gridSize;
   state.counts = new Map();
   state.projectPalette = [];
+  state.recentColorCodes = [];
   state.selectedCell = null;
   state.symmetryMode = "none";
   state.referenceImage = null;

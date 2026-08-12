@@ -356,6 +356,19 @@ test("canvas renderer keeps cells, labels, grid, reference, and selection layers
   });
   assert.equal(calls.filter(([name]) => name === "fillRect").length, 4);
 
+  calls.length = 0;
+  renderer.drawPatternCells(ctx, {
+    pattern: [red, red, empty, empty],
+    stride: 2,
+    plot,
+    viewMode: "pixel",
+    detail: "coarse",
+  });
+  const coarseRuns = calls.filter(([name]) => name === "fillRect");
+  assert.equal(coarseRuns.length, 2);
+  assert.equal(coarseRuns.some(([, color, , , width]) => color === "#ff0000" && width === 20), true);
+  assert.equal(coarseRuns.some(([, color, , , width]) => color === "#fff" && width === 20), true);
+
   renderer.drawPatternCellCodes(ctx, {
     pattern: [red, empty, empty, empty],
     stride: 2,
@@ -469,6 +482,24 @@ test("export renderer uses one pattern snapshot for PNG and PDF output", async (
   assert.ok(canvas.width > 0 && canvas.height > 0);
   assert.equal(calls.some(([name, value]) => name === "fillText" && value === "A1"), true);
   assert.equal(calls.some(([name, value]) => name === "fillText" && value === "小麦拼豆"), true);
+
+  const pattern64 = Array.from({ length: 64 * 64 }, () => red);
+  exportRenderer.renderReadableExportCanvas({
+    document,
+    pattern: pattern64,
+    counts: new Map([["A1", { ...red, count: pattern64.length }]]),
+    rows: [{ ...red, count: pattern64.length }],
+    widthCells: 64,
+    heightCells: 64,
+    stride: 64,
+    fileName: "compact",
+    dimensionsLabel: "64 x 64",
+    totalBeads: pattern64.length,
+    contrastColor: colorUtils.contrastColor,
+    includeWatermark: false,
+  });
+  assert.ok(canvas.width >= 1900 && canvas.width <= 2200);
+  assert.ok(canvas.height >= 2100 && canvas.height <= 2500);
 
   const pdf = exportRenderer.buildVectorPdf({
     pattern,
@@ -1167,6 +1198,23 @@ test("conversion controls compose without discarding pending preview state", asy
   assert.match(constraintUpdater, /const base = hasPendingBase \? state\.previewPattern : state\.pattern/);
   assert.match(emptyBackground, /return state\.pixelBackground !== "white"/);
   assert.match(invalidator, /state\.isProcessingPattern = false;\s*updatePreviewButtons\(\)/);
+});
+
+test("quality hints, recent colors, and replacement counts remain visible", async () => {
+  const source = await appSource();
+  const previewUpdater = sourceBetween(source, "async function requestPreviewUpdate", "function applyPreviewToEditGrid");
+  const previewApply = sourceBetween(source, "function applyPreviewToEditGrid", "function confirmPendingPreview");
+  const paletteRows = sourceBetween(source, "function toolPaletteRows", "function renderToolColorPalette");
+  const colorMemory = sourceBetween(source, "function rememberPaletteColor", "function applyColorToIndices");
+  const replacer = sourceBetween(source, "function promptReplaceColor", "function handleKeyboardShortcuts");
+  const serializer = sourceBetween(source, "function buildProjectData", "function downloadBlob");
+
+  assert.match(previewUpdater, /showQualityHint\(/);
+  assert.match(previewApply, /showQualityHint\("预览已确认应用/);
+  assert.match(paletteRows, /recentRank/);
+  assert.match(colorMemory, /state\.recentColorCodes = \[color\.code/);
+  assert.match(replacer, /当前图纸将影响 \$\{affectedCount\} 颗/);
+  assert.match(serializer, /recentColors: \[\.\.\.state\.recentColorCodes\]/);
 });
 
 test("outline and anime controls keep dependent settings reversible", async () => {

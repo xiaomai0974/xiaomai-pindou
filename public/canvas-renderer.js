@@ -33,8 +33,28 @@
       plot,
       bounds = fullBounds(plot),
       viewMode = "pixel",
+      detail = "full",
     } = options;
     const cell = plot.cell;
+
+    if (detail === "coarse" && viewMode !== "bead") {
+      for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
+        let runStart = bounds.minX;
+        let runColor = null;
+        for (let x = bounds.minX; x <= bounds.maxX + 1; x += 1) {
+          const item = x <= bounds.maxX ? pattern[y * stride + x] : null;
+          const nextColor = item ? (item.empty ? "#fff" : item.hex) : null;
+          if (nextColor === runColor) continue;
+          if (runColor) {
+            ctx.fillStyle = runColor;
+            ctx.fillRect(plot.gridX + runStart * cell, plot.gridY + y * cell, (x - runStart) * cell, cell);
+          }
+          runStart = x;
+          runColor = nextColor;
+        }
+      }
+      return;
+    }
 
     for (let y = bounds.minY; y <= bounds.maxY; y += 1) {
       for (let x = bounds.minX; x <= bounds.maxX; x += 1) {
