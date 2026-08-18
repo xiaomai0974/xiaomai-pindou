@@ -748,6 +748,7 @@ const elements = {
   constraintPalette: document.querySelector("#constraintPalette"),
   paletteSearchInput: document.querySelector("#paletteSearchInput"),
   showSelectedColorsButton: document.querySelector("#showSelectedColorsButton"),
+  unlockAllColorsButton: document.querySelector("#unlockAllColorsButton"),
   accurateMatchToggle: document.querySelector("#accurateMatchToggle"),
   colorDebugToggle: document.querySelector("#colorDebugToggle"),
   colorDebugInfo: document.querySelector("#colorDebugInfo"),
@@ -1841,6 +1842,7 @@ function setupEvents() {
     elements.showSelectedColorsButton.textContent = state.showSelectedColorsOnly ? "显示全部" : "只看使用";
     renderConstraintPalette();
   });
+  elements.unlockAllColorsButton?.addEventListener("click", unlockAllConstraintColors);
   elements.exportButton.addEventListener("click", exportPattern);
   elements.exportWatermarkToggle.addEventListener("change", () => {
     state.exportWatermarkEnabled = elements.exportWatermarkToggle.checked;
@@ -2655,7 +2657,7 @@ function setBrushSize(value) {
 }
 
 function recommendedProcessingProfile(size = state.gridSize) {
-  return size <= 48 ? "compact48" : "detail64";
+  return size <= 54 ? "compact48" : "detail64";
 }
 
 function setProcessingProfile(profile, options = {}) {
@@ -2668,7 +2670,7 @@ function setProcessingProfile(profile, options = {}) {
   syncProcessingProfileControls();
   syncControlsFromState();
   if (regenerate && state.image) {
-    const label = state.processingProfile === "compact48" ? "48 精简版" : state.processingProfile === "detail64" ? "64+ 细节版" : "照片原色";
+    const label = state.processingProfile === "compact48" ? "48/54 精简版" : state.processingProfile === "detail64" ? "64+ 细节版" : "照片原色";
     requestPreviewUpdate(`已切换到${label}并更新预览，请确认应用。`);
   }
 }
@@ -2676,13 +2678,13 @@ function setProcessingProfile(profile, options = {}) {
 function syncProcessingProfileControls() {
   const detail = state.processingProfile === "detail64";
   const photo = state.processingProfile === "photoColor";
-  if (elements.processingProfileLabel) elements.processingProfileLabel.textContent = photo ? "照片原色" : detail ? "64+ 细节版" : "48 精简版";
+  if (elements.processingProfileLabel) elements.processingProfileLabel.textContent = photo ? "照片原色" : detail ? "64+ 细节版" : "48/54 精简版";
   if (elements.processingProfileHint) {
     elements.processingProfileHint.textContent = photo
       ? "先用完整色板高保真匹配，再按颜色上限收敛；锁定色会作为优先保留的目标色。"
       : detail
       ? "轻度清理，保留更多明暗层次、小装饰和结构细节。"
-      : "强收敛杂色，突出轮廓与远看识别度。";
+      : "适用于 48/54 小画布，收敛杂色并保留高对比细节。";
   }
   elements.processingProfileOptions.forEach((button) => {
     button.classList.toggle("is-active", button.dataset.processingProfile === state.processingProfile);
@@ -2695,9 +2697,9 @@ function applyPixelSizeDefaults(updateColor = true) {
     state.minRegionSize = 2;
     return;
   }
-  state.minRegionSize = state.gridSize <= 34 ? 1 : state.gridSize <= 48 ? 3 : 2;
+  state.minRegionSize = state.gridSize <= 34 ? 1 : state.gridSize <= 54 ? 3 : 2;
   if (updateColor) {
-    setColorLimit(state.gridSize <= 34 ? 12 : state.gridSize <= 48 ? 16 : state.gridSize <= 64 ? 24 : 28, false);
+    setColorLimit(state.gridSize <= 34 ? 12 : state.gridSize <= 54 ? 16 : state.gridSize <= 64 ? 24 : 28, false);
   }
 }
 
@@ -2707,7 +2709,7 @@ function applySizePresetDefaults(updateColor = true) {
     state.minRegionSize = 2;
     return;
   }
-  if (state.gridSize <= 48) {
+  if (state.gridSize <= 54) {
     state.minRegionSize = 3;
     if (updateColor) setColorLimit(16, false);
   } else if (state.gridSize <= 64) {
@@ -4645,13 +4647,12 @@ function finalizePhotoColorMatch(pattern, pixels, size) {
   const backgroundMask = computeBackgroundMask(pattern, pixels, size, true);
   const maskedPattern = applyBackgroundModeToGrid(pattern, backgroundMask, state.pixelBackground);
   let processed = totalBeadCount(maskedPattern) === 0 && totalBeadCount(pattern) > 0 ? pattern : maskedPattern;
-  processed = mergeSimilarUsedColors(processed, size, state.mergeSimilarColors ? 4.2 : 2.4);
-  processed = cleanPhotoLowContrastIsolated(processed, size);
-  if (state.mergeSimilarColors) {
-    processed = mergeSimilarUsedColors(processed, size, Math.min(5.2, 4.2 + (state.mergeBoost || 0)));
-  }
+  const photoMergeDistance = state.mergeSimilarColors
+    ? Math.min(5.2, 4.2 + (state.mergeBoost || 0))
+    : 2.4;
+  processed = mergeSimilarUsedColors(processed, size, photoMergeDistance);
+  processed = cleanPhotoLowContrastIsolated(processed, size, backgroundMask);
   if (state.cleanSmallRegions) {
-    processed = cleanPhotoLowContrastIsolated(processed, size);
     const photoRegionSize = Math.max(1, Math.min(3, state.minRegionSize));
     if (photoRegionSize > 1) processed = cleanPatternRegions(processed, size, photoRegionSize);
   }
@@ -4676,9 +4677,10 @@ function finalizePhotoColorMatch(pattern, pixels, size) {
   };
 }
 
-function cleanPhotoLowContrastIsolated(pattern, size) {
+function cleanPhotoLowContrastIsolated(pattern, size, backgroundMask = null) {
   const output = [...pattern];
   const protectedIndexes = buildProtectedIndexSet(pattern, size);
+  const backgroundCodes = backgroundColorCodes();
   for (let index = 0; index < pattern.length; index += 1) {
     const color = pattern[index];
     if (color.empty || protectedIndexes.has(index) || state.manualEditedCells.has(index) || isColorLocked(color)) continue;
@@ -4687,6 +4689,7 @@ function cleanPhotoLowContrastIsolated(pattern, size) {
     const neighbors = getFourNeighbors(x, y, size).map((next) => pattern[next]).filter((item) => !item.empty);
     if (neighbors.length < 2 || neighbors.some((item) => item.code === color.code)) continue;
     const winner = countNeighborColors(neighbors)
+      .filter((candidate) => backgroundMask?.[index] || !backgroundCodes.has(candidate.color.code))
       .sort((a, b) => b.count - a.count || colorDistance(color, a.color) - colorDistance(color, b.color))[0];
     if (!winner || winner.count < 2) continue;
     if (colorDistance(color, winner.color) > 10) continue;
@@ -5287,15 +5290,12 @@ function spreadError(pixels, size, x, y, error, factor) {
 }
 
 function postProcessPattern(pattern, size) {
-  return baselinePipeline(pattern, size);
-}
-
-function baselinePipeline(pattern, size) {
   let processed = validateColorConstraints(pattern);
   const detailProfile = state.processingProfile === "detail64";
+  const compactProfile = state.processingProfile === "compact48" && size <= 54;
 
   if (state.mergeSimilarColors) {
-    const mergeLimit = detailProfile ? (size <= 64 ? 5.5 : 6) : (size <= 64 ? 7 : 8);
+    const mergeLimit = detailProfile ? (size <= 64 ? 5.5 : 6) : compactProfile ? 8.5 : size <= 64 ? 7 : 8;
     processed = mergeSimilarUsedColors(processed, size, Math.min(mergeDeltaEForCurrentSettings(), mergeLimit));
   }
 
@@ -5316,13 +5316,20 @@ function baselinePipeline(pattern, size) {
     processed = convergeOutlineColors(processed, size);
   }
 
-  processed = mergeLowUsageColors(processed, size, { strength: detailProfile ? "detail" : "light" });
+  if (compactProfile) {
+    processed = capRegionPalettes(processed, size, "balanced");
+  }
+  processed = mergeLowUsageColors(processed, size, { strength: compactProfile ? "compact" : detailProfile ? "detail" : "light" });
   processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
-  if (state.patternMode === "pixelPattern" && outlineStrengthForSize() >= 2) {
+  const outlineStrength = outlineStrengthForSize();
+  const needsStructuralPostprocess = outlineStrength >= 2;
+  if (state.patternMode === "pixelPattern" && needsStructuralPostprocess) {
     processed = hardEdgePostProcess(processed, size);
   }
-  processed = repairOutlines(processed, size, outlineStrengthForSize());
-  processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
+  processed = repairOutlines(processed, size, outlineStrength);
+  if (needsStructuralPostprocess) {
+    processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
+  }
 
   return validateColorConstraints(processed);
 }
@@ -5381,7 +5388,14 @@ function nearestColorFromList(color, candidates) {
 }
 
 function capRegionPalettes(pattern, size, strength = "balanced") {
-  const maxColorsPerRegion = size <= 48 ? (strength === "strong" ? 3 : 4) : size <= 64 ? (strength === "strong" ? 5 : strength === "light" ? 7 : 6) : 8;
+  const compactProfile = state.processingProfile === "compact48" && size <= 54;
+  const maxColorsPerRegion = size <= 48
+    ? strength === "strong" ? 3 : 4
+    : compactProfile
+      ? strength === "strong" ? 4 : 5
+      : size <= 64
+        ? strength === "strong" ? 5 : strength === "light" ? 7 : 6
+        : 8;
   const protectedIndexes = buildProtectedIndexSet(pattern, size);
   const outlineMask = buildOutlineMask(pattern, size);
   const outlineCodes = outlineColorCodes(pattern, size);
@@ -6988,6 +7002,12 @@ function applyConstraintChange() {
 
 function renderConstraintPalette() {
   const startedAt = performanceNow();
+  if (elements.unlockAllColorsButton) {
+    elements.unlockAllColorsButton.disabled = state.lockedColorCodes.size === 0;
+    elements.unlockAllColorsButton.title = state.lockedColorCodes.size
+      ? `取消当前 ${state.lockedColorCodes.size} 个锁定颜色`
+      : "当前没有锁定颜色";
+  }
   const modeLabel = state.lockedColorCodes.size
     ? `MARD 221 · 已锁 ${state.lockedColorCodes.size}`
     : "MARD 221";
@@ -7318,14 +7338,11 @@ function handleConstraintPaletteClick(event) {
 
 function toggleConstraintPaletteLock(button, activateColor) {
   const code = button.dataset.constraintCode;
-  const color = paletteColorByCode(code);
-  if (!color) return;
-  state.disabledColorCodes.delete(code);
-  state.allowedColorCodes.add(code);
-  if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
-  else state.lockedColorCodes.add(code);
+  const result = toggleLockedColorCode(code);
+  if (!result) return;
+  const { color, locked } = result;
   if (activateColor) activatePaintColor(color, { addToAllowed: true, announce: false });
-  elements.cellInfo.textContent = state.lockedColorCodes.has(code)
+  elements.cellInfo.textContent = locked
     ? `${code} 已锁定${activateColor ? "。" : "，不会被自动优化修改。"}`
     : `${code} 已解锁。`;
   if (state.colorMode === "fixedPalette") applyConstraintChange();
@@ -7334,6 +7351,19 @@ function toggleConstraintPaletteLock(button, activateColor) {
     renderStats();
     markProjectDirty();
   }
+}
+
+function unlockAllConstraintColors() {
+  const unlockedCount = state.lockedColorCodes.size;
+  if (!unlockedCount) return;
+  state.lockedColorCodes.clear();
+  renderCache.constraintSignature = null;
+  renderCache.statsSignature = null;
+  renderCache.toolPaletteSignature = null;
+  renderConstraintPalette();
+  renderStats();
+  elements.cellInfo.textContent = `已取消全部 ${unlockedCount} 个锁定颜色，当前图纸颜色保持不变。`;
+  markProjectDirty();
 }
 
 function handleConstraintPaletteDoubleClick(event) {
@@ -7705,6 +7735,17 @@ function syncMobileColorAction(code = "") {
   }
 }
 
+function toggleLockedColorCode(code) {
+  const color = paletteColorByCode(code);
+  if (!color) return null;
+  state.disabledColorCodes.delete(code);
+  state.allowedColorCodes.add(code);
+  const locked = !state.lockedColorCodes.has(code);
+  if (locked) state.lockedColorCodes.add(code);
+  else state.lockedColorCodes.delete(code);
+  return { color, locked };
+}
+
 function applyMobileColorReplacement() {
   const oldCode = elements.mobileColorActions?.dataset.sourceCode;
   const nextCode = elements.mobileReplaceColorInput?.value.trim().toUpperCase();
@@ -7717,17 +7758,13 @@ function applyMobileColorReplacement() {
 
 function toggleMobileColorLock() {
   const code = elements.mobileColorActions?.dataset.sourceCode;
-  const color = paletteColorByCode(code);
-  if (!color) return;
-  state.disabledColorCodes.delete(code);
-  state.allowedColorCodes.add(code);
-  if (state.lockedColorCodes.has(code)) state.lockedColorCodes.delete(code);
-  else state.lockedColorCodes.add(code);
+  const result = toggleLockedColorCode(code);
+  if (!result) return;
   renderConstraintPalette();
   renderStats();
   renderToolColorPalette();
   syncMobileColorAction(code);
-  elements.cellInfo.textContent = state.lockedColorCodes.has(code)
+  elements.cellInfo.textContent = result.locked
     ? `${code} 已锁定，不会被自动减色或合并。`
     : `${code} 已取消锁定。`;
   markProjectDirty();
@@ -8544,6 +8581,16 @@ function getGridPointFromPointer(event) {
   };
 }
 
+function pointInsideGeometry(point, geometry) {
+  return Boolean(
+    geometry &&
+    point.x >= geometry.left &&
+    point.x <= geometry.left + geometry.width &&
+    point.y >= geometry.top &&
+    point.y <= geometry.top + geometry.height
+  );
+}
+
 function tryStartTraceReferenceDrag(event) {
   if (!REFERENCE_FEATURE_ENABLED) return false;
   const trace = state.traceReference;
@@ -8559,15 +8606,7 @@ function tryStartTraceReferenceDrag(event) {
   }
   const geometry = traceReferenceGeometry();
   const point = getCanvasPointFromPointer(event);
-  if (
-    !geometry ||
-    point.x < geometry.left ||
-    point.x > geometry.left + geometry.width ||
-    point.y < geometry.top ||
-    point.y > geometry.top + geometry.height
-  ) {
-    return false;
-  }
+  if (!pointInsideGeometry(point, geometry)) return false;
   event.preventDefault();
   trace.dragging = true;
   trace.pointerId = event.pointerId;
@@ -8614,15 +8653,7 @@ function pickColorFromTraceReference(event) {
   if (!state.traceReference.enabled || !state.traceReference.visible || state.traceReference.opacity <= 0) return false;
   const geometry = traceReferenceGeometry();
   const point = getCanvasPointFromPointer(event);
-  if (
-    !geometry ||
-    point.x < geometry.left ||
-    point.x > geometry.left + geometry.width ||
-    point.y < geometry.top ||
-    point.y > geometry.top + geometry.height
-  ) {
-    return false;
-  }
+  if (!pointInsideGeometry(point, geometry)) return false;
   const ratioX = clampRange((point.x - geometry.left) / Math.max(1, geometry.width), 0, 1);
   const ratioY = clampRange((point.y - geometry.top) / Math.max(1, geometry.height), 0, 1);
   const sampleX = Math.min(state.referenceImage.width - 1, Math.max(0, Math.floor(ratioX * state.referenceImage.width)));

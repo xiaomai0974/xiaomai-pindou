@@ -35,6 +35,103 @@
       return 0.299 * color.rgb.r + 0.587 * color.rgb.g + 0.114 * color.rgb.b;
     }
 
+    function buildColorAdjacency(pattern, size) {
+      const adjacency = new Map();
+      const add = (sourceCode, targetCode) => {
+        if (sourceCode === targetCode) return;
+        const targets = adjacency.get(sourceCode) || new Map();
+        targets.set(targetCode, (targets.get(targetCode) || 0) + 1);
+        adjacency.set(sourceCode, targets);
+      };
+
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          const index = y * size + x;
+          const source = pattern[index];
+          if (!source || source.empty) continue;
+          if (x + 1 < size) {
+            const right = pattern[index + 1];
+            if (right && !right.empty) {
+              add(source.code, right.code);
+              add(right.code, source.code);
+            }
+          }
+          if (y + 1 < size) {
+            const below = pattern[index + size];
+            if (below && !below.empty) {
+              add(source.code, below.code);
+              add(below.code, source.code);
+            }
+          }
+        }
+      }
+      return adjacency;
+    }
+
+    function mergeColorState(counts, adjacency, replacements, source, target) {
+      if (!source || !target || source.code === target.code) return false;
+      const sourceEntry = counts.get(source.code);
+      if (!sourceEntry) return false;
+
+      const targetEntry = counts.get(target.code) || { ...target, count: 0 };
+      counts.set(target.code, {
+        ...targetEntry,
+        count: (targetEntry.count || 0) + (sourceEntry.count || 0),
+      });
+      counts.delete(source.code);
+      replacements.set(source.code, target);
+
+      const sourceNeighbors = adjacency.get(source.code) || new Map();
+      const targetNeighbors = adjacency.get(target.code) || new Map();
+      for (const [neighborCode, support] of sourceNeighbors) {
+        const neighborTargets = adjacency.get(neighborCode) || new Map();
+        neighborTargets.delete(source.code);
+        if (neighborCode === target.code) continue;
+
+        targetNeighbors.set(neighborCode, (targetNeighbors.get(neighborCode) || 0) + support);
+        neighborTargets.set(target.code, (neighborTargets.get(target.code) || 0) + support);
+        adjacency.set(neighborCode, neighborTargets);
+      }
+      targetNeighbors.delete(source.code);
+      targetNeighbors.delete(target.code);
+      if (targetNeighbors.size) adjacency.set(target.code, targetNeighbors);
+      else adjacency.delete(target.code);
+      adjacency.delete(source.code);
+      return true;
+    }
+
+    function applyColorReplacements(pattern, replacements) {
+      if (!replacements.size) return [...pattern];
+      return pattern.map((color) => resolveReplacement(color, replacements));
+    }
+
+    function remapColorCounts(counts, replacements) {
+      const remapped = new Map();
+      for (const color of counts.values()) {
+        const target = resolveReplacement(color, replacements);
+        const current = remapped.get(target.code) || { ...target, count: 0 };
+        current.count += color.count || 0;
+        remapped.set(target.code, current);
+      }
+      return remapped;
+    }
+
+    function bestMergeCandidate(source, candidates, adjacency = new Map()) {
+      if (!candidates.length) return null;
+      const sourceFamily = colorFamily(source);
+      const supportByCode = adjacency.get(source.code) || new Map();
+      const ranked = candidates.map((target) => {
+        const distance = colorDistance(source, target);
+        const familyPenalty = colorFamily(target) === sourceFamily ? 0 : 3.5;
+        const support = supportByCode.get(target.code) || 0;
+        const adjacencyBonus = support ? Math.min(4.5, 1.25 + Math.log2(support + 1)) : 0;
+        const usageBonus = Math.min(1.2, Math.log2((target.count || 1) + 1) * 0.12);
+        return { target, distance, score: distance + familyPenalty - adjacencyBonus - usageBonus };
+      });
+      ranked.sort((a, b) => a.score - b.score || a.distance - b.distance || b.target.count - a.target.count);
+      return ranked[0].target;
+    }
+
     function analyzeColorRegions(pattern, size) {
       const visited = new Uint8Array(pattern.length);
       const regions = [];
@@ -140,8 +237,7 @@
     }
 
     function mergeSimilarUsedColors(pattern, size, mergeDeltaE) {
-      let merged = [...pattern];
-      let counts = buildCounts(merged);
+      const counts = buildCounts(pattern);
       const outlineCodes = outlineColorCodes(pattern, size);
       const backgroundCodes = backgroundColorCodes();
       const colors = [...counts.values()].sort((a, b) => {
@@ -164,11 +260,8 @@
         }
       }
 
-      if (!replacements.size) return merged;
-      merged = merged.map((color) => replacements.get(color.code) || color);
-
-      counts = buildCounts(merged);
-      const remaining = [...counts.values()].sort((a, b) => b.count - a.count);
+      if (!replacements.size) return [...pattern];
+      const remaining = [...remapColorCounts(counts, replacements).values()].sort((a, b) => b.count - a.count);
       const secondPass = new Map();
       for (let i = 0; i < remaining.length; i += 1) {
         for (let j = i + 1; j < remaining.length; j += 1) {
@@ -181,37 +274,39 @@
         }
       }
 
-      return secondPass.size ? merged.map((color) => secondPass.get(color.code) || color) : merged;
+      return pattern.map((color) => {
+        const merged = resolveReplacement(color, replacements);
+        return secondPass.get(merged.code) || merged;
+      });
     }
 
-    function nearestMergeTarget(source, counts, protectedCodes = new Set(), allowProtectedTarget = true) {
+    function nearestMergeTarget(source, counts, protectedCodes = new Set(), allowProtectedTarget = true, adjacency = new Map()) {
+      if (isColorLocked(source)) return null;
+      const backgrounds = backgroundColorCodes();
       const candidates = [...counts.values()].filter((item) => {
         if (item.code === source.code) return false;
-        if (isColorLocked(source)) return false;
+        if (backgrounds.has(item.code) && !isColorLocked(item)) return false;
         if (!allowProtectedTarget && protectedCodes.has(item.code) && !isColorLocked(item)) return false;
         return true;
       });
-      if (!candidates.length) return null;
-      candidates.sort((a, b) => {
-        const da = colorDistance(source, a);
-        const db = colorDistance(source, b);
-        return da - db || b.count - a.count;
-      });
-      return candidates[0];
+      return bestMergeCandidate(source, candidates, adjacency);
     }
 
     function mergeLowUsageColors(pattern, size, options = {}) {
-      let processed = [...pattern];
+      const processed = [...pattern];
       const total = totalBeadCount(processed);
       const strong = options.strength === "strong";
+      const compact = options.strength === "compact";
       const detail = options.strength === "detail" || getProcessingProfile() === "detail64";
       const base = size === 48 ? (strong ? 0.008 : 0.005) : size === 64 ? (strong ? 0.005 : 0.003) : 0.005;
       const threshold = getAccurateMatch() && !strong
-        ? detail ? (size <= 64 ? 2 : 3) : size <= 48 ? 4 : size <= 64 ? 6 : 8
+        ? detail ? (size <= 64 ? 2 : 3) : compact ? (size <= 54 ? 6 : 8) : size <= 48 ? 4 : size <= 64 ? 6 : 8
         : Math.max(8, Math.min(24, Math.ceil(total * base)));
       const outlineCodes = outlineColorCodes(processed, size);
       const protectedCodes = new Set([...findProtectedColorCodes(processed, size), ...outlineCodes]);
-      let counts = buildCounts(processed);
+      const counts = buildCounts(processed);
+      const adjacency = buildColorAdjacency(processed, size);
+      const replacements = new Map();
       const lowUsage = [...counts.values()]
         .filter((item) => item.count < threshold && !protectedCodes.has(item.code) && !isColorLocked(item))
         .sort((a, b) => a.count - b.count);
@@ -219,18 +314,19 @@
       if (!lowUsage.length) return processed;
 
       for (const color of lowUsage) {
-        counts = buildCounts(processed);
-        const target = nearestMergeTarget(color, counts, protectedCodes);
+        const source = counts.get(color.code);
+        if (!source) continue;
+        const target = nearestMergeTarget(source, counts, protectedCodes, true, adjacency);
         if (!target) continue;
-        processed = processed.map((item) => (item.code === color.code ? target : item));
+        mergeColorState(counts, adjacency, replacements, source, target);
       }
 
-      return processed;
+      return applyColorReplacements(processed, replacements);
     }
 
     function forceMaxColors(pattern, size, maxColors, options = {}) {
-      let processed = [...pattern];
-      let counts = buildCounts(processed);
+      const processed = [...pattern];
+      const counts = buildCounts(processed);
       if (counts.size <= maxColors) return processed;
 
       const softProtectedCodes = new Set([
@@ -242,8 +338,10 @@
         .filter((color) => color && getLockedColorCodes().has(color.code));
       const preferLockedTargets = options.preferLockedTargets === true && preferredLockedTargets.length > 0;
       const detailProfile = getProcessingProfile() === "detail64";
+      const adjacency = buildColorAdjacency(processed, size);
+      const replacements = new Map();
 
-      function mergeTargetFor(source, colors) {
+      function mergeTargetFor(source, colors, adjacency) {
         if (preferLockedTargets) {
           const lockedTarget = nearestColorFromList(
             source,
@@ -251,9 +349,11 @@
           );
           if (lockedTarget) return lockedTarget;
         }
-        const available = colors.filter((item) => item.code !== source.code);
-        const sameFamily = available.filter((item) => colorFamily(item) === colorFamily(source));
-        return nearestColorFromList(source, sameFamily.length ? sameFamily : available);
+        const backgrounds = backgroundColorCodes();
+        const available = colors.filter(
+          (item) => item.code !== source.code && (!backgrounds.has(item.code) || isColorLocked(item)),
+        );
+        return bestMergeCandidate(source, available, adjacency);
       }
 
       let guard = 0;
@@ -268,19 +368,22 @@
         let target = null;
         for (const candidateSource of colors) {
           if (hardProtectedCodes.has(candidateSource.code) || isColorLocked(candidateSource)) continue;
-          const sameFamily = colors.filter((item) => item.code !== candidateSource.code && colorFamily(item) === colorFamily(candidateSource));
-          const candidateTarget = mergeTargetFor(candidateSource, colors);
+          const candidateTarget = mergeTargetFor(candidateSource, colors, adjacency);
           if (!candidateTarget) continue;
           const mergeDistance = colorDistance(candidateSource, candidateTarget);
           if (!preferLockedTargets && softProtectedCodes.has(candidateSource.code) && mergeDistance > (detailProfile ? 14 : 24)) continue;
-          if (!preferLockedTargets && detailProfile && !sameFamily.length && mergeDistance > 18) continue;
+          if (
+            !preferLockedTargets &&
+            detailProfile &&
+            colorFamily(candidateTarget) !== colorFamily(candidateSource) &&
+            mergeDistance > 18
+          ) continue;
           source = candidateSource;
           target = candidateTarget;
           break;
         }
         if (!source || !target || source.code === target.code) break;
-        processed = processed.map((item) => (item.code === source.code ? target : item));
-        counts = buildCounts(processed);
+        mergeColorState(counts, adjacency, replacements, source, target);
       }
 
       while (counts.size > maxColors && guard < 1000) {
@@ -294,13 +397,12 @@
             return pa - pb || a.count - b.count || colorLuminance(a) - colorLuminance(b);
           })[0];
         if (!source) break;
-        const target = mergeTargetFor(source, colors);
+        const target = mergeTargetFor(source, colors, adjacency);
         if (!target) break;
-        processed = processed.map((item) => (item.code === source.code ? target : item));
-        counts = buildCounts(processed);
+        mergeColorState(counts, adjacency, replacements, source, target);
       }
 
-      return processed;
+      return applyColorReplacements(processed, replacements);
     }
 
     function cleanIsolatedPixels(pattern, size) {

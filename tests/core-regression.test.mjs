@@ -238,6 +238,10 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
   const gray = color("A", 110, 110, 110);
   const nearGray = color("B", 113, 113, 113);
   const warm = color("C", 180, 80, 45);
+  const adjacentGray = color("ADJ", 110, 110, 110);
+  const spatialSource = color("SOURCE", 111, 111, 111);
+  const remoteGray = color("REMOTE", 111, 111, 111);
+  const lightDetail = color("LIGHT", 238, 239, 240);
   const lockedColor = color("LOCK", 30, 50, 190);
   const locked = new Set(["LOCK"]);
   const getFourNeighbors = (x, y, size) => {
@@ -312,6 +316,21 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
     { preferLockedTargets: true, preferredLockedTargets: [lockedColor] },
   );
   assert.deepEqual([...new Set(anchored.map((item) => item.code))], ["LOCK"]);
+
+  const spatiallyMerged = processor.forceMaxColors(
+    [adjacentGray, adjacentGray, adjacentGray, adjacentGray, spatialSource, adjacentGray, remoteGray, remoteGray, remoteGray],
+    3,
+    2,
+  );
+  assert.equal(spatiallyMerged[4].code, "ADJ");
+
+  const backgroundSafe = processor.forceMaxColors(
+    [background, background, background, background, lightDetail, gray, background, gray, gray],
+    3,
+    2,
+  );
+  assert.notEqual(backgroundSafe[4].code, "BG");
+  assert.equal(backgroundSafe.filter((item) => item.code === "BG").length, 5);
 
   const analysis = processor.analyzeColorRegions(
     [gray, gray, background, gray, warm, background, background, background, background],
@@ -1345,6 +1364,28 @@ test("conversion strategies do not overwrite user generation-detail switches", a
   assert.doesNotMatch(profileSetter, /setColorLimit\(/);
 });
 
+test("48 and 54 canvases share the compact profile without changing 64 detail defaults", async () => {
+  const source = await appSource();
+  const recommendation = sourceBetween(source, "function recommendedProcessingProfile", "function setProcessingProfile");
+  const pixelDefaults = sourceBetween(source, "function applyPixelSizeDefaults", "function applySizePresetDefaults");
+  const sizeDefaults = sourceBetween(source, "function applySizePresetDefaults", "function syncControlsFromState");
+  const postprocess = sourceBetween(source, "function postProcessPattern", "function outlineStrengthForSize");
+  const regionCaps = sourceBetween(source, "function capRegionPalettes", "function compressConnectedRegionTones");
+
+  assert.match(recommendation, /size <= 54 \? "compact48" : "detail64"/);
+  assert.match(pixelDefaults, /state\.gridSize <= 54 \? 3 : 2/);
+  assert.match(pixelDefaults, /state\.gridSize <= 54 \? 16 : state\.gridSize <= 64 \? 24/);
+  assert.match(sizeDefaults, /state\.gridSize <= 54/);
+  assert.match(sizeDefaults, /setColorLimit\(16, false\)/);
+  assert.match(sizeDefaults, /state\.gridSize <= 64/);
+  assert.match(sizeDefaults, /setColorLimit\(24, false\)/);
+  assert.match(postprocess, /compactProfile = state\.processingProfile === "compact48" && size <= 54/);
+  assert.match(postprocess, /compactProfile \? 8\.5/);
+  assert.match(postprocess, /capRegionPalettes\(processed, size, "balanced"\)/);
+  assert.match(postprocess, /strength: compactProfile \? "compact" : detailProfile \? "detail" : "light"/);
+  assert.match(regionCaps, /compactProfile/);
+});
+
 test("runtime diagnostics stay out of saved projects and duplicate grid state is removed", async () => {
   const source = await appSource();
   const serializer = sourceBetween(source, "function buildProjectData", "function downloadBlob");
@@ -1367,6 +1408,7 @@ test("photo-color starts from the full palette and then honors editable locked-c
   const colorLimitControls = sourceBetween(source, "function syncColorLimitControls", "function setPatternMode");
   const processingProfile = sourceBetween(source, "function setProcessingProfile", "function syncProcessingProfileControls");
   const photoFinalize = sourceBetween(source, "function finalizePhotoColorMatch", "function cleanPhotoLowContrastIsolated");
+  const photoCleanup = sourceBetween(source, "function cleanPhotoLowContrastIsolated", "function conversionSourceImage");
   const diagnosticControls = sourceBetween(source, "function syncDiagnosticControls", "function deserializeGrid");
 
   assert.doesNotMatch(targetLimit, /state\.processingProfile === "photoColor"\) return palette\.length/);
@@ -1374,6 +1416,8 @@ test("photo-color starts from the full palette and then honors editable locked-c
   assert.match(colorLimitControls, /elements\.colorLimit\.disabled = false/);
   assert.match(colorLimitControls, /elements\.colorLimitNumber\.value = state\.colorLimit/);
   assert.match(photoFinalize, /forceMaxColors\(processed, size, targetColorLimit\(\), lockedColorConvergenceOptions\(\)\)/);
+  assert.match(photoFinalize, /cleanPhotoLowContrastIsolated\(processed, size, backgroundMask\)/);
+  assert.match(photoCleanup, /backgroundMask\?\.\[index\] \|\| !backgroundCodes\.has\(candidate\.color\.code\)/);
   assert.match(diagnosticControls, /elements\.accurateMatchToggle\.disabled = profileIncludesAccurateMatch/);
   assert.match(diagnosticControls, /照片原色已内置精准匹配/);
 });
@@ -1447,6 +1491,27 @@ test("light high-contrast structures are protected from connected background rem
   );
   assert.equal(backgroundMask[0], 1);
   assert.equal(backgroundMask[3 * size + 3], 0);
+
+  const edgeSize = 9;
+  const edgePattern = Array(edgeSize * edgeSize).fill(light);
+  for (let x = 2; x <= 6; x += 1) edgePattern[x] = dark;
+  for (let y = 2; y <= 6; y += 1) {
+    edgePattern[y * edgeSize] = dark;
+    edgePattern[y * edgeSize + edgeSize - 1] = dark;
+  }
+  const edgeBackgroundColors = backgroundUtils.detectEdgeBackgroundColors(edgePattern, edgeSize);
+  assert.equal(edgeBackgroundColors.some((color) => color.code === "H7"), false);
+});
+
+test("max-color reduction keeps one adjacency map instead of rescanning the full grid per merge", async () => {
+  const source = await readFile(colorPostprocessSourceUrl, "utf8");
+  const forceMaxSource = sourceBetween(source, "function forceMaxColors", "function cleanIsolatedPixels");
+
+  assert.match(forceMaxSource, /const adjacency = buildColorAdjacency\(processed, size\)/);
+  assert.match(forceMaxSource, /mergeColorState\(counts, adjacency, replacements, source, target\)/);
+  assert.match(forceMaxSource, /return applyColorReplacements\(processed, replacements\)/);
+  assert.doesNotMatch(forceMaxSource, /processed = processed\.map/);
+  assert.doesNotMatch(forceMaxSource, /\n\s+counts = buildCounts\(processed\)/);
 });
 
 test("mobile canvas gestures reserve two fingers for zooming", async () => {

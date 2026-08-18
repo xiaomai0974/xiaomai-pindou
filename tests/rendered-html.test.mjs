@@ -46,13 +46,13 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /<title>小麦拼豆 Beta<\/title>/);
   assert.match(html, /color-utils\.js\?v=20260730-1/);
   assert.match(html, /grid-utils\.js\?v=20260730-1/);
-  assert.match(html, /background-utils\.js\?v=20260731-1/);
+  assert.match(html, /background-utils\.js\?v=20260818-2/);
   assert.match(html, /editor-geometry\.js\?v=20260730-1/);
   assert.match(html, /image-utils\.js\?v=20260730-1/);
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
   assert.match(html, /sampling-utils\.js\?v=20260730-1/);
   assert.match(html, /quality-utils\.js\?v=20260730-1/);
-  assert.match(html, /color-postprocess\.js\?v=20260812-2/);
+  assert.match(html, /color-postprocess\.js\?v=20260818-3/);
   assert.match(html, /canvas-renderer\.js\?v=20260812-3/);
   assert.match(html, /local-edit-utils\.js\?v=20260812-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
@@ -60,10 +60,10 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /pdf-utils\.js\?v=20260730-1/);
   assert.match(html, /export-renderer\.js\?v=20260812-1/);
   assert.match(html, /history-utils\.js\?v=20260812-1/);
-  assert.match(html, /styles\.css\?v=20260813-1/);
+  assert.match(html, /styles\.css\?v=20260818-1/);
   assert.match(html, /mobile-layout\.css\?v=20260813-2/);
   assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
-  assert.match(html, /app\.js\?v=20260813-2/);
+  assert.match(html, /app\.js\?v=20260818-3/);
   assert.match(html, /<option value="png" selected>PNG 高清图片<\/option>/);
   assert.match(html, /id="mobileReferenceControlsButton"/);
   assert.match(html, /id="mobileCanvasPanButton"/);
@@ -83,6 +83,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /id="toolColorPalette"/);
   assert.match(html, /id="toolColorSearchInput"/);
   assert.match(html, /id="toolPaletteAllButton"/);
+  assert.match(html, /id="unlockAllColorsButton"[^>]+disabled>取消全部锁定颜色<\/button>/);
   assert.doesNotMatch(html, /id="topExportModeButton"/);
   assert.doesNotMatch(html, /data-sidebar-target="export"/);
   assert.doesNotMatch(html, /id="smartOptimizeButton"/);
@@ -421,6 +422,10 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.doesNotMatch(script, /function drawSquareBead\(/);
   assert.match(canvasRenderer, /function drawSquareBead\(/);
   assert.match(script, /function patchPaletteRowsInPlace\(listRows, total\)/);
+  assert.match(script, /function unlockAllConstraintColors\(\)[\s\S]*?state\.lockedColorCodes\.clear\(\)/);
+  assert.doesNotMatch(script, /function baselinePipeline\(/);
+  assert.match(script, /function toggleLockedColorCode\(code\)/);
+  assert.match(script, /function pointInsideGeometry\(point, geometry\)/);
   assert.match(script, /function cancelScheduledUiWork\(\)/);
   assert.match(script, /function clearReferenceSampler\(\)/);
   assert.match(script, /autosaveSessionVersion: 0/);

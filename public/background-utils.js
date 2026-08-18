@@ -26,34 +26,40 @@
 
   function detectEdgeBackgroundColors(pattern, size) {
     const entries = new Map();
-    const add = (color, side) => {
+    const add = (color, side, index) => {
       if (!color || color.empty) return;
       const key = color.code || color.hex;
-      const entry = entries.get(key) || { color, count: 0, sides: new Set() };
+      const entry = entries.get(key) || { color, count: 0, sides: new Set(), corners: new Set() };
       entry.count += 1;
       entry.sides.add(side);
+      const x = index % size;
+      const y = Math.floor(index / size);
+      if ((x === 0 || x === size - 1) && (y === 0 || y === size - 1)) entry.corners.add(index);
       entries.set(key, entry);
     };
     for (let i = 0; i < size; i += 1) {
-      add(pattern[i], "top");
-      add(pattern[(size - 1) * size + i], "bottom");
-      add(pattern[i * size], "left");
-      add(pattern[i * size + size - 1], "right");
+      add(pattern[i], "top", i);
+      add(pattern[(size - 1) * size + i], "bottom", (size - 1) * size + i);
+      if (i === 0 || i === size - 1) continue;
+      add(pattern[i * size], "left", i * size);
+      add(pattern[i * size + size - 1], "right", i * size + size - 1);
     }
     const borderCellCount = Math.max(1, size * 4 - 4);
     return [...entries.values()]
       .filter((entry) => {
         if (isLikelyBackgroundColor(entry.color)) {
           return (
+            (entry.corners.size >= 1 && entry.sides.size >= 2 && entry.count >= Math.max(4, borderCellCount * 0.025)) ||
             (entry.sides.size >= 3 && entry.count >= Math.max(8, size * 0.12)) ||
             entry.count >= Math.max(10, size * 0.55)
           );
         }
-        const broadCoverage = entry.sides.size >= 3 && entry.count >= Math.max(6, borderCellCount * 0.035);
-        const dominantCoverage = entry.sides.size >= 2 && entry.count >= Math.max(10, borderCellCount * 0.08);
-        return broadCoverage || dominantCoverage;
+        const cornerCoverage = entry.corners.size >= 2 && entry.sides.size >= 2 && entry.count >= Math.max(8, borderCellCount * 0.06);
+        const broadCoverage = entry.sides.size === 4 && entry.count >= Math.max(10, borderCellCount * 0.07);
+        const dominantCoverage = entry.corners.size >= 1 && entry.sides.size >= 3 && entry.count >= Math.max(14, borderCellCount * 0.14);
+        return cornerCoverage || broadCoverage || dominantCoverage;
       })
-      .sort((a, b) => b.sides.size - a.sides.size || b.count - a.count)
+      .sort((a, b) => b.corners.size - a.corners.size || b.sides.size - a.sides.size || b.count - a.count)
       .slice(0, 4)
       .map((entry) => entry.color);
   }
@@ -82,7 +88,35 @@
       if (darkStructure || accentStructure || lightStructure) mask[index] = 1;
     }
 
-    const protectedWithClosedGaps = new Uint8Array(mask);
+    const expandedMask = new Uint8Array(mask);
+    for (let index = 0; index < pattern.length; index += 1) {
+      if (mask[index] || isBorderIndex(index, size)) continue;
+      const color = pattern[index];
+      if (!color || color.empty || !color.lab) continue;
+      const x = index % size;
+      const y = Math.floor(index / size);
+      const neighborIndexes = getEightNeighbors(x, y, size);
+      const neighbors = neighborIndexes
+        .map((neighbor) => pattern[neighbor])
+        .filter((item) => item && !item.empty && item.lab);
+      if (neighbors.length < 4) continue;
+      const similarNeighbors = neighbors.filter((neighbor) => colorDistance(color, neighbor) <= 12).length;
+      const protectedSimilarNeighbors = neighborIndexes.filter(
+        (neighbor) => mask[neighbor] && pattern[neighbor]?.lab && colorDistance(color, pattern[neighbor]) <= 14,
+      ).length;
+      const maxContrast = Math.max(...neighbors.map((neighbor) => colorDistance(color, neighbor)));
+      const saturation = Math.max(color.rgb.r, color.rgb.g, color.rgb.b) - Math.min(color.rgb.r, color.rgb.g, color.rgb.b);
+      if (
+        protectedSimilarNeighbors >= 1 &&
+        similarNeighbors >= 3 &&
+        maxContrast >= 18 &&
+        (color.lab.l >= 72 || saturation >= 58)
+      ) {
+        expandedMask[index] = 1;
+      }
+    }
+
+    const protectedWithClosedGaps = new Uint8Array(expandedMask);
     const directions = [
       [-1, 0, 1, 0],
       [0, -1, 0, 1],
@@ -92,14 +126,14 @@
     for (let y = 0; y < size; y += 1) {
       for (let x = 0; x < size; x += 1) {
         const index = y * size + x;
-        if (mask[index]) continue;
+        if (expandedMask[index]) continue;
         const closesGap = directions.some(([ax, ay, bx, by]) => {
           const x1 = x + ax;
           const y1 = y + ay;
           const x2 = x + bx;
           const y2 = y + by;
           if (x1 < 0 || y1 < 0 || x1 >= size || y1 >= size || x2 < 0 || y2 < 0 || x2 >= size || y2 >= size) return false;
-          return Boolean(mask[y1 * size + x1] && mask[y2 * size + x2]);
+          return Boolean(expandedMask[y1 * size + x1] && expandedMask[y2 * size + x2]);
         });
         if (closesGap) protectedWithClosedGaps[index] = 1;
       }
@@ -111,18 +145,24 @@
     if (!options.force && !options.emptyBackground) return new Uint8Array(pattern.length);
     const edgeBackgroundColors = detectEdgeBackgroundColors(pattern, size);
     const protectionMask = buildBackgroundProtectionMask(pattern, size);
-    const visited = new Uint8Array(pattern.length);
-    const queue = [];
-    const pushIfBackground = (index) => {
-      if (visited[index] || protectionMask[index]) return;
+    const backgroundCandidates = new Uint8Array(pattern.length);
+    for (let index = 0; index < pattern.length; index += 1) {
+      if (protectionMask[index]) continue;
       const sample = pixels[index];
       const color = pattern[index];
-      const backgroundLike =
+      if (
         sample?.empty ||
         sample?.background ||
         color.empty ||
-        edgeBackgroundColors.some((edgeColor) => colorDistance(color, edgeColor) <= 10);
-      if (!backgroundLike) return;
+        edgeBackgroundColors.some((edgeColor) => colorDistance(color, edgeColor) <= 10)
+      ) {
+        backgroundCandidates[index] = 1;
+      }
+    }
+    const visited = new Uint8Array(pattern.length);
+    const queue = [];
+    const pushIfBackground = (index) => {
+      if (visited[index] || !backgroundCandidates[index]) return;
       visited[index] = 1;
       queue.push(index);
     };

@@ -5,20 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小麦拼豆 Beta</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e93566'/%3E%3Crect x='8' y='8' width='16' height='16' fill='white'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=20260813-1" />
+    <link rel="stylesheet" href="styles.css?v=20260818-1" />
     <link rel="stylesheet" href="mobile-layout.css?v=20260813-2" />
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js" defer></script>
     <script src="palettes/mard221.js" defer></script>
     <script src="color-utils.js?v=20260730-1" defer></script>
     <script src="grid-utils.js?v=20260730-1" defer></script>
-    <script src="background-utils.js?v=20260731-1" defer></script>
+    <script src="background-utils.js?v=20260818-2" defer></script>
     <script src="editor-geometry.js?v=20260730-1" defer></script>
     <script src="editor-clipboard.js?v=20260808-3" defer></script>
     <script src="image-utils.js?v=20260730-1" defer></script>
     <script src="preprocess-utils.js?v=20260730-1" defer></script>
     <script src="sampling-utils.js?v=20260730-1" defer></script>
     <script src="quality-utils.js?v=20260730-1" defer></script>
-    <script src="color-postprocess.js?v=20260812-2" defer></script>
+    <script src="color-postprocess.js?v=20260818-3" defer></script>
     <script src="canvas-renderer.js?v=20260812-3" defer></script>
     <script src="local-edit-utils.js?v=20260812-1" defer></script>
     <script src="project-codec.js?v=20260730-1" defer></script>
@@ -27,7 +27,7 @@
     <script src="export-renderer.js?v=20260812-1" defer></script>
     <script src="history-utils.js?v=20260812-1" defer></script>
     <script src="mobile-gestures.js?v=20260809-1" defer></script>
-    <script src="app.js?v=20260813-2" defer></script>
+    <script src="app.js?v=20260818-3" defer></script>
   </head>
   <body>
     <header class="workbench-mode-header" aria-label="拼豆工作模式">
@@ -351,7 +351,7 @@
               <output id="processingProfileLabel">64+ 细节版</output>
             </div>
             <div class="segmented processing-profile-options" role="group" aria-label="转换策略">
-              <button class="processing-profile-option" data-processing-profile="compact48" type="button">48 精简</button>
+              <button class="processing-profile-option" data-processing-profile="compact48" type="button">48/54 精简</button>
               <button class="processing-profile-option is-active" data-processing-profile="detail64" type="button">64+ 细节</button>
               <button class="processing-profile-option" data-processing-profile="photoColor" type="button">照片原色</button>
             </div>
@@ -818,6 +818,7 @@
                 <button id="showSelectedColorsButton" type="button">只看使用</button>
               </div>
               <small class="constraint-palette-help">单击选色；双击或右键锁定。锁定色不会被减色删除。</small>
+              <button id="unlockAllColorsButton" class="unlock-all-colors-button" type="button" disabled>取消全部锁定颜色</button>
               <div id="constraintPalette" class="constraint-palette" aria-label="颜色面板"></div>
             </section>
           </div>
