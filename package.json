@@ -6,7 +6,10 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "app:bundle": "node scripts/bundle-app.mjs",
+    "predev": "npm run app:bundle",
     "dev": "vinext dev --hostname 0.0.0.0 --port 5173",
+    "prebuild": "npm run app:bundle",
     "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs tests/core-regression.test.mjs",

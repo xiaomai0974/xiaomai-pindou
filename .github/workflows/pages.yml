@@ -27,6 +27,9 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Bundle browser application
+        run: node scripts/bundle-app.mjs
+
       - name: Upload static site
         uses: actions/upload-pages-artifact@v4
         with:

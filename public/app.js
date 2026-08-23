@@ -1,3 +1,6 @@
+/* 小麦拼豆 — 01-runtime.js
+ * 共享状态、色板匹配与 DOM 引用
+ */
 const colorUtils = window.XiaomaiColorUtils;
 if (!colorUtils) {
   throw new Error("颜色计算模块加载失败，请刷新页面后重试。");
@@ -1433,6 +1436,9 @@ function validateMardPalette() {
   return issues;
 }
 
+/* 小麦拼豆 — 02-ui.js
+ * 工作台布局、事件绑定与控件同步
+ */
 function setupEvents() {
   setupPaletteEventDelegation();
   elements.openProjectButton.addEventListener("click", () => elements.projectFileInput.click());
@@ -2989,6 +2995,10 @@ function syncDiagnosticControls() {
       : "当前使用兼容匹配；所有设置更新同一张预览。";
 }
 
+
+/* 小麦拼豆 — 03-project.js
+ * 项目保存、图纸库与自动恢复
+ */
 function deserializeGrid(codes, expectedLength = 0) {
   return deserializeProjectGrid(codes, {
     expectedLength,
@@ -3790,6 +3800,10 @@ async function checkAutosaveRecovery() {
   }
 }
 
+
+/* 小麦拼豆 — 04-transform.js
+ * 上传、裁剪、转图预览与后处理
+ */
 function handleImageUpload(event) {
   const [file] = event.target.files;
   if (file && !confirmReplaceCurrentProject("上传新图片")) {
@@ -6252,6 +6266,10 @@ function showQualityHint(prefix = "") {
   return hint;
 }
 
+
+/* 小麦拼豆 — 05-editor.js
+ * 格子编辑、选区、渲染与历史
+ */
 function displayPattern() {
   if (state.isPreviewDirty && state.previewPattern.length) return state.previewPattern;
   return state.pattern;
@@ -9431,6 +9449,10 @@ function fitCanvasToScreen() {
   setZoom(fitZoom, { center: true });
 }
 
+
+/* 小麦拼豆 — 06-export.js
+ * PNG / PDF 导出与用豆清单
+ */
 async function exportPattern() {
   if (!canLeaveTransformWithCurrentPreview("export")) return;
   if (!state.pattern.length || state.exportInProgress) return;
@@ -9560,6 +9582,10 @@ async function copyBeadList() {
   }, 1200);
 }
 
+
+/* 小麦拼豆 — 07-boot.js
+ * 重置与启动
+ */
 function resetApp() {
   state.autosaveSessionVersion += 1;
   invalidateImageProcessingState();
@@ -9681,4 +9707,7 @@ function init() {
   }
 }
 
-init();
+if (!window.__xiaomaiPindouBooted) {
+  window.__xiaomaiPindouBooted = true;
+  init();
+}

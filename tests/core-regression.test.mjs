@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
 
-const appSourceUrl = new URL("../public/app.js", import.meta.url);
+const appSourceDirectoryUrl = new URL("../public/app/", import.meta.url);
+const appBundleUrl = new URL("../public/app.js", import.meta.url);
 const backgroundUtilsSourceUrl = new URL("../public/background-utils.js", import.meta.url);
 const canvasRendererSourceUrl = new URL("../public/canvas-renderer.js", import.meta.url);
 const colorPostprocessSourceUrl = new URL("../public/color-postprocess.js", import.meta.url);
@@ -23,8 +24,36 @@ const qualityUtilsSourceUrl = new URL("../public/quality-utils.js", import.meta.
 const samplingUtilsSourceUrl = new URL("../public/sampling-utils.js", import.meta.url);
 
 async function appSource() {
-  return readFile(appSourceUrl, "utf8");
+  const files = (await readdir(appSourceDirectoryUrl))
+    .filter((name) => /^\d{2}-[a-z-]+\.js$/.test(name))
+    .sort();
+  return (await Promise.all(files.map((name) => readFile(new URL(name, appSourceDirectoryUrl), "utf8")))).join("\n");
 }
+
+test("split application sources remain complete and load in a stable order", async () => {
+  const files = (await readdir(appSourceDirectoryUrl))
+    .filter((name) => name.endsWith(".js"))
+    .sort();
+  assert.deepEqual(files, [
+    "01-runtime.js",
+    "02-ui.js",
+    "03-project.js",
+    "04-transform.js",
+    "05-editor.js",
+    "06-export.js",
+    "07-boot.js",
+  ]);
+  const source = await appSource();
+  assert.equal(await readFile(appBundleUrl, "utf8"), source);
+  assert.match(source, /const colorUtils = window\.XiaomaiColorUtils/);
+  assert.match(source, /function setupEvents\(\)/);
+  assert.match(source, /function handleImageUpload\(event\)/);
+  assert.match(source, /function renderPattern\(options = \{\}\)/);
+  assert.match(source, /async function exportPattern\(\)/);
+  assert.match(source, /if \(!window\.__xiaomaiPindouBooted\)/);
+  assert.match(source, /new Worker\("palette-worker\.js\?v=20260720-1"/);
+  assert.doesNotMatch(source, /new Worker\("\/palette-worker\.js"/);
+});
 
 async function historyUtilsContext() {
   const source = await readFile(historyUtilsSourceUrl, "utf8");
