@@ -119,10 +119,14 @@
     function bestMergeCandidate(source, candidates, adjacency = new Map()) {
       if (!candidates.length) return null;
       const sourceFamily = colorFamily(source);
+      const sameFamilyCandidates = candidates.filter((target) => colorFamily(target) === sourceFamily);
+      const eligibleCandidates = sourceFamily === "black-gray-white" && sameFamilyCandidates.length
+        ? sameFamilyCandidates
+        : candidates;
       const supportByCode = adjacency.get(source.code) || new Map();
-      const ranked = candidates.map((target) => {
+      const ranked = eligibleCandidates.map((target) => {
         const distance = colorDistance(source, target);
-        const familyPenalty = colorFamily(target) === sourceFamily ? 0 : 3.5;
+        const familyPenalty = colorFamily(target) === sourceFamily ? 0 : 6;
         const support = supportByCode.get(target.code) || 0;
         const adjacencyBonus = support ? Math.min(4.5, 1.25 + Math.log2(support + 1)) : 0;
         const usageBonus = Math.min(1.2, Math.log2((target.count || 1) + 1) * 0.12);
@@ -343,9 +347,14 @@
 
       function mergeTargetFor(source, colors, adjacency) {
         if (preferLockedTargets) {
+          const sourceFamily = colorFamily(source);
+          const compatibleLockedTargets = preferredLockedTargets.filter((item) => (
+            item.code !== source.code &&
+            (colorFamily(item) === sourceFamily || colorDistance(source, item) <= 12)
+          ));
           const lockedTarget = nearestColorFromList(
             source,
-            preferredLockedTargets.filter((item) => item.code !== source.code),
+            compatibleLockedTargets,
           );
           if (lockedTarget) return lockedTarget;
         }

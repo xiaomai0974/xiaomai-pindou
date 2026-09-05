@@ -16,6 +16,7 @@ const historyUtilsSourceUrl = new URL("../public/history-utils.js", import.meta.
 const imageUtilsSourceUrl = new URL("../public/image-utils.js", import.meta.url);
 const localEditUtilsSourceUrl = new URL("../public/local-edit-utils.js", import.meta.url);
 const mobileGesturesSourceUrl = new URL("../public/mobile-gestures.js", import.meta.url);
+const paletteSelectionSourceUrl = new URL("../public/palette-selection.js", import.meta.url);
 const preprocessUtilsSourceUrl = new URL("../public/preprocess-utils.js", import.meta.url);
 const pdfUtilsSourceUrl = new URL("../public/pdf-utils.js", import.meta.url);
 const projectCodecSourceUrl = new URL("../public/project-codec.js", import.meta.url);
@@ -271,6 +272,9 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
   const spatialSource = color("SOURCE", 111, 111, 111);
   const remoteGray = color("REMOTE", 111, 111, 111);
   const lightDetail = color("LIGHT", 238, 239, 240);
+  const paleNeutral = color("PALE_NEUTRAL", 232, 233, 234);
+  const neutralTarget = color("NEUTRAL_TARGET", 192, 192, 192);
+  const paleBlue = color("PALE_BLUE", 190, 216, 238);
   const lockedColor = color("LOCK", 30, 50, 190);
   const locked = new Set(["LOCK"]);
   const getFourNeighbors = (x, y, size) => {
@@ -286,7 +290,13 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
     buildCounts: gridUtils.buildCounts,
     buildProtectedIndexSet: () => new Set(),
     colorDistance: colorUtils.colorDistance,
-    colorFamily: () => "neutral",
+    colorFamily(item) {
+      const { r, g, b } = item.rgb;
+      if (Math.max(r, g, b) - Math.min(r, g, b) < 18) return "black-gray-white";
+      if (b >= r && b >= g) return "blue";
+      if (r >= g && r >= b) return "red-pink";
+      return "other";
+    },
     countNeighborColors(neighbors) {
       const counts = new Map();
       for (const item of neighbors) {
@@ -361,6 +371,21 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
   assert.notEqual(backgroundSafe[4].code, "BG");
   assert.equal(backgroundSafe.filter((item) => item.code === "BG").length, 5);
 
+  const neutralEdgeSafe = processor.forceMaxColors(
+    [neutralTarget, paleBlue, paleBlue, paleBlue, paleNeutral, paleBlue, neutralTarget, paleBlue, paleBlue],
+    3,
+    2,
+  );
+  assert.equal(neutralEdgeSafe[4].code, "NEUTRAL_TARGET");
+
+  const lockedNeutralEdgeSafe = processor.forceMaxColors(
+    [neutralTarget, lockedColor, lockedColor, lockedColor, paleNeutral, lockedColor, neutralTarget, lockedColor, lockedColor],
+    3,
+    2,
+    { preferLockedTargets: true, preferredLockedTargets: [lockedColor] },
+  );
+  assert.equal(lockedNeutralEdgeSafe[4].code, "NEUTRAL_TARGET");
+
   const analysis = processor.analyzeColorRegions(
     [gray, gray, background, gray, warm, background, background, background, background],
     3,
@@ -369,6 +394,55 @@ test("color postprocessing preserves merging, cleanup, and locked-color limits a
     Array.from(analysis.regions, (region) => [region.color.code, region.cells.length]),
     [["A", 3], ["BG", 5], ["C", 1]],
   );
+});
+
+test("representative palette selection balances dominant tones, important families, and locked colors", async () => {
+  const selector = await browserUtilityContext(paletteSelectionSourceUrl, "XiaomaiPaletteSelection", { Map, Set, Float32Array });
+  const colors = [
+    { code: "BLUE_1", rgb: { r: 30, g: 90, b: 210 } },
+    { code: "BLUE_2", rgb: { r: 55, g: 115, b: 225 } },
+    { code: "BLUE_3", rgb: { r: 80, g: 140, b: 235 } },
+    { code: "SKIN", rgb: { r: 230, g: 170, b: 135 } },
+    { code: "BLACK", rgb: { r: 25, g: 25, b: 25 } },
+    { code: "YELLOW_LOCK", rgb: { r: 245, g: 195, b: 45 } },
+  ];
+  const pixels = [
+    ...Array(30).fill({ r: 32, g: 92, b: 208 }),
+    ...Array(18).fill({ r: 58, g: 116, b: 226 }),
+    ...Array(8).fill({ r: 232, g: 172, b: 136 }),
+    ...Array(5).fill({ r: 24, g: 24, b: 24 }),
+    { r: 255, g: 255, b: 255 },
+    { r: 255, g: 255, b: 255 },
+    { r: 255, g: 255, b: 255 },
+  ];
+  const distance = (left, right) => {
+    const a = left.rgb || left;
+    const b = right.rgb || right;
+    return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b);
+  };
+  const family = (color) => {
+    if (color.code === "BLACK") return "black-gray-white";
+    if (color.code === "SKIN") return "skin-beige";
+    if (color.code === "YELLOW_LOCK") return "yellow";
+    return "blue";
+  };
+  const selected = selector.selectRepresentativePalette(pixels, colors, {
+    target: 4,
+    size: 8,
+    lockedColorCodes: new Set(["YELLOW_LOCK"]),
+    nearestColor(sample, sourcePalette) {
+      return [...sourcePalette].sort((left, right) => distance(sample, left) - distance(sample, right))[0];
+    },
+    colorDistance: distance,
+    colorFamily: family,
+    familyCaps: { blue: 2, "skin-beige": 1, "black-gray-white": 1, yellow: 1, other: 1 },
+  });
+
+  assert.equal(selected.length, 4);
+  assert.equal(selected.some((color) => color.code === "YELLOW_LOCK"), true);
+  assert.equal(selected.some((color) => color.code === "SKIN"), true);
+  assert.equal(selected.some((color) => color.code === "BLACK"), true);
+  assert.equal(selected.filter((color) => color.code.startsWith("BLUE")).length, 1);
 });
 
 test("local selection cleanup respects its boundary and protected cells", async () => {
@@ -822,6 +896,165 @@ test("sampling utilities preserve average, dominant, and transparent-cell behavi
   });
   assert.equal(empty.empty, true);
   assert.equal(empty.background, true);
+});
+
+test("sampling utilities detect flat illustrations and preserve thin dark outlines", async () => {
+  const samplingUtils = await browserUtilityContext(samplingUtilsSourceUrl, "XiaomaiSamplingUtils", { Map });
+  const width = 24;
+  const height = 24;
+  const flat = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      const darkLine = x === 7 || x === 16;
+      const rgb = darkLine ? [24, 22, 24] : x < 12 ? [244, 150, 168] : [246, 195, 72];
+      flat.set([...rgb, 255], index);
+    }
+  }
+  assert.equal(samplingUtils.detectFlatIllustration(flat, width, height), true);
+
+  const cell = new Uint8ClampedArray(16 * 4);
+  for (let index = 0; index < 16; index += 1) {
+    cell.set(index % 4 === 1 ? [24, 22, 24, 255] : [244, 150, 168, 255], index * 4);
+  }
+  const outlined = samplingUtils.dominantSampleCell(cell, 4, 0, 0, 4, {
+    patternMode: "illustration",
+    illustrationMode: true,
+    removeTransparent: false,
+    outlineStrength: 0,
+    gridSize: 64,
+    pixelBackground: "empty",
+    emptyCell: { code: "", empty: true },
+    whiteColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.ok(outlined.r < 40 && outlined.g < 40 && outlined.b < 40);
+
+  const cornerNoise = new Uint8ClampedArray(16 * 4);
+  for (let index = 0; index < 16; index += 1) {
+    cornerNoise.set([244, 150, 168, 255], index * 4);
+  }
+  for (const index of [0, 1, 4]) {
+    cornerNoise.set([24, 22, 24, 255], index * 4);
+  }
+  const cleaned = samplingUtils.dominantSampleCell(cornerNoise, 4, 0, 0, 4, {
+    patternMode: "illustration",
+    illustrationMode: true,
+    removeTransparent: false,
+    outlineStrength: 0,
+    gridSize: 64,
+    pixelBackground: "empty",
+    emptyCell: { code: "", empty: true },
+    whiteColor: { r: 247, g: 242, b: 232 },
+  });
+  assert.ok(cleaned.r > 220 && cleaned.g > 120 && cleaned.b > 130);
+});
+
+test("illustration sampling does not expand edge lines or favor dark specks over nearby light shades", async () => {
+  const utils = await browserUtilityContext(samplingUtilsSourceUrl, "XiaomaiSamplingUtils", { Map });
+  const scale = 6;
+  const pink = [242, 148, 169, 255];
+  const lightPink = [251, 164, 178, 255];
+  const black = [24, 22, 24, 255];
+  const sample = (colorAt) => {
+    const data = new Uint8ClampedArray(scale * scale * 4);
+    for (let y = 0; y < scale; y += 1) {
+      for (let x = 0; x < scale; x += 1) data.set(colorAt(x, y), (y * scale + x) * 4);
+    }
+    return utils.dominantSampleCell(data, scale, 0, 0, scale, { illustrationMode: true });
+  };
+  const edge = sample((x) => x === 0 ? black : pink);
+  assert.ok(edge.r > 230, "a thin line at the outside of a cell must not fill it with black");
+  const splitLight = sample((x, y) => y < 2 && x < 4 ? black : (x + y) % 2 ? pink : lightPink);
+  assert.ok(splitLight.r > 230 && splitLight.g > 140, "nearby pink shades must compete as a region");
+  const centralStroke = sample((x) => x === 2 ? black : pink);
+  assert.ok(centralStroke.r < 40, "a continuous thin central stroke must remain visible");
+  const diagonalStroke = sample((x, y) => x === y ? black : pink);
+  assert.ok(diagonalStroke.r < 40, "diagonal outlines must remain connected");
+  const darkRegion = sample(() => [55, 51, 52, 255]);
+  assert.equal(darkRegion.r, 55, "dark fill must keep its original tone");
+  const shadow = sample((x) => x === 2 ? [75, 72, 72, 255] : [108, 102, 104, 255]);
+  assert.ok(shadow.r >= 100, "a low-contrast shadow must not be promoted to a black outline");
+});
+
+test("changing the color limit keeps source samples and illustration detection stable", async () => {
+  const source = await appSource();
+  const utils = await browserUtilityContext(samplingUtilsSourceUrl, "XiaomaiSamplingUtils", { Map });
+  const state = { accurateMatch: true, patternMode: "illustration", processingProfile: "detail64", gridSize: 16, fitMode: "contain" };
+  const context = {
+    state,
+    Math,
+    targetColorLimit: () => state.colorLimit,
+    activeGridWidth: () => 16,
+    activeGridHeight: () => 16,
+    outlineStrengthForSize: () => 0,
+    usesEmptyBackground: () => true,
+    whiteBeadColor: () => ({ rgb: { r: 255, g: 255, b: 255 } }),
+    EMPTY_CELL: { empty: true },
+    averagePixelSample: utils.averageSampleCell,
+    dominantSampleCell: utils.dominantSampleCell,
+    detectFlatIllustration: utils.detectFlatIllustration,
+    releaseCanvasMemory() {},
+    document: {
+      createElement() {
+        const canvas = { width: 0, height: 0 };
+        canvas.getContext = () => ({
+          clearRect() {},
+          drawImage() {},
+          getImageData() {
+            const data = new Uint8ClampedArray(canvas.width * canvas.height * 4);
+            for (let y = 0; y < canvas.height; y += 1) {
+              for (let x = 0; x < canvas.width; x += 1) {
+                data.set(x % 24 < 2 ? [24, 22, 24, 255] : [244, 150, 168, 255], (y * canvas.width + x) * 4);
+              }
+            }
+            return { data };
+          },
+        });
+        return canvas;
+      },
+    },
+  };
+  vm.runInNewContext(sourceBetween(source, "function buildPixelSamplesNow", "function usesEmptyBackground"), context);
+  for (const processingProfile of ["detail64", "photoColor"]) {
+    state.processingProfile = processingProfile;
+    let baseline;
+    for (const limit of [24, 32, 33, 64]) {
+      state.colorLimit = limit;
+      const pixels = context.buildPixelSamplesNow({ width: 160, height: 160 }, 16);
+      const result = { scale: state.lastSampleScale, detected: pixels.autoIllustrationMode, pixels: JSON.stringify(pixels) };
+      assert.equal(result.detected, true);
+      if (baseline) assert.deepEqual(result, baseline, `${processingProfile}: source changed at ${limit} colors`);
+      baseline = result;
+    }
+  }
+  const forcedPhoto = context.buildPixelSamplesNow({ width: 160, height: 160 }, 16, { autoIllustrationMode: false });
+  assert.equal(forcedPhoto.autoIllustrationMode, false, "preprocessing must not reclassify a supplied source mode");
+});
+
+test("conversion uses the source classification even when preprocessing changes its texture", async () => {
+  const source = await appSource();
+  const originalSamples = Object.assign([{ r: 244, g: 150, b: 168 }], { autoIllustrationMode: true });
+  const direct = [{ code: "PINK" }];
+  const optimizedImage = {};
+  const seen = [];
+  const context = {
+    state: { image: {}, gridSize: 16, accurateMatch: true, processingProfile: "detail64" },
+    palette: direct,
+    buildRawDiagnosticReference: async () => ({ pixels: originalSamples }),
+    conversionSourceImage: () => optimizedImage,
+    buildPixelSamples(image, size, options) {
+      seen.push({ image, size, mode: options?.autoIllustrationMode });
+      return originalSamples;
+    },
+    targetColorLimit: () => 24,
+    representativePaletteForPixels: () => direct,
+    mapSamplesToPaletteAsync: async () => direct,
+    finalizeAccurateMatch: (pattern) => ({ pattern, backgroundMask: [] }),
+  };
+  vm.runInNewContext(sourceBetween(source, "async function buildPatternResultFromImage", "function finalizeAccurateMatch"), context);
+  const result = await context.buildPatternResultFromImage();
+  assert.equal(result.pattern, direct);
+  assert.deepEqual(seen, [{ image: optimizedImage, size: 16, mode: true }]);
 });
 
 test("quality utilities preserve color-family and structural metrics", async () => {
@@ -1541,6 +1774,16 @@ test("max-color reduction keeps one adjacency map instead of rescanning the full
   assert.match(forceMaxSource, /return applyColorReplacements\(processed, replacements\)/);
   assert.doesNotMatch(forceMaxSource, /processed = processed\.map/);
   assert.doesNotMatch(forceMaxSource, /\n\s+counts = buildCounts\(processed\)/);
+});
+
+test("selection protection remains removable after the active selection changes", async () => {
+  const app = await appSource();
+  const protectionSource = sourceBetween(app, "function updateProtectionActionButtons", "function updateProtectionAtCell");
+
+  assert.match(protectionSource, /elements\.unprotectSelectionButton\.disabled = !state\.protectedCells\.size \|\| state\.isPreviewDirty/);
+  assert.match(protectionSource, /"取消全部保护"/);
+  assert.match(protectionSource, /clearAllProtection = !protectedState && !targets\.length && state\.protectedCells\.size > 0/);
+  assert.match(protectionSource, /targets = \[\.\.\.state\.protectedCells\]/);
 });
 
 test("mobile canvas gestures reserve two fingers for zooming", async () => {

@@ -50,9 +50,10 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /editor-geometry\.js\?v=20260730-1/);
   assert.match(html, /image-utils\.js\?v=20260730-1/);
   assert.match(html, /preprocess-utils\.js\?v=20260730-1/);
-  assert.match(html, /sampling-utils\.js\?v=20260730-1/);
+  assert.match(html, /sampling-utils\.js\?v=20260905-1/);
   assert.match(html, /quality-utils\.js\?v=20260730-1/);
-  assert.match(html, /color-postprocess\.js\?v=20260818-3/);
+  assert.match(html, /palette-selection\.js\?v=20260830-1/);
+  assert.match(html, /color-postprocess\.js\?v=20260828-1/);
   assert.match(html, /canvas-renderer\.js\?v=20260812-3/);
   assert.match(html, /local-edit-utils\.js\?v=20260812-1/);
   assert.match(html, /project-codec\.js\?v=20260730-1/);
@@ -63,7 +64,7 @@ test("serves the Xiaomai bead designer homepage", async () => {
   assert.match(html, /styles\.css\?v=20260818-1/);
   assert.match(html, /mobile-layout\.css\?v=20260813-2/);
   assert.match(html, /mobile-gestures\.js\?v=20260809-1/);
-  assert.match(html, /app\.js\?v=20260821-1/);
+  assert.match(html, /app\.js\?v=20260905-1/);
   assert.doesNotMatch(html, /src="app\/01-runtime\.js/);
   assert.match(html, /<option value="png" selected>PNG 高清图片<\/option>/);
   assert.match(html, /id="mobileReferenceControlsButton"/);
@@ -183,6 +184,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
     preprocessUtilsResponse,
     samplingUtilsResponse,
     qualityUtilsResponse,
+    paletteSelectionResponse,
     colorPostprocessResponse,
     canvasRendererResponse,
     localEditUtilsResponse,
@@ -205,6 +207,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
       fetchFromWorker("/preprocess-utils.js"),
       fetchFromWorker("/sampling-utils.js"),
       fetchFromWorker("/quality-utils.js"),
+      fetchFromWorker("/palette-selection.js"),
       fetchFromWorker("/color-postprocess.js"),
       fetchFromWorker("/canvas-renderer.js"),
       fetchFromWorker("/local-edit-utils.js"),
@@ -227,6 +230,7 @@ test("serves the current application script, utilities, worker, and stylesheet",
   assert.equal(preprocessUtilsResponse.status, 200);
   assert.equal(samplingUtilsResponse.status, 200);
   assert.equal(qualityUtilsResponse.status, 200);
+  assert.equal(paletteSelectionResponse.status, 200);
   assert.equal(colorPostprocessResponse.status, 200);
   assert.equal(canvasRendererResponse.status, 200);
   assert.equal(localEditUtilsResponse.status, 200);

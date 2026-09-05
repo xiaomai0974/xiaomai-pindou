@@ -2530,8 +2530,7 @@ function updateSelectionLabel() {
   }
   elements.copySelectionButton.disabled = !state.selection.size;
   elements.pasteSelectionButton.disabled = !state.selectionClipboard;
-  if (elements.protectSelectionButton) elements.protectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
-  if (elements.unprotectSelectionButton) elements.unprotectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
+  updateProtectionActionButtons();
   if (elements.previewSelectionOptimizeButton) elements.previewSelectionOptimizeButton.disabled = !state.selection.size || state.isPreviewDirty;
 }
 
@@ -3179,4 +3178,3 @@ function fitCanvasToScreen() {
   const fitZoom = Math.min(availableWidth / base.width, availableHeight / base.height);
   setZoom(fitZoom, { center: true });
 }
-

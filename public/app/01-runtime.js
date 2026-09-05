@@ -109,6 +109,7 @@ if (!samplingUtils) {
 }
 const {
   averageSampleCell: averagePixelSample,
+  detectFlatIllustration,
   dominantSampleCell,
 } = samplingUtils;
 
@@ -124,6 +125,12 @@ const {
   countEdgeBreaks,
   countIsolatedPixels,
 } = qualityUtils;
+
+const paletteSelectionUtils = window.XiaomaiPaletteSelection;
+if (!paletteSelectionUtils) {
+  throw new Error("代表色选择模块加载失败，请刷新页面后重试。");
+}
+const { selectRepresentativePalette } = paletteSelectionUtils;
 
 const projectCodec = window.XiaomaiProjectCodec;
 if (!projectCodec) {
@@ -1169,6 +1176,38 @@ function adaptivePaletteForPixels(pixels) {
   }
 
   return selected.length ? selected : effectiveAllowedPalette();
+}
+
+function representativePaletteForPixels(pixels, sourcePalette = effectiveAllowedPalette()) {
+  const flatIllustration = Boolean(pixels?.autoIllustrationMode);
+  return selectRepresentativePalette(pixels, sourcePalette, {
+    target: targetColorLimit(),
+    size: state.gridSize,
+    lockedColorCodes: state.lockedColorCodes,
+    emptyBackground: usesEmptyBackground(),
+    nearestColor: nearestPaletteColor,
+    colorDistance,
+    colorFamily,
+    familyCaps: flatIllustration
+      ? flatIllustrationFamilyCaps(targetColorLimit())
+      : adaptiveFamilyCaps(targetColorLimit()),
+  });
+}
+
+function flatIllustrationFamilyCaps(target) {
+  const scale = Math.min(1, Math.max(0.45, target / 24));
+  const scaled = (value, minimum = 1) => Math.max(minimum, Math.round(value * scale));
+  return {
+    "red-pink": scaled(4),
+    "skin-beige": scaled(3),
+    "orange-brown": scaled(3),
+    yellow: scaled(3),
+    green: scaled(3),
+    blue: scaled(3),
+    purple: scaled(3),
+    "black-gray-white": scaled(4, 2),
+    other: scaled(2),
+  };
 }
 
 function adaptiveMergeDistance() {

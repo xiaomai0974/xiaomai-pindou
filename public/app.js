@@ -109,6 +109,7 @@ if (!samplingUtils) {
 }
 const {
   averageSampleCell: averagePixelSample,
+  detectFlatIllustration,
   dominantSampleCell,
 } = samplingUtils;
 
@@ -124,6 +125,12 @@ const {
   countEdgeBreaks,
   countIsolatedPixels,
 } = qualityUtils;
+
+const paletteSelectionUtils = window.XiaomaiPaletteSelection;
+if (!paletteSelectionUtils) {
+  throw new Error("代表色选择模块加载失败，请刷新页面后重试。");
+}
+const { selectRepresentativePalette } = paletteSelectionUtils;
 
 const projectCodec = window.XiaomaiProjectCodec;
 if (!projectCodec) {
@@ -1169,6 +1176,38 @@ function adaptivePaletteForPixels(pixels) {
   }
 
   return selected.length ? selected : effectiveAllowedPalette();
+}
+
+function representativePaletteForPixels(pixels, sourcePalette = effectiveAllowedPalette()) {
+  const flatIllustration = Boolean(pixels?.autoIllustrationMode);
+  return selectRepresentativePalette(pixels, sourcePalette, {
+    target: targetColorLimit(),
+    size: state.gridSize,
+    lockedColorCodes: state.lockedColorCodes,
+    emptyBackground: usesEmptyBackground(),
+    nearestColor: nearestPaletteColor,
+    colorDistance,
+    colorFamily,
+    familyCaps: flatIllustration
+      ? flatIllustrationFamilyCaps(targetColorLimit())
+      : adaptiveFamilyCaps(targetColorLimit()),
+  });
+}
+
+function flatIllustrationFamilyCaps(target) {
+  const scale = Math.min(1, Math.max(0.45, target / 24));
+  const scaled = (value, minimum = 1) => Math.max(minimum, Math.round(value * scale));
+  return {
+    "red-pink": scaled(4),
+    "skin-beige": scaled(3),
+    "orange-brown": scaled(3),
+    yellow: scaled(3),
+    green: scaled(3),
+    blue: scaled(3),
+    purple: scaled(3),
+    "black-gray-white": scaled(4, 2),
+    other: scaled(2),
+  };
 }
 
 function adaptiveMergeDistance() {
@@ -4600,8 +4639,13 @@ async function buildPatternResultFromImage() {
   const directPalette = state.colorMode === "fixedPalette" ? effectiveAllowedPalette() : palette;
   const rawDiagnostic = await buildRawDiagnosticReference(size, directPalette);
   const sourceImage = conversionSourceImage();
-  const pixels = buildPixelSamples(sourceImage, size);
-  const limitedPalette = state.accurateMatch || state.processingProfile === "photoColor" ? directPalette : adaptivePaletteForPixels(pixels);
+  const pixels = buildPixelSamples(sourceImage, size, {
+    autoIllustrationMode: rawDiagnostic.pixels.autoIllustrationMode,
+  });
+  const useRepresentativePalette = state.accurateMatch || state.processingProfile === "photoColor";
+  const limitedPalette = useRepresentativePalette
+    ? representativePaletteForPixels(pixels, directPalette)
+    : adaptivePaletteForPixels(pixels);
   const pattern = await mapSamplesToPaletteAsync(
     pixels,
     size,
@@ -4635,9 +4679,10 @@ async function buildPatternResultFromImage() {
   if (totalBeadCount(processed) === 0 && totalBeadCount(pattern) > 0) {
     processed = postProcessPattern(pattern, size);
   }
+  const backgroundResult = cleanPostReductionBackground(processed, pixels, size, backgroundMask);
   return {
-    pattern: validateColorConstraints(processed),
-    backgroundMask,
+    pattern: validateColorConstraints(backgroundResult.pattern),
+    backgroundMask: backgroundResult.backgroundMask,
     size,
     diagnostics: { ...rawDiagnostic, changedBy: "postProcess" },
   };
@@ -4651,9 +4696,10 @@ function finalizeAccurateMatch(pattern, pixels, size, sourcePalette = effectiveA
   if (totalBeadCount(processed) === 0 && totalBeadCount(pattern) > 0) {
     processed = postProcessPattern(refineAccuratePaletteMatches(pattern, pixels, size, sourcePalette), size);
   }
+  const backgroundResult = cleanPostReductionBackground(processed, pixels, size, backgroundMask);
   return {
-    pattern: validateColorConstraints(processed),
-    backgroundMask,
+    pattern: validateColorConstraints(backgroundResult.pattern),
+    backgroundMask: backgroundResult.backgroundMask,
   };
 }
 
@@ -4685,9 +4731,58 @@ function finalizePhotoColorMatch(pattern, pixels, size) {
   }
   processed = repairOutlines(processed, size, outlineStrengthForSize());
   processed = forceMaxColors(processed, size, targetColorLimit(), lockedColorConvergenceOptions());
+  const backgroundResult = cleanPostReductionBackground(processed, pixels, size, backgroundMask);
   return {
-    pattern: validateColorConstraints(processed),
-    backgroundMask,
+    pattern: validateColorConstraints(backgroundResult.pattern),
+    backgroundMask: backgroundResult.backgroundMask,
+  };
+}
+
+function cleanPostReductionBackground(pattern, pixels, size, backgroundMask) {
+  const mask = backgroundMask?.length === pattern.length
+    ? new Uint8Array(backgroundMask)
+    : new Uint8Array(pattern.length);
+  if (!mask.some(Boolean)) {
+    return { pattern: [...pattern], backgroundMask: mask };
+  }
+
+  const candidates = new Uint8Array(pattern.length);
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (mask[index]) continue;
+    const sample = pixels[index];
+    const output = pattern[index];
+    if (!sample || !output || output.empty) continue;
+    const sourceRgb = sample.rgb || sample;
+    if (![sourceRgb.r, sourceRgb.g, sourceRgb.b].every(Number.isFinite)) continue;
+    const sourceMax = Math.max(sourceRgb.r, sourceRgb.g, sourceRgb.b);
+    const sourceMin = Math.min(sourceRgb.r, sourceRgb.g, sourceRgb.b);
+    const outputMax = Math.max(output.rgb.r, output.rgb.g, output.rgb.b);
+    const outputMin = Math.min(output.rgb.r, output.rgb.g, output.rgb.b);
+    const sourceSpread = sourceMax - sourceMin;
+    const outputSpread = outputMax - outputMin;
+    const nearWhiteSource = sourceMin >= 218 && sourceSpread <= 48;
+    const gainedFalseTint = outputSpread >= Math.max(24, sourceSpread + 8);
+    if (nearWhiteSource && gainedFalseTint) candidates[index] = 1;
+  }
+
+  const queue = [];
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index]) queue.push(index);
+  }
+  for (let head = 0; head < queue.length; head += 1) {
+    const index = queue[head];
+    const x = index % size;
+    const y = Math.floor(index / size);
+    for (const neighbor of getFourNeighbors(x, y, size)) {
+      if (mask[neighbor] || !candidates[neighbor]) continue;
+      mask[neighbor] = 1;
+      queue.push(neighbor);
+    }
+  }
+
+  return {
+    pattern: applyBackgroundModeToGrid(pattern, mask, state.pixelBackground),
+    backgroundMask: mask,
   };
 }
 
@@ -4728,6 +4823,7 @@ function rawDiagnosticCacheSignature(size, sourcePalette) {
     patternMode: state.patternMode,
     processingProfile: state.processingProfile,
     fitMode: state.fitMode,
+    accurateMatch: state.accurateMatch,
     dominantSampling: state.dominantSampling,
     animeMode: state.animeMode,
     lineBoost: state.lineBoost,
@@ -5203,12 +5299,13 @@ function setPatternProcessingBusy(isBusy) {
   if (isBusy) elements.cellInfo.textContent = "正在后台匹配颜色，页面仍可继续操作…";
 }
 
-function buildPixelSamples(image, size) {
-  return measurePerformance("pipeline.samples", () => buildPixelSamplesNow(image, size));
+function buildPixelSamples(image, size, options = {}) {
+  return measurePerformance("pipeline.samples", () => buildPixelSamplesNow(image, size, options));
 }
 
-function buildPixelSamplesNow(image, size) {
-  const sampleScale = state.patternMode === "pixelPattern" ? 6 : 4;
+function buildPixelSamplesNow(image, size, options = {}) {
+  const accurateSampling = state.accurateMatch || state.processingProfile === "photoColor";
+  const sampleScale = state.patternMode === "pixelPattern" || accurateSampling ? 6 : 4;
   const sampleSize = size * sampleScale;
   const activeSampleWidth = activeGridWidth() * sampleScale;
   const activeSampleHeight = activeGridHeight() * sampleScale;
@@ -5236,22 +5333,28 @@ function buildPixelSamplesNow(image, size) {
   const imageData = sourceCtx.getImageData(0, 0, sampleSize, sampleSize);
   const data = imageData.data;
   const pixels = [];
+  const autoIllustrationMode = options.autoIllustrationMode ??
+    (accurateSampling && detectFlatIllustration(data, sampleSize, sampleSize));
 
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
-      pixels.push(sampleCell(data, sampleSize, x, y, sampleScale));
+      pixels.push(sampleCell(data, sampleSize, x, y, sampleScale, { autoIllustrationMode }));
     }
   }
+
+  pixels.autoIllustrationMode = autoIllustrationMode;
 
   releaseCanvasMemory(sourceCanvas);
   return pixels;
 }
 
-function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
+function sampleCell(data, sampleSize, cellX, cellY, sampleScale, runtimeOptions = {}) {
+  const illustrationMode = Boolean(state.animeMode || runtimeOptions.autoIllustrationMode);
   const options = {
     patternMode: state.patternMode,
     processingProfile: state.processingProfile,
     animeMode: state.animeMode,
+    illustrationMode,
     removeTransparent: state.removeTransparent,
     lineBoost: state.lineBoost,
     outlineStrength: outlineStrengthForSize(),
@@ -5261,7 +5364,8 @@ function sampleCell(data, sampleSize, cellX, cellY, sampleScale) {
     whiteColor: whiteBeadColor().rgb,
     emptyCell: EMPTY_CELL,
   };
-  if (!state.dominantSampling && (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
+  if (!illustrationMode && !state.dominantSampling &&
+    (state.patternMode !== "pixelPattern" || state.processingProfile === "photoColor")) {
     return averagePixelSample(data, sampleSize, cellX, cellY, sampleScale, options);
   }
   return dominantSampleCell(data, sampleSize, cellX, cellY, sampleScale, options);
@@ -5651,6 +5755,20 @@ function updateProtectionUi() {
   document.querySelectorAll(".protection-mode-button").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.protectionMode === state.protectionMode);
   });
+  updateProtectionActionButtons();
+}
+
+function updateProtectionActionButtons() {
+  const protectedSelectionCount = [...state.selection].filter((index) => state.protectedCells.has(index)).length;
+  if (elements.protectSelectionButton) {
+    elements.protectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
+  }
+  if (elements.unprotectSelectionButton) {
+    elements.unprotectSelectionButton.disabled = !state.protectedCells.size || state.isPreviewDirty;
+    elements.unprotectSelectionButton.textContent = protectedSelectionCount
+      ? "取消选区保护"
+      : "取消全部保护";
+  }
 }
 
 function setSelectionProtection(protectedState) {
@@ -5658,15 +5776,17 @@ function setSelectionProtection(protectedState) {
     elements.cellInfo.textContent = "请先确认或取消当前预览，再调整保护区域。";
     return false;
   }
-  if (!state.selection.size) {
+  if (protectedState && !state.selection.size) {
     elements.cellInfo.textContent = "请先用框选或钢笔选择需要保护的区域。";
     return false;
   }
-  const targets = [...state.selection].filter((index) =>
+  let targets = [...state.selection].filter((index) =>
     protectedState ? !state.protectedCells.has(index) : state.protectedCells.has(index),
   );
+  const clearAllProtection = !protectedState && !targets.length && state.protectedCells.size > 0;
+  if (clearAllProtection) targets = [...state.protectedCells];
   if (!targets.length) {
-    elements.cellInfo.textContent = protectedState ? "当前选区已经全部受保护。" : "当前选区没有保护格。";
+    elements.cellInfo.textContent = protectedState ? "当前选区已经全部受保护。" : "当前没有受保护的格子。";
     return false;
   }
   pushHistory();
@@ -5677,7 +5797,9 @@ function setSelectionProtection(protectedState) {
   updateProtectionUi();
   renderPattern();
   markProjectDirty();
-  elements.cellInfo.textContent = `${protectedState ? "已保护" : "已取消保护"}选区中的 ${targets.length} 格。`;
+  elements.cellInfo.textContent = clearAllProtection
+    ? `已取消全部 ${targets.length} 格保护。`
+    : `${protectedState ? "已保护" : "已取消保护"}选区中的 ${targets.length} 格。`;
   return true;
 }
 
@@ -6265,7 +6387,6 @@ function showQualityHint(prefix = "") {
   if (prefix) elements.cellInfo.textContent = `${prefix} ${hint}`;
   return hint;
 }
-
 
 /* 小麦拼豆 — 05-editor.js
  * 格子编辑、选区、渲染与历史
@@ -8799,8 +8920,7 @@ function updateSelectionLabel() {
   }
   elements.copySelectionButton.disabled = !state.selection.size;
   elements.pasteSelectionButton.disabled = !state.selectionClipboard;
-  if (elements.protectSelectionButton) elements.protectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
-  if (elements.unprotectSelectionButton) elements.unprotectSelectionButton.disabled = !state.selection.size || state.isPreviewDirty;
+  updateProtectionActionButtons();
   if (elements.previewSelectionOptimizeButton) elements.previewSelectionOptimizeButton.disabled = !state.selection.size || state.isPreviewDirty;
 }
 
@@ -9448,7 +9568,6 @@ function fitCanvasToScreen() {
   const fitZoom = Math.min(availableWidth / base.width, availableHeight / base.height);
   setZoom(fitZoom, { center: true });
 }
-
 
 /* 小麦拼豆 — 06-export.js
  * PNG / PDF 导出与用豆清单
